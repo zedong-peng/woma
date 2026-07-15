@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
-import { cp, lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { cp, lstat, mkdir, mkdtemp, readdir, realpath, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { assertInside, harnessHome, hashDirectory, pathExists } from "./fs.js";
 import { loadManifest } from "./schema.js";
@@ -12,6 +13,14 @@ interface MaterializedSource {
   source: string;
   resolved: string;
   cleanup?: () => Promise<void>;
+}
+
+const builtinNames = new Set(["reproducibility-core", "research-workflow", "experiment-workflow", "performance-engineering"]);
+
+function builtinPath(name: string): string {
+  if (!builtinNames.has(name)) throw new Error(`Unknown built-in Harness: ${name}`);
+  const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  return path.join(packageRoot, "examples", name);
 }
 
 function run(command: string, args: string[], cwd?: string): Promise<string> {
@@ -62,6 +71,12 @@ function normalizeGitSource(source: string): { url: string; canonical: string; r
 }
 
 async function materializeSource(source: string, cwd: string): Promise<MaterializedSource> {
+  if (source.startsWith("builtin:")) {
+    const name = source.slice("builtin:".length);
+    const root = builtinPath(name);
+    if (!(await pathExists(root))) throw new Error(`Built-in Harness is missing from this installation: ${name}`);
+    return { root, source: `builtin:${name}`, resolved: "builtin" };
+  }
   const git = normalizeGitSource(source);
   if (!git) {
     const root = path.resolve(cwd, source.replace(/^file:/, ""));
@@ -97,12 +112,20 @@ function selectedPlatforms(manifest: HarnessManifest, itemPlatforms?: ("codex" |
 }
 
 export async function validatePackage(root: string, manifest: HarnessManifest): Promise<void> {
+  const realRoot = await realpath(root);
   const names = new Set<string>();
   for (const skill of manifest.spec.skills) {
     if (names.has(`skill:${skill.name}`)) throw new Error(`Duplicate skill name: ${skill.name}`);
     names.add(`skill:${skill.name}`);
     const skillRoot = path.resolve(root, skill.path);
     assertInside(root, skillRoot, `Skill ${skill.name}`);
+    const rootInfo = await lstat(skillRoot).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") throw new Error(`Skill ${skill.name} does not exist at ${skill.path}`);
+      throw error;
+    });
+    if (rootInfo.isSymbolicLink()) throw new Error(`Skill ${skill.name} root is an unsupported symlink: ${skill.path}`);
+    if (!rootInfo.isDirectory()) throw new Error(`Skill ${skill.name} root is not a directory: ${skill.path}`);
+    assertInside(realRoot, await realpath(skillRoot), `Skill ${skill.name}`);
     if (!(await pathExists(path.join(skillRoot, "SKILL.md")))) {
       throw new Error(`Skill ${skill.name} has no SKILL.md at ${skill.path}`);
     }
@@ -116,6 +139,12 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
         if (info.isDirectory()) pending.push(candidate);
       }
     }
+  }
+
+  const bindingNames = new Set<string>();
+  for (const requirement of manifest.spec.requirements.bindings) {
+    if (bindingNames.has(requirement.name)) throw new Error(`Duplicate binding requirement: ${requirement.name}`);
+    bindingNames.add(requirement.name);
   }
 
   const declaredEnv = new Set(manifest.spec.requirements.env.map((item) => item.name));
@@ -133,8 +162,12 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
     }
   }
 
-  if (manifest.spec.hooks.length > 0 && !manifest.spec.platforms.includes("claude")) {
-    throw new Error("Hooks require the claude platform");
+  for (const hook of manifest.spec.hooks) {
+    for (const platform of hook.platforms ?? manifest.spec.platforms) {
+      if (!manifest.spec.platforms.includes(platform)) {
+        throw new Error(`Hook ${hook.event} targets ${platform}, which is not listed in spec.platforms`);
+      }
+    }
   }
 }
 
@@ -147,19 +180,50 @@ function copyFilter(source: string): boolean {
   return ![".git", ".harness", "node_modules", ".DS_Store"].includes(name);
 }
 
+async function verifyCache(root: string, manifest: HarnessManifest, integrity: string): Promise<void> {
+  const cachedIntegrity = await hashDirectory(root);
+  if (cachedIntegrity !== integrity) {
+    throw new Error(`Cached package is corrupt at ${root}: expected ${integrity}, got ${cachedIntegrity}`);
+  }
+  const cachedManifest = await loadManifest(root);
+  await validatePackage(root, cachedManifest);
+  if (
+    cachedManifest.metadata.name !== manifest.metadata.name ||
+    cachedManifest.metadata.version !== manifest.metadata.version
+  ) {
+    throw new Error(
+      `Cached package identity mismatch: expected ${manifest.metadata.name}@${manifest.metadata.version}, got ${cachedManifest.metadata.name}@${cachedManifest.metadata.version}`,
+    );
+  }
+}
+
+async function populateCache(sourceRoot: string, cacheRoot: string): Promise<void> {
+  await mkdir(path.dirname(cacheRoot), { recursive: true });
+  const temporary = path.join(path.dirname(cacheRoot), `.${path.basename(cacheRoot)}.tmp-${process.pid}-${randomUUID()}`);
+  try {
+    await cp(sourceRoot, temporary, { recursive: true, errorOnExist: true, filter: copyFilter });
+    await rename(temporary, cacheRoot);
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true });
+    const code = (error as NodeJS.ErrnoException).code;
+    if ((code === "EEXIST" || code === "ENOTEMPTY") && (await pathExists(cacheRoot))) return;
+    throw error;
+  }
+}
+
 export async function installPackageSource(source: string, cwd = process.cwd()): Promise<InstalledPackage> {
   const materialized = await materializeSource(source, cwd);
   try {
     const manifest = await loadManifest(materialized.root);
     await validatePackage(materialized.root, manifest);
     const integrity = await hashDirectory(materialized.root);
-    const resolved = materialized.resolved === "local" ? integrity : materialized.resolved;
+    const resolved = materialized.resolved === "local" || materialized.resolved === "builtin" ? integrity : materialized.resolved;
     const key = cacheKey(materialized.source, resolved, integrity);
     const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
     if (!(await pathExists(cacheRoot))) {
-      await mkdir(path.dirname(cacheRoot), { recursive: true });
-      await cp(materialized.root, cacheRoot, { recursive: true, errorOnExist: true, filter: copyFilter });
+      await populateCache(materialized.root, cacheRoot);
     }
+    await verifyCache(cacheRoot, manifest, integrity);
     const lock: LockedPackage = {
       name: manifest.metadata.name,
       version: manifest.metadata.version,
@@ -186,5 +250,53 @@ export async function loadCachedPackage(lock: LockedPackage): Promise<InstalledP
   }
   const manifest = await loadManifest(root);
   await validatePackage(root, manifest);
+  if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
+    throw new Error(
+      `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
+    );
+  }
   return { manifest, root, lock };
+}
+
+function sourceAtRevision(source: string, resolved: string): string {
+  if (source.startsWith("file:") || source.startsWith("builtin:")) return source;
+  const { locator } = splitRef(source);
+  return `${locator}#${resolved}`;
+}
+
+export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
+  const expectedRoot = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
+  if (await pathExists(expectedRoot)) {
+    try {
+      return await loadCachedPackage(lock);
+    } catch {
+      await rm(expectedRoot, { recursive: true, force: true });
+    }
+  }
+
+  const materialized = await materializeSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
+  try {
+    const manifest = await loadManifest(materialized.root);
+    await validatePackage(materialized.root, manifest);
+    const integrity = await hashDirectory(materialized.root);
+    if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
+      throw new Error(
+        `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
+      );
+    }
+    if (integrity !== lock.integrity) {
+      throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
+    }
+    if (!lock.source.startsWith("file:") && !lock.source.startsWith("builtin:") && materialized.resolved !== lock.resolved) {
+      throw new Error(`Locked revision mismatch for ${lock.name}: expected ${lock.resolved}, got ${materialized.resolved}`);
+    }
+    await populateCache(materialized.root, expectedRoot);
+    await verifyCache(expectedRoot, manifest, integrity);
+    return { manifest, root: expectedRoot, lock };
+  } catch (error) {
+    await rm(expectedRoot, { recursive: true, force: true });
+    throw error;
+  } finally {
+    await materialized.cleanup?.();
+  }
 }

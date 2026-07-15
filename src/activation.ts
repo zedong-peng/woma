@@ -35,6 +35,38 @@ function equal(left: unknown, right: unknown): boolean {
   return stable(left) === stable(right);
 }
 
+function tomlResource(marker: string): string {
+  const separator = marker.indexOf(":");
+  return separator === -1 ? marker : marker.slice(separator + 1);
+}
+
+function tomlBody(block: string): string {
+  return block.split("\n").slice(1, -1).join("\n");
+}
+
+function sameArtifact(left: ManagedArtifact, right: ManagedArtifact): boolean {
+  if (left.kind !== right.kind || left.path !== right.path) return false;
+  if (left.kind === "directory" && right.kind === "directory") return left.integrity === right.integrity;
+  if (left.kind === "toml-block" && right.kind === "toml-block") {
+    return tomlResource(left.marker) === tomlResource(right.marker) && tomlBody(left.block) === tomlBody(right.block);
+  }
+  if (left.kind === "json-entry" && right.kind === "json-entry") {
+    return equal(left.jsonPath, right.jsonPath) && equal(left.value, right.value);
+  }
+  if (left.kind === "json-array-entry" && right.kind === "json-array-entry") {
+    return equal(left.jsonPath, right.jsonPath) && equal(left.value, right.value);
+  }
+  return false;
+}
+
+function sharedArtifact(state: Awaited<ReturnType<typeof readState>>, candidate: ManagedArtifact): ManagedArtifact | undefined {
+  for (const activation of Object.values(state.activations)) {
+    const existing = activation.artifacts.find((artifact) => artifact.managed && sameArtifact(artifact, candidate));
+    if (existing) return existing;
+  }
+  return undefined;
+}
+
 async function readOptional(filePath: string): Promise<string | null> {
   return readFile(filePath, "utf8").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null;
@@ -145,13 +177,54 @@ function claudeValue(server: McpServer): Record<string, unknown> {
   };
 }
 
-function claudeHook(hook: HookSpec): Record<string, unknown> {
+function hookValue(hook: HookSpec): Record<string, unknown> {
   const handler: Record<string, unknown> = { type: "command", command: hook.command };
   if (hook.timeout !== undefined) handler.timeout = hook.timeout;
   return {
     ...(hook.matcher ? { matcher: hook.matcher } : {}),
     hooks: [handler],
   };
+}
+
+async function prepareHooks(
+  projectRoot: string,
+  filePath: string,
+  platformLabel: string,
+  hooksToAdd: HookSpec[],
+  actions: Action[],
+  artifacts: ManagedArtifact[],
+  files: PreparedFile[],
+  state: Awaited<ReturnType<typeof readState>>,
+): Promise<void> {
+  if (hooksToAdd.length === 0) return;
+  const original = await readOptional(filePath);
+  const settings = parseJsonObject(original, relativeDisplay(projectRoot, filePath));
+  const hooks = getObject(settings, "hooks", relativeDisplay(projectRoot, filePath));
+  let changed = false;
+  for (const hook of hooksToAdd) {
+    const value = hookValue(hook);
+    const eventHooks = getArray(hooks, hook.event, relativeDisplay(projectRoot, filePath));
+    const display = relativeDisplay(projectRoot, filePath);
+    const jsonPath = ["hooks", hook.event];
+    if (eventHooks.some((item) => equal(item, value))) {
+      actions.push({ verb: "adopt", path: display, detail: `${platformLabel} hook ${hook.event} already matches` });
+      const candidate: ManagedArtifact = { kind: "json-array-entry", path: display, jsonPath, value, managed: false };
+      artifacts.push(sharedArtifact(state, candidate) ?? candidate);
+    } else {
+      eventHooks.push(value);
+      changed = true;
+      actions.push({ verb: "merge", path: display, detail: `${platformLabel} hook ${hook.event}` });
+      artifacts.push({
+        kind: "json-array-entry",
+        path: display,
+        jsonPath,
+        value,
+        managed: true,
+        ...(original === null ? { fileCreated: true } : {}),
+      });
+    }
+  }
+  if (changed) files.push({ path: filePath, original, content: `${JSON.stringify(settings, null, 2)}\n` });
 }
 
 function getAtPath(root: Record<string, unknown>, jsonPath: string[]): unknown {
@@ -186,6 +259,7 @@ async function prepareActivation(
   pkg: InstalledPackage,
   projectRoot: string,
   targets: Platform[],
+  state: Awaited<ReturnType<typeof readState>>,
 ): Promise<{ actions: Action[]; artifacts: ManagedArtifact[]; files: PreparedFile[]; directories: { source: string; destination: string }[] }> {
   const actions: Action[] = [];
   const artifacts: ManagedArtifact[] = [];
@@ -205,7 +279,8 @@ async function prepareActivation(
           throw new Error(`Refusing to overwrite existing skill at ${display}`);
         }
         actions.push({ verb: "adopt", path: display, detail: `${target} skill already matches` });
-        artifacts.push({ kind: "directory", path: display, integrity: sourceIntegrity, managed: false });
+        const candidate: ManagedArtifact = { kind: "directory", path: display, integrity: sourceIntegrity, managed: false };
+        artifacts.push(sharedArtifact(state, candidate) ?? candidate);
       } else {
         actions.push({ verb: "create", path: display, detail: `${target} skill ${skill.name}` });
         artifacts.push({ kind: "directory", path: display, integrity: sourceIntegrity, managed: true });
@@ -237,17 +312,35 @@ async function prepareActivation(
           throw new Error(`Refusing to overwrite MCP server ${server.name} in ${display}`);
         }
         actions.push({ verb: "adopt", path: display, detail: `Codex MCP ${server.name} already matches` });
-        artifacts.push({ kind: "toml-block", path: display, marker, block, managed: false });
+        const candidate: ManagedArtifact = { kind: "toml-block", path: display, marker, block, managed: false };
+        artifacts.push(sharedArtifact(state, candidate) ?? candidate);
       } else {
         blocks.push(block);
         actions.push({ verb: "merge", path: display, detail: `Codex MCP ${server.name}` });
-        artifacts.push({ kind: "toml-block", path: display, marker, block, managed: true });
+        artifacts.push({
+          kind: "toml-block",
+          path: display,
+          marker,
+          block,
+          managed: true,
+          ...(original === null ? { fileCreated: true } : {}),
+        });
       }
     }
     if (blocks.length > 0) {
       const prefix = original && original.trimEnd() ? `${original.trimEnd()}\n\n` : "";
       files.push({ path: configPath, original, content: `${prefix}${blocks.join("\n\n")}\n` });
     }
+    await prepareHooks(
+      projectRoot,
+      path.join(projectRoot, ".codex", "hooks.json"),
+      "Codex",
+      pkg.manifest.spec.hooks.filter((hook) => !hook.platforms || hook.platforms.includes("codex")),
+      actions,
+      artifacts,
+      files,
+      state,
+    );
   }
 
   if (targets.includes("claude")) {
@@ -265,41 +358,34 @@ async function prepareActivation(
           throw new Error(`Refusing to overwrite MCP server ${server.name} in ${display}`);
         }
         actions.push({ verb: "adopt", path: display, detail: `Claude MCP ${server.name} already matches` });
-        artifacts.push({ kind: "json-entry", path: display, jsonPath, value, managed: false });
+        const candidate: ManagedArtifact = { kind: "json-entry", path: display, jsonPath, value, managed: false };
+        artifacts.push(sharedArtifact(state, candidate) ?? candidate);
       } else {
         mcpServers[server.name] = value;
         mcpChanged = true;
         actions.push({ verb: "merge", path: display, detail: `Claude MCP ${server.name}` });
-        artifacts.push({ kind: "json-entry", path: display, jsonPath, value, managed: true });
+        artifacts.push({
+          kind: "json-entry",
+          path: display,
+          jsonPath,
+          value,
+          managed: true,
+          ...(originalMcp === null ? { fileCreated: true } : {}),
+        });
       }
     }
     if (mcpChanged) files.push({ path: mcpPath, original: originalMcp, content: `${JSON.stringify(mcpRoot, null, 2)}\n` });
 
-    if (pkg.manifest.spec.hooks.length > 0) {
-      const settingsPath = path.join(projectRoot, ".claude", "settings.json");
-      const originalSettings = await readOptional(settingsPath);
-      const settings = parseJsonObject(originalSettings, relativeDisplay(projectRoot, settingsPath));
-      const hooks = getObject(settings, "hooks", relativeDisplay(projectRoot, settingsPath));
-      let settingsChanged = false;
-      for (const hook of pkg.manifest.spec.hooks) {
-        const value = claudeHook(hook);
-        const eventHooks = getArray(hooks, hook.event, relativeDisplay(projectRoot, settingsPath));
-        const display = relativeDisplay(projectRoot, settingsPath);
-        const jsonPath = ["hooks", hook.event];
-        if (eventHooks.some((item) => equal(item, value))) {
-          actions.push({ verb: "adopt", path: display, detail: `Claude hook ${hook.event} already matches` });
-          artifacts.push({ kind: "json-array-entry", path: display, jsonPath, value, managed: false });
-        } else {
-          eventHooks.push(value);
-          settingsChanged = true;
-          actions.push({ verb: "merge", path: display, detail: `Claude hook ${hook.event}` });
-          artifacts.push({ kind: "json-array-entry", path: display, jsonPath, value, managed: true });
-        }
-      }
-      if (settingsChanged) {
-        files.push({ path: settingsPath, original: originalSettings, content: `${JSON.stringify(settings, null, 2)}\n` });
-      }
-    }
+    await prepareHooks(
+      projectRoot,
+      path.join(projectRoot, ".claude", "settings.json"),
+      "Claude",
+      pkg.manifest.spec.hooks.filter((hook) => !hook.platforms || hook.platforms.includes("claude")),
+      actions,
+      artifacts,
+      files,
+      state,
+    );
   }
 
   return { actions, artifacts, files, directories };
@@ -322,7 +408,7 @@ export async function activatePackage(
     if (!pkg.manifest.spec.platforms.includes(target)) throw new Error(`${name} does not support ${target}`);
   }
 
-  const prepared = await prepareActivation(pkg, project, targets);
+  const prepared = await prepareActivation(pkg, project, targets, state);
   if (dryRun) return prepared.actions;
 
   const createdDirectories: string[] = [];
@@ -347,6 +433,8 @@ export async function activatePackage(
     const record: ActivationRecord = {
       packageName: name,
       packageVersion: pkg.manifest.metadata.version,
+      packageIntegrity: pkg.lock.integrity,
+      packageCacheKey: pkg.lock.cacheKey,
       activatedAt: new Date().toISOString(),
       targets,
       artifacts: prepared.artifacts,
@@ -374,12 +462,19 @@ export async function deactivatePackage(packageName: string, projectRoot: string
   const activation = state.activations[packageName];
   if (!activation) throw new Error(`${packageName} is not active`);
   const actions: Action[] = [];
-  const jsonFiles = new Map<string, { absolute: string; root: Record<string, unknown>; changed: boolean }>();
-  const textFiles = new Map<string, { absolute: string; content: string; changed: boolean }>();
+  const jsonFiles = new Map<string, { absolute: string; root: Record<string, unknown>; changed: boolean; removeWhenEmpty: boolean }>();
+  const textFiles = new Map<string, { absolute: string; content: string; changed: boolean; removeWhenEmpty: boolean }>();
   const directories: string[] = [];
 
   for (const artifact of [...activation.artifacts].reverse()) {
     if (!artifact.managed) continue;
+    const otherOwner = Object.entries(state.activations).find(
+      ([name, record]) => name !== packageName && record.artifacts.some((candidate) => sameArtifact(candidate, artifact)),
+    );
+    if (otherOwner) {
+      actions.push({ verb: "keep", path: artifact.path, detail: `still used by ${otherOwner[0]}` });
+      continue;
+    }
     const absolute = path.join(project, artifact.path);
     if (artifact.kind === "directory") {
       if (!(await pathExists(absolute))) {
@@ -400,10 +495,15 @@ export async function deactivatePackage(packageName: string, projectRoot: string
       const currentBlock = match?.[0].replace(/^\n/, "");
       if (!match || currentBlock !== artifact.block) {
         actions.push({ verb: "keep", path: artifact.path, detail: `managed block ${artifact.marker} changed or absent` });
-        if (!existing) textFiles.set(artifact.path, { absolute, content, changed: false });
+        if (!existing) textFiles.set(artifact.path, { absolute, content, changed: false, removeWhenEmpty: false });
       } else {
         const updated = content.replace(pattern, "").replace(/^\n+|\n+$/g, "");
-        textFiles.set(artifact.path, { absolute, content: updated ? `${updated}\n` : "", changed: true });
+        textFiles.set(artifact.path, {
+          absolute,
+          content: updated ? `${updated}\n` : "",
+          changed: true,
+          removeWhenEmpty: (existing?.removeWhenEmpty ?? false) || artifact.fileCreated === true,
+        });
         actions.push({ verb: "remove", path: artifact.path, detail: `Codex MCP ${artifact.marker.split(":").at(-1)}` });
       }
       continue;
@@ -412,7 +512,7 @@ export async function deactivatePackage(packageName: string, projectRoot: string
     let jsonFile = jsonFiles.get(artifact.path);
     if (!jsonFile) {
       const original = await readOptional(absolute);
-      jsonFile = { absolute, root: parseJsonObject(original, artifact.path), changed: false };
+      jsonFile = { absolute, root: parseJsonObject(original, artifact.path), changed: false, removeWhenEmpty: false };
       jsonFiles.set(artifact.path, jsonFile);
     }
     if (artifact.kind === "json-entry") {
@@ -422,6 +522,7 @@ export async function deactivatePackage(packageName: string, projectRoot: string
       } else {
         deleteAtPath(jsonFile.root, artifact.jsonPath);
         jsonFile.changed = true;
+        jsonFile.removeWhenEmpty ||= artifact.fileCreated === true;
         actions.push({ verb: "remove", path: artifact.path, detail: artifact.jsonPath.join(".") });
       }
     } else {
@@ -436,6 +537,7 @@ export async function deactivatePackage(packageName: string, projectRoot: string
           current.splice(index, 1);
           if (current.length === 0) deleteAtPath(jsonFile.root, artifact.jsonPath);
           jsonFile.changed = true;
+          jsonFile.removeWhenEmpty ||= artifact.fileCreated === true;
           actions.push({ verb: "remove", path: artifact.path, detail: artifact.jsonPath.join(".") });
         }
       }
@@ -448,10 +550,14 @@ export async function deactivatePackage(packageName: string, projectRoot: string
     await removeEmptyParents(path.dirname(directory), project);
   }
   for (const file of textFiles.values()) {
-    if (file.changed) await writeTextAtomic(file.absolute, file.content);
+    if (!file.changed) continue;
+    if (!file.content && file.removeWhenEmpty) await rm(file.absolute, { force: true });
+    else await writeTextAtomic(file.absolute, file.content);
   }
   for (const file of jsonFiles.values()) {
-    if (file.changed) await writeJsonAtomic(file.absolute, file.root);
+    if (!file.changed) continue;
+    if (Object.keys(file.root).length === 0 && file.removeWhenEmpty) await rm(file.absolute, { force: true });
+    else await writeJsonAtomic(file.absolute, file.root);
   }
   await deleteActivation(project, packageName);
   return actions;

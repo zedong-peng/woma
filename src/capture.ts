@@ -124,6 +124,33 @@ function parseClaudeServer(name: string, raw: unknown): McpServer {
   };
 }
 
+async function captureCommandHooks(settingsPath: string, warnings: string[], platform: Platform): Promise<HookSpec[]> {
+  const capturedHooks: HookSpec[] = [];
+  if (!(await pathExists(settingsPath))) return capturedHooks;
+  const settings = object(JSON.parse(await readFile(settingsPath, "utf8")) as unknown, path.basename(settingsPath));
+  const hooks = settings.hooks === undefined ? {} : object(settings.hooks, "hooks");
+  for (const [event, rawGroups] of Object.entries(hooks)) {
+    if (!Array.isArray(rawGroups)) throw new Error(`hooks.${event} must be an array`);
+    for (const rawGroup of rawGroups) {
+      const group = object(rawGroup, `hooks.${event}[]`);
+      const handlers = group.hooks;
+      if (!Array.isArray(handlers)) continue;
+      for (const rawHandler of handlers) {
+        const handler = object(rawHandler, `hooks.${event}[].hooks[]`);
+        if (handler.type !== "command" || typeof handler.command !== "string") {
+          warnings.push(`Skipped non-command hook in ${event}`);
+          continue;
+        }
+        const hook: HookSpec = { event, command: handler.command, platforms: [platform] };
+        if (typeof group.matcher === "string") hook.matcher = group.matcher;
+        if (typeof handler.timeout === "number") hook.timeout = handler.timeout;
+        capturedHooks.push(hook);
+      }
+    }
+  }
+  return capturedHooks;
+}
+
 async function captureClaudeConfig(sourceRoot: string, warnings: string[]): Promise<{ servers: McpServer[]; hooks: HookSpec[] }> {
   const mcpPath = path.join(sourceRoot, ".mcp.json");
   const servers: McpServer[] = [];
@@ -133,32 +160,7 @@ async function captureClaudeConfig(sourceRoot: string, warnings: string[]): Prom
     for (const [name, raw] of Object.entries(entries)) servers.push(parseClaudeServer(name, raw));
   }
 
-  const settingsPath = path.join(sourceRoot, ".claude", "settings.json");
-  const capturedHooks: HookSpec[] = [];
-  if (await pathExists(settingsPath)) {
-    const settings = object(JSON.parse(await readFile(settingsPath, "utf8")) as unknown, ".claude/settings.json");
-    const hooks = settings.hooks === undefined ? {} : object(settings.hooks, "hooks");
-    for (const [event, rawGroups] of Object.entries(hooks)) {
-      if (!Array.isArray(rawGroups)) throw new Error(`hooks.${event} must be an array`);
-      for (const rawGroup of rawGroups) {
-        const group = object(rawGroup, `hooks.${event}[]`);
-        const handlers = group.hooks;
-        if (!Array.isArray(handlers)) continue;
-        for (const rawHandler of handlers) {
-          const handler = object(rawHandler, `hooks.${event}[].hooks[]`);
-          if (handler.type !== "command" || typeof handler.command !== "string") {
-            warnings.push(`Skipped non-command hook in ${event}`);
-            continue;
-          }
-          const hook: HookSpec = { event, command: handler.command };
-          if (typeof group.matcher === "string") hook.matcher = group.matcher;
-          if (typeof handler.timeout === "number") hook.timeout = handler.timeout;
-          capturedHooks.push(hook);
-        }
-      }
-    }
-  }
-  return { servers, hooks: capturedHooks };
+  return { servers, hooks: await captureCommandHooks(path.join(sourceRoot, ".claude", "settings.json"), warnings, "claude") };
 }
 
 export async function captureHarness(options: {
@@ -173,8 +175,10 @@ export async function captureHarness(options: {
   const warnings: string[] = [];
   let mcpServers: McpServer[] = [];
   let hooks: HookSpec[] = [];
-  if (options.platform === "codex") mcpServers = await captureCodexMcp(sourceRoot);
-  else ({ servers: mcpServers, hooks } = await captureClaudeConfig(sourceRoot, warnings));
+  if (options.platform === "codex") {
+    mcpServers = await captureCodexMcp(sourceRoot);
+    hooks = await captureCommandHooks(path.join(sourceRoot, ".codex", "hooks.json"), warnings, "codex");
+  } else ({ servers: mcpServers, hooks } = await captureClaudeConfig(sourceRoot, warnings));
   await mkdir(outputRoot, { recursive: true });
   const skills = await captureSkills(sourceRoot, outputRoot, options.platform);
 
@@ -198,6 +202,7 @@ export async function captureHarness(options: {
       requirements: {
         env: [...envNames].sort().map((env) => ({ name: env, description: "Required by a captured MCP server.", optional: false })),
         commands: [],
+        bindings: [],
       },
       skills,
       mcpServers,

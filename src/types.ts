@@ -6,6 +6,12 @@ export interface EnvironmentRequirement {
   optional: boolean;
 }
 
+export interface BindingRequirement {
+  name: string;
+  description?: string | undefined;
+  optional: boolean;
+}
+
 export interface SkillSpec {
   name: string;
   path: string;
@@ -35,6 +41,7 @@ export interface HookSpec {
   matcher?: string | undefined;
   command: string;
   timeout?: number | undefined;
+  platforms?: Platform[] | undefined;
 }
 
 export interface HarnessManifest {
@@ -51,6 +58,7 @@ export interface HarnessManifest {
     requirements: {
       env: EnvironmentRequirement[];
       commands: string[];
+      bindings: BindingRequirement[];
     };
     skills: SkillSpec[];
     mcpServers: McpServer[];
@@ -86,6 +94,7 @@ export type ManagedArtifact =
       jsonPath: string[];
       value: unknown;
       managed: boolean;
+      fileCreated?: boolean | undefined;
     }
   | {
       kind: "json-array-entry";
@@ -93,6 +102,7 @@ export type ManagedArtifact =
       jsonPath: string[];
       value: unknown;
       managed: boolean;
+      fileCreated?: boolean | undefined;
     }
   | {
       kind: "toml-block";
@@ -100,11 +110,14 @@ export type ManagedArtifact =
       marker: string;
       block: string;
       managed: boolean;
+      fileCreated?: boolean | undefined;
     };
 
 export interface ActivationRecord {
   packageName: string;
   packageVersion: string;
+  packageIntegrity: string;
+  packageCacheKey: string;
   activatedAt: string;
   targets: Platform[];
   artifacts: ManagedArtifact[];
@@ -113,6 +126,43 @@ export interface ActivationRecord {
 export interface StateFile {
   stateVersion: 1;
   activations: Record<string, ActivationRecord>;
+  profile?: ActiveProfileState | undefined;
+}
+
+export interface ProjectProfile {
+  description: string;
+  packages: string[];
+  handoff: "optional" | "required";
+}
+
+export interface HarnessProject {
+  apiVersion: "harness.conda/project-v1";
+  kind: "HarnessProject";
+  metadata: {
+    name: string;
+  };
+  spec: {
+    agent: Platform;
+    targets: Platform[];
+    base: string[];
+    profiles: Record<string, ProjectProfile>;
+    bindings: Record<string, string>;
+    handoffDirectory: string;
+  };
+}
+
+export interface ActiveInstruction {
+  path: string;
+  block: string;
+}
+
+export interface ActiveProfileState {
+  name: string;
+  packages: string[];
+  targets: Platform[];
+  activatedAt: string;
+  instructions: ActiveInstruction[];
+  handoff?: string | undefined;
 }
 
 export interface InstalledPackage {

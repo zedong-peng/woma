@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { activatePackage, deactivatePackage } from "../src/activation.js";
+import { doctorPackage } from "../src/doctor.js";
 import { installPackageSource } from "../src/package.js";
 import { readState } from "../src/store.js";
 
@@ -91,6 +92,8 @@ test("activation merges both targets and deactivation preserves existing config"
     const settings = JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")) as Record<string, any>;
     assert.deepEqual(settings.permissions, { allow: ["Read"] });
     assert.equal(settings.hooks.PostToolUse[0].hooks[0].command, "git diff --check");
+    const codexHooks = JSON.parse(await readFile(path.join(project, ".codex", "hooks.json"), "utf8")) as Record<string, any>;
+    assert.equal(codexHooks.hooks.PostToolUse[0].hooks[0].command, "git diff --check");
 
     await deactivatePackage("test-harness", project);
     assert.equal(await readFile(path.join(project, ".codex", "config.toml"), "utf8"), 'model = "gpt-test"\n');
@@ -98,6 +101,7 @@ test("activation merges both targets and deactivation preserves existing config"
     assert.deepEqual(afterMcp, { mcpServers: { existing: { command: "keep" } } });
     const afterSettings = JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")) as Record<string, any>;
     assert.deepEqual(afterSettings, { permissions: { allow: ["Read"] } });
+    await assert.rejects(readFile(path.join(project, ".codex", "hooks.json")), /ENOENT/);
     assert.equal((await readState(project)).activations["test-harness"], undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -153,6 +157,86 @@ test("deactivation retains a managed Codex MCP block modified by the user", { co
     const actions = await deactivatePackage("test-harness", project);
     assert.ok(actions.some((action) => action.verb === "keep" && action.detail.includes("changed or absent")));
     assert.match(await readFile(configPath, "utf8"), /node-custom/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deactivation preserves empty configuration files that predate activation", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-test-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const project = path.join(root, "project");
+    await write(path.join(project, ".codex", "config.toml"), "");
+    await write(path.join(project, ".codex", "hooks.json"), "{}\n");
+    await write(path.join(project, ".mcp.json"), "{}\n");
+    await write(path.join(project, ".claude", "settings.json"), "{}\n");
+    const pkg = await installPackageSource(await fixture(root));
+    await activatePackage(pkg, project, ["codex", "claude"]);
+    await deactivatePackage("test-harness", project);
+    assert.equal(await readFile(path.join(project, ".codex", "config.toml"), "utf8"), "");
+    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".codex", "hooks.json"), "utf8")), {});
+    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".mcp.json"), "utf8")), {});
+    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")), {});
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shared skills, MCP servers, and hooks remain until their final owner deactivates", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-test-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const project = path.join(root, "project");
+    const firstRoot = await fixture(path.join(root, "first"));
+    const secondRoot = await fixture(path.join(root, "second"));
+    const secondManifest = path.join(secondRoot, "harness.yaml");
+    await writeFile(secondManifest, (await readFile(secondManifest, "utf8")).replace("name: test-harness", "name: second-harness"), "utf8");
+    const first = await installPackageSource(firstRoot);
+    const second = await installPackageSource(secondRoot);
+
+    await activatePackage(first, project, ["codex", "claude"]);
+    await activatePackage(second, project, ["codex", "claude"]);
+    const firstActions = await deactivatePackage("test-harness", project);
+    assert.ok(firstActions.some((action) => action.detail === "still used by second-harness"));
+    assert.match(await readFile(path.join(project, ".agents", "skills", "test-workflow", "SKILL.md"), "utf8"), /Run tests/);
+    assert.match(await readFile(path.join(project, ".codex", "config.toml"), "utf8"), /test-server/);
+    assert.equal(
+      JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")).hooks.PostToolUse.length,
+      1,
+    );
+
+    await deactivatePackage("second-harness", project);
+    await assert.rejects(readFile(path.join(project, ".agents", "skills", "test-workflow", "SKILL.md")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".codex", "config.toml")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".mcp.json")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".claude", "settings.json")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".codex", "hooks.json")), /ENOENT/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("doctor fails when the active package identity differs from the lock", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-test-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const project = path.join(root, "project");
+    const pkg = await installPackageSource(await fixture(root));
+    await activatePackage(pkg, project, ["codex"]);
+    const mismatched = {
+      ...pkg,
+      lock: { ...pkg.lock, version: "2.0.0", cacheKey: "different-cache" },
+    };
+    const checks = await doctorPackage(mismatched, project);
+    assert.deepEqual(
+      checks.find((check) => check.label === "activation-identity"),
+      {
+        status: "fail",
+        label: "activation-identity",
+        detail: `active 1.0.0/${pkg.lock.cacheKey} does not match lock 2.0.0/different-cache`,
+      },
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
