@@ -527,7 +527,12 @@ program
     for (const name of names) {
       const pkg = lock.packages[name]!;
       const active = state.activations[name];
-      console.log(`${active ? "*" : " "} ${name}@${pkg.version}${active ? `  active: ${active.targets.join(",")}` : ""}`);
+      if (!active) {
+        console.log(`  ${name}@${pkg.version}`);
+        continue;
+      }
+      const mismatch = active.packageVersion === pkg.version ? "" : `  [locked: ${pkg.version}]`;
+      console.log(`* ${name}@${active.packageVersion}  active: ${active.targets.join(",")}${mismatch}`);
     }
   });
 
@@ -582,7 +587,9 @@ program.configureOutput({
   outputError: (message, write) => write(`harness: ${message}`),
 });
 
-program.parseAsync(process.argv).catch((error: Error) => {
-  console.error(`harness: ${error.message}`);
+try {
+  await program.parseAsync(process.argv);
+} catch (error) {
+  console.error(`harness: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
-});
+}
