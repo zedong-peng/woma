@@ -33,11 +33,11 @@ spec:
   assert.equal(config.spec.handoffDirectory, ".harness/handoffs");
 });
 
-test("project init creates opinionated research and experiment phases", async () => {
+test("project init creates opinionated research, experiment, and performance phases", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-project-"));
   try {
     const config = await initProject(root, { name: "agent-lab", targets: ["codex"] });
-    assert.deepEqual(Object.keys(config.spec.profiles), ["research", "experiment"]);
+    assert.deepEqual(Object.keys(config.spec.profiles), ["research", "experiment", "performance"]);
     await setBinding(root, "test", "npm test");
     const loaded = await readProjectConfig(root);
     assert.equal(loaded.spec.bindings.test, "npm test");

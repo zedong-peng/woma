@@ -3,9 +3,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { doctorPackage } from "../src/doctor.js";
 import { onboardProject } from "../src/onboard.js";
 import { loadCachedPackage, syncLockedPackage } from "../src/package.js";
-import { readProjectConfig } from "../src/project.js";
+import { switchProfile } from "../src/profile.js";
+import { readProjectConfig, setBinding } from "../src/project.js";
 import { readLock, readState } from "../src/store.js";
 
 async function write(filePath: string, content: string): Promise<void> {
@@ -27,13 +29,29 @@ test("one-command onboarding detects bindings and activates research", { concurr
     assert.deepEqual(config.spec.base, ["reproducibility-core"]);
     assert.deepEqual(config.spec.profiles.research?.packages, ["research-workflow"]);
     assert.deepEqual(config.spec.profiles.experiment?.packages, ["experiment-workflow"]);
+    assert.deepEqual(config.spec.profiles.performance?.packages, ["performance-engineering"]);
     assert.equal(config.spec.bindings.build, "npm run build");
     assert.equal(config.spec.bindings.test, "npm test");
     const lock = await readLock(project);
     assert.equal(lock.packages["research-workflow"]?.source, "builtin:research-workflow");
+    assert.equal(lock.packages["performance-engineering"]?.source, "builtin:performance-engineering");
+    const performancePackage = await loadCachedPackage(lock.packages["performance-engineering"]!);
+    const inactiveChecks = await doctorPackage(performancePackage, project, { activationExpected: false });
+    assert.equal(inactiveChecks.find((check) => check.label === "binding:test")?.status, "ok");
+    assert.equal(inactiveChecks.find((check) => check.label === "binding:benchmark")?.status, "warn");
     assert.equal((await readState(project)).profile?.name, "research");
     assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /Active Harness Profile: research/);
     assert.match(await readFile(path.join(project, ".agents", "skills", "research-loop", "SKILL.md"), "utf8"), /Research loop/);
+    await assert.rejects(switchProfile(project, "performance"), /requires project binding benchmark/);
+    assert.equal((await readState(project)).profile?.name, "research");
+    await setBinding(project, "benchmark", "npm run bench");
+    await switchProfile(project, "performance");
+    assert.equal((await readState(project)).profile?.name, "performance");
+    assert.match(await readFile(path.join(project, ".agents", "skills", "performance-loop", "SKILL.md"), "utf8"), /Performance loop/);
+    const activeChecks = await doctorPackage(performancePackage, project);
+    assert.equal(activeChecks.find((check) => check.label === "binding:test")?.status, "ok");
+    assert.equal(activeChecks.find((check) => check.label === "binding:benchmark")?.status, "ok");
+    await assert.rejects(readFile(path.join(project, ".agents", "skills", "research-loop", "SKILL.md")), /ENOENT/);
     await assert.rejects(onboardProject(project, { targets: ["codex"] }), /fresh Harness project/);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -48,12 +66,12 @@ test("built-in package locks restore without the original working directory", { 
     await mkdir(project, { recursive: true });
     await onboardProject(project, { targets: ["codex"], switchToResearch: false });
     const lock = await readLock(project);
-    const research = lock.packages["research-workflow"]!;
-    const cached = await loadCachedPackage(research);
+    const performance = lock.packages["performance-engineering"]!;
+    const cached = await loadCachedPackage(performance);
     await rm(cached.root, { recursive: true, force: true });
-    const restored = await syncLockedPackage(research);
-    assert.equal(restored.manifest.metadata.name, "research-workflow");
-    assert.equal(restored.lock.integrity, research.integrity);
+    const restored = await syncLockedPackage(performance);
+    assert.equal(restored.manifest.metadata.name, "performance-engineering");
+    assert.equal(restored.lock.integrity, performance.integrity);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

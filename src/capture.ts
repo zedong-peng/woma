@@ -202,6 +202,7 @@ export async function captureHarness(options: {
       requirements: {
         env: [...envNames].sort().map((env) => ({ name: env, description: "Required by a captured MCP server.", optional: false })),
         commands: [],
+        bindings: [],
       },
       skills,
       mcpServers,

@@ -62,6 +62,6 @@ Agent 的基础能力持续增强，会淘汰过细的提示约束，但不会�
 - 团队：私有 registry、签名、策略、评测、版本推广；
 - 企业：SSO、审计、内部 failure-case eval、私有部署与成功率看板。
 
-当前仓库交付 CLI v0.4：一键 onboarding、可组合 profile、排他切换、项目 binding、强路由、handoff、fresh session、跨服务器 sync、本地 outcome evidence，以及同一 Git commit 上裸 Agent 与 profile 的隔离成对评测。评测默认只展示计划，显式执行后也只保留本地元数据和失败阶段。
+当前仓库交付 CLI v0.5：一键 onboarding 后可在 research、experiment、performance 三套 domain workflow 间排他切换；可复现能力作为 base 保留。共享 package 通过 binding requirement 声明它需要的项目接口，性能流程在缺少 correctness 或 benchmark 命令时不会启动。产品同时支持强路由、handoff、fresh session、跨服务器 sync、本地 outcome evidence，以及同一 Git commit 上裸 Agent 与 profile 的隔离成对评测。
 
 这仍不是 PMF 证据。下一阶段必须从用户和 drip 的真实未解决任务中建立 held-out task set，至少覆盖调研、实验和性能优化；同一 Harness 只有在多个任务和重复运行中稳定胜过 baseline，且 failure case 能解释和修复，才有资格被称为 golden。公共 registry 与安装量继续不作为近期成功标准。

@@ -152,6 +152,11 @@ export async function initProject(
           packages: [],
           handoff: "required",
         },
+        performance: {
+          description: "Measure a real bottleneck, test one optimization at a time, and report quantified regressions.",
+          packages: [],
+          handoff: "optional",
+        },
       },
       bindings: {},
       handoffDirectory: ".harness/handoffs",

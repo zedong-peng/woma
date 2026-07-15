@@ -75,3 +75,24 @@ spec:
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("CLI onboarding gives an actionable performance binding when no benchmark is detected", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-onboard-"));
+  const home = path.join(root, "home");
+  const project = path.join(root, "project");
+  try {
+    await write(path.join(project, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
+    const result = await runCli(
+      ["--project", project, "onboard", "--agent", "codex", "--target", "codex", "--no-switch"],
+      root,
+      home,
+    );
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /performance\s+needs benchmark binding: harness bind benchmark <command>/);
+    assert.doesNotMatch(result.stdout, /needs test binding/);
+    const config = await readFile(path.join(project, ".harness", "project.yaml"), "utf8");
+    assert.match(config, /performance-engineering/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

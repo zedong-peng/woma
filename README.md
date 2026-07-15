@@ -16,7 +16,7 @@ harness onboard
 harness enter research
 ```
 
-`onboard` detects installed Agents, repository stacks, the checked-in package manager, and standard build/test/benchmark/lint commands. It installs the built-in reproducibility, research, and experiment workflows and activates `research`. Review the generated `.harness/project.yaml`, then work normally.
+`onboard` detects installed Agents, repository stacks, the checked-in package manager, and standard build/test/benchmark/lint commands. It installs the built-in reproducibility, research, experiment, and performance workflows and activates `research`. Review the generated `.harness/project.yaml`, then work normally.
 
 When research produces a decision:
 
@@ -29,6 +29,16 @@ harness stats
 ```
 
 `enter` starts a clean Codex or Claude session. Use `harness enter --agent codex experiment -- --full-auto` to select an Agent and pass through its arguments.
+
+When the task changes from understanding the system to optimizing it:
+
+```bash
+# Usually detected from package.json, Make, Just, Cargo, or Go metadata.
+harness bind benchmark "npm run benchmark"
+harness enter performance
+```
+
+The performance profile requires both `test` and `benchmark` project bindings. Missing requirements stop the switch before research Skills or routing are removed. The activated workflow establishes a repeated baseline, profiles the exact workload, tests one hypothesis at a time, reruns correctness checks, and keeps only improvements larger than observed noise.
 
 ## Prove a Harness helps
 
@@ -50,7 +60,7 @@ See [the paired evaluation protocol](docs/evals.md). The checked-in `research-au
 | Concern | Behavior |
 | --- | --- |
 | Shared methods | `base` packages remain active across every profile |
-| Phase isolation | Packages outside the selected profile are removed |
+| Phase isolation | Packages outside the selected profile are removed; Harness-created empty config files do not accumulate |
 | Agent routing | Managed blocks in `AGENTS.md` and `CLAUDE.md` name the active phase, bindings, packages, and handoff |
 | Cross-Agent config | Skills, MCP servers, and lifecycle hooks map to each target's official project format |
 | Failure safety | Conflicts stop the switch; completed changes roll back if a later activation fails |
@@ -79,6 +89,10 @@ spec:
       description: Test hypotheses with reproducible measurements.
       packages: [experiment-workflow]
       handoff: required
+    performance:
+      description: Measure a bottleneck and report quantified regressions.
+      packages: [performance-engineering]
+      handoff: optional
   bindings:
     build: make release
     test: make test
@@ -86,7 +100,7 @@ spec:
   handoffDirectory: .harness/handoffs
 ```
 
-Packages hold reusable methodology. Profiles compose packages for a task phase. Bindings connect reusable methodology to the current repository's actual commands. Handoffs transfer state between phases without carrying an old chat context forward. A `required` handoff blocks the next phase until every decision, evidence, hypothesis, input, failure, and acceptance section has been completed.
+Packages hold reusable methodology. Profiles compose packages for a task phase. Binding requirements let a package name the project commands it needs; bindings connect that methodology to the current repository's actual commands. Handoffs transfer state between phases without carrying an old chat context forward. A missing required binding or handoff blocks the next phase before the active environment changes.
 
 ## Multiple servers
 

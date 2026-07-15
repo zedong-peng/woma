@@ -101,7 +101,7 @@ test("activation merges both targets and deactivation preserves existing config"
     assert.deepEqual(afterMcp, { mcpServers: { existing: { command: "keep" } } });
     const afterSettings = JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")) as Record<string, any>;
     assert.deepEqual(afterSettings, { permissions: { allow: ["Read"] } });
-    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".codex", "hooks.json"), "utf8")), {});
+    await assert.rejects(readFile(path.join(project, ".codex", "hooks.json")), /ENOENT/);
     assert.equal((await readState(project)).activations["test-harness"], undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -162,6 +162,27 @@ test("deactivation retains a managed Codex MCP block modified by the user", { co
   }
 });
 
+test("deactivation preserves empty configuration files that predate activation", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-test-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const project = path.join(root, "project");
+    await write(path.join(project, ".codex", "config.toml"), "");
+    await write(path.join(project, ".codex", "hooks.json"), "{}\n");
+    await write(path.join(project, ".mcp.json"), "{}\n");
+    await write(path.join(project, ".claude", "settings.json"), "{}\n");
+    const pkg = await installPackageSource(await fixture(root));
+    await activatePackage(pkg, project, ["codex", "claude"]);
+    await deactivatePackage("test-harness", project);
+    assert.equal(await readFile(path.join(project, ".codex", "config.toml"), "utf8"), "");
+    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".codex", "hooks.json"), "utf8")), {});
+    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".mcp.json"), "utf8")), {});
+    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")), {});
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("shared skills, MCP servers, and hooks remain until their final owner deactivates", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-test-"));
   process.env.HARNESS_HOME = path.join(root, "home");
@@ -187,9 +208,10 @@ test("shared skills, MCP servers, and hooks remain until their final owner deact
 
     await deactivatePackage("second-harness", project);
     await assert.rejects(readFile(path.join(project, ".agents", "skills", "test-workflow", "SKILL.md")), /ENOENT/);
-    assert.equal(await readFile(path.join(project, ".codex", "config.toml"), "utf8"), "");
-    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".mcp.json"), "utf8")), {});
-    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")), {});
+    await assert.rejects(readFile(path.join(project, ".codex", "config.toml")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".mcp.json")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".claude", "settings.json")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".codex", "hooks.json")), /ENOENT/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

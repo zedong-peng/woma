@@ -30,6 +30,8 @@
 
 成功标准：新服务器不依赖原机器的隐式状态；项目差异不需要 fork 通用 Harness；同一 failure case 不被不同 Agent session 反复踩中。
 
+进入 `performance` 前，package 声明的 `test` 与 `benchmark` binding 必须存在。项目元数据能识别就由 onboard 自动绑定；无法识别时明确要求 `harness bind benchmark <command>`，并在绑定前保持原 profile 完整不变。进入后执行 benchmark -> profile -> hypothesis -> one change -> correctness -> re-benchmark -> report 的闭环。
+
 当 drip 修改共享方法论时，先在一个开发任务集上运行成对 eval，再在未参与调优的 held-out 项目上复测。profile 没有稳定胜过 baseline 时不得推广到其他服务器或全公司。
 
 ## 作者：发布 golden Harness

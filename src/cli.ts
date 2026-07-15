@@ -104,7 +104,7 @@ async function ensureProject(project: string): Promise<void> {
 program
   .name("harness")
   .description("Switch reproducible workflow profiles across Codex and Claude Code")
-  .version("0.4.0")
+  .version("0.5.0")
   .enablePositionalOptions()
   .option("-p, --project <directory>", "project to configure", process.cwd());
 
@@ -166,6 +166,11 @@ program
       for (const [name, value] of Object.entries(result.detection.bindings)) console.log(`  ${name.padEnd(9)} ${value}`);
       console.log(`  packages  ${result.packages.join(", ")}`);
       if (result.active) console.log("  profile   research");
+      for (const binding of ["test", "benchmark"]) {
+        if (!result.detection.bindings[binding]) {
+          console.log(`  performance  needs ${binding} binding: harness bind ${binding} <command>`);
+        }
+      }
       console.log(`Next: harness enter --agent ${result.detection.agent} research`);
     },
   );
@@ -188,7 +193,7 @@ const projectCommand = program.command("project").description("configure this pr
 
 projectCommand
   .command("init")
-  .description("create .harness/project.yaml with research and experiment profiles")
+  .description("create .harness/project.yaml with research, experiment, and performance profiles")
   .option("--name <name>", "project name")
   .option("--agent <agent>", "default agent: codex or claude", "codex")
   .option("--target <target>", "codex, claude, both, or a comma-separated list", "both")
@@ -570,6 +575,7 @@ program
     console.log(`  MCP        ${manifest.spec.mcpServers.map((server) => server.name).join(", ") || "none"}`);
     console.log(`  hooks      ${manifest.spec.hooks.map((hook) => hook.event).join(", ") || "none"}`);
     console.log(`  env        ${manifest.spec.requirements.env.map((item) => item.name).join(", ") || "none"}`);
+    console.log(`  bindings   ${manifest.spec.requirements.bindings.map((item) => item.name).join(", ") || "none"}`);
   });
 
 program.configureOutput({

@@ -1,6 +1,6 @@
 {
   "name": "harness-conda",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Switch reproducible workflow profiles across Codex and Claude Code.",
   "type": "module",
   "bin": {
@@ -14,6 +14,7 @@
     "examples/reproducibility-core",
     "examples/research-workflow",
     "examples/experiment-workflow",
+    "scripts/benchmark-switch.mjs",
     "CHANGELOG.md",
     "README.md",
     "SECURITY.md"
@@ -22,6 +23,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
+    "benchmark": "npm run build --silent && node scripts/benchmark-switch.mjs",
     "demo": "bash scripts/demo-workflow.sh",
     "start": "node dist/src/cli.js"
   },

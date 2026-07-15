@@ -20,7 +20,13 @@ spec:
       packages:
         - experiment-workflow
       handoff: required
+    performance:
+      description: Measure a real bottleneck, test one optimization at a time, and report quantified regressions.
+      packages:
+        - performance-engineering
+      handoff: optional
   bindings:
     build: npm run build
     test: npm test
+    benchmark: npm run benchmark
   handoffDirectory: .harness/handoffs

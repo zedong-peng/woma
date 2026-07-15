@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+- Promoted the performance engineering workflow from a package example to a built-in onboarding profile.
+- Added package-level project binding requirements so domain workflows can depend on repository commands without hard-coding them.
+- Require `test` and `benchmark` bindings before performance activation, with no profile mutation on rejection.
+- Detect benchmark commands during onboarding and give an explicit `harness bind benchmark <command>` next step when none is found.
+- Verify direct research-to-performance switching keeps the reproducibility base while removing research-only capabilities.
+- Restore the exact performance package lock on a new machine and report inactive missing bindings as doctor warnings.
+- Remove Harness-created config files when their final managed entry disappears, while preserving files that predated activation.
+
 ## 0.4.0
 
 - Added committed paired-eval definitions with `eval init` and inspectable `eval plan`.

@@ -44,7 +44,11 @@ export function classifyFailure(error: unknown): FailureReason {
   if (/modified|drift|missing managed|routing block/i.test(message)) return "drift";
   if (/refusing to overwrite|conflict/i.test(message)) return "conflict";
   if (/not installed|not cached|not found|missing from this installation|integrity/i.test(message)) return "dependency";
-  if (/invalid|unknown profile|configured|project targets|fresh Harness project|requires a handoff|handoff .* not ready/i.test(message)) {
+  if (
+    /invalid|unknown profile|configured|project targets|fresh Harness project|requires a handoff|requires project binding|handoff .* not ready/i.test(
+      message,
+    )
+  ) {
     return "configuration";
   }
   return "unexpected";

@@ -34,7 +34,12 @@ export async function onboardProject(
   const agent = options.agent ?? detection.agent;
   if (!targets.includes(agent)) throw new Error(`Default agent ${agent} must be included in project targets`);
 
-  const packageSources = ["builtin:reproducibility-core", "builtin:research-workflow", "builtin:experiment-workflow"];
+  const packageSources = [
+    "builtin:reproducibility-core",
+    "builtin:research-workflow",
+    "builtin:experiment-workflow",
+    "builtin:performance-engineering",
+  ];
   const packages = [];
   for (const source of packageSources) packages.push(await installPackageSource(source));
 
@@ -48,6 +53,7 @@ export async function onboardProject(
     await addPackageToProject(project, "reproducibility-core", { base: true });
     await addPackageToProject(project, "research-workflow", { profile: "research" });
     await addPackageToProject(project, "experiment-workflow", { profile: "experiment" });
+    await addPackageToProject(project, "performance-engineering", { profile: "performance" });
     for (const [name, command] of Object.entries(detection.bindings)) await setBinding(project, name, command);
     const active = options.switchToResearch === false ? undefined : await switchProfile(project, "research");
     return {

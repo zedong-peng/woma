@@ -65,8 +65,20 @@ export async function doctorPackage(
     });
   }
 
-  const state = await readState(projectRoot);
+  const [state, projectConfig] = await Promise.all([
+    readState(projectRoot),
+    pathExists(projectConfigPath(projectRoot)).then((exists) => (exists ? readProjectConfig(projectRoot) : undefined)),
+  ]);
   const activation = state.activations[pkg.manifest.metadata.name];
+  for (const requirement of pkg.manifest.spec.requirements.bindings) {
+    const command = projectConfig?.spec.bindings[requirement.name];
+    const requiredNow = Boolean(activation) || options.activationExpected === true;
+    checks.push({
+      status: command ? "ok" : requirement.optional || !requiredNow ? "warn" : "fail",
+      label: `binding:${requirement.name}`,
+      detail: command ?? requirement.description ?? "required project binding is not configured",
+    });
+  }
   if (!activation) {
     checks.push({
       status: options.activationExpected === false ? "ok" : "warn",

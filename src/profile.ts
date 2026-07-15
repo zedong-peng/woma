@@ -187,6 +187,23 @@ function packageTargets(pkg: InstalledPackage, targets: Platform[]): Platform[] 
   return selected;
 }
 
+function assertRequiredBindings(
+  profileName: string,
+  bindings: Record<string, string>,
+  names: string[],
+  packages: Map<string, InstalledPackage>,
+): void {
+  for (const name of names) {
+    const pkg = packages.get(name)!;
+    for (const requirement of pkg.manifest.spec.requirements.bindings) {
+      if (requirement.optional || bindings[requirement.name]) continue;
+      throw new Error(
+        `Profile ${profileName} requires project binding ${requirement.name} for ${name}; run harness bind ${requirement.name} <command>`,
+      );
+    }
+  }
+}
+
 async function switchInternal(
   projectRoot: string,
   profileName: string | undefined,
@@ -204,6 +221,7 @@ async function switchInternal(
   const allNames = [...new Set([...desiredNames, ...previousNames])];
   const packages = await loadProfilePackages(project, allNames);
   const desiredTargets = new Map(desiredNames.map((name) => [name, packageTargets(packages.get(name)!, config.spec.targets)]));
+  if (profileName) assertRequiredBindings(profileName, config.spec.bindings, desiredNames, packages);
   const handoff = profileName ? await latestHandoff(project, profileName) : undefined;
   if (profile?.handoff === "required") {
     if (!handoff) throw new Error(`Profile ${profileName} requires a handoff; run harness handoff ${profileName} from the previous phase`);

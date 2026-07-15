@@ -214,7 +214,14 @@ async function prepareHooks(
       eventHooks.push(value);
       changed = true;
       actions.push({ verb: "merge", path: display, detail: `${platformLabel} hook ${hook.event}` });
-      artifacts.push({ kind: "json-array-entry", path: display, jsonPath, value, managed: true });
+      artifacts.push({
+        kind: "json-array-entry",
+        path: display,
+        jsonPath,
+        value,
+        managed: true,
+        ...(original === null ? { fileCreated: true } : {}),
+      });
     }
   }
   if (changed) files.push({ path: filePath, original, content: `${JSON.stringify(settings, null, 2)}\n` });
@@ -310,7 +317,14 @@ async function prepareActivation(
       } else {
         blocks.push(block);
         actions.push({ verb: "merge", path: display, detail: `Codex MCP ${server.name}` });
-        artifacts.push({ kind: "toml-block", path: display, marker, block, managed: true });
+        artifacts.push({
+          kind: "toml-block",
+          path: display,
+          marker,
+          block,
+          managed: true,
+          ...(original === null ? { fileCreated: true } : {}),
+        });
       }
     }
     if (blocks.length > 0) {
@@ -350,7 +364,14 @@ async function prepareActivation(
         mcpServers[server.name] = value;
         mcpChanged = true;
         actions.push({ verb: "merge", path: display, detail: `Claude MCP ${server.name}` });
-        artifacts.push({ kind: "json-entry", path: display, jsonPath, value, managed: true });
+        artifacts.push({
+          kind: "json-entry",
+          path: display,
+          jsonPath,
+          value,
+          managed: true,
+          ...(originalMcp === null ? { fileCreated: true } : {}),
+        });
       }
     }
     if (mcpChanged) files.push({ path: mcpPath, original: originalMcp, content: `${JSON.stringify(mcpRoot, null, 2)}\n` });
@@ -441,8 +462,8 @@ export async function deactivatePackage(packageName: string, projectRoot: string
   const activation = state.activations[packageName];
   if (!activation) throw new Error(`${packageName} is not active`);
   const actions: Action[] = [];
-  const jsonFiles = new Map<string, { absolute: string; root: Record<string, unknown>; changed: boolean }>();
-  const textFiles = new Map<string, { absolute: string; content: string; changed: boolean }>();
+  const jsonFiles = new Map<string, { absolute: string; root: Record<string, unknown>; changed: boolean; removeWhenEmpty: boolean }>();
+  const textFiles = new Map<string, { absolute: string; content: string; changed: boolean; removeWhenEmpty: boolean }>();
   const directories: string[] = [];
 
   for (const artifact of [...activation.artifacts].reverse()) {
@@ -474,10 +495,15 @@ export async function deactivatePackage(packageName: string, projectRoot: string
       const currentBlock = match?.[0].replace(/^\n/, "");
       if (!match || currentBlock !== artifact.block) {
         actions.push({ verb: "keep", path: artifact.path, detail: `managed block ${artifact.marker} changed or absent` });
-        if (!existing) textFiles.set(artifact.path, { absolute, content, changed: false });
+        if (!existing) textFiles.set(artifact.path, { absolute, content, changed: false, removeWhenEmpty: false });
       } else {
         const updated = content.replace(pattern, "").replace(/^\n+|\n+$/g, "");
-        textFiles.set(artifact.path, { absolute, content: updated ? `${updated}\n` : "", changed: true });
+        textFiles.set(artifact.path, {
+          absolute,
+          content: updated ? `${updated}\n` : "",
+          changed: true,
+          removeWhenEmpty: (existing?.removeWhenEmpty ?? false) || artifact.fileCreated === true,
+        });
         actions.push({ verb: "remove", path: artifact.path, detail: `Codex MCP ${artifact.marker.split(":").at(-1)}` });
       }
       continue;
@@ -486,7 +512,7 @@ export async function deactivatePackage(packageName: string, projectRoot: string
     let jsonFile = jsonFiles.get(artifact.path);
     if (!jsonFile) {
       const original = await readOptional(absolute);
-      jsonFile = { absolute, root: parseJsonObject(original, artifact.path), changed: false };
+      jsonFile = { absolute, root: parseJsonObject(original, artifact.path), changed: false, removeWhenEmpty: false };
       jsonFiles.set(artifact.path, jsonFile);
     }
     if (artifact.kind === "json-entry") {
@@ -496,6 +522,7 @@ export async function deactivatePackage(packageName: string, projectRoot: string
       } else {
         deleteAtPath(jsonFile.root, artifact.jsonPath);
         jsonFile.changed = true;
+        jsonFile.removeWhenEmpty ||= artifact.fileCreated === true;
         actions.push({ verb: "remove", path: artifact.path, detail: artifact.jsonPath.join(".") });
       }
     } else {
@@ -510,6 +537,7 @@ export async function deactivatePackage(packageName: string, projectRoot: string
           current.splice(index, 1);
           if (current.length === 0) deleteAtPath(jsonFile.root, artifact.jsonPath);
           jsonFile.changed = true;
+          jsonFile.removeWhenEmpty ||= artifact.fileCreated === true;
           actions.push({ verb: "remove", path: artifact.path, detail: artifact.jsonPath.join(".") });
         }
       }
@@ -522,10 +550,14 @@ export async function deactivatePackage(packageName: string, projectRoot: string
     await removeEmptyParents(path.dirname(directory), project);
   }
   for (const file of textFiles.values()) {
-    if (file.changed) await writeTextAtomic(file.absolute, file.content);
+    if (!file.changed) continue;
+    if (!file.content && file.removeWhenEmpty) await rm(file.absolute, { force: true });
+    else await writeTextAtomic(file.absolute, file.content);
   }
   for (const file of jsonFiles.values()) {
-    if (file.changed) await writeJsonAtomic(file.absolute, file.root);
+    if (!file.changed) continue;
+    if (Object.keys(file.root).length === 0 && file.removeWhenEmpty) await rm(file.absolute, { force: true });
+    else await writeJsonAtomic(file.absolute, file.root);
   }
   await deleteActivation(project, packageName);
   return actions;

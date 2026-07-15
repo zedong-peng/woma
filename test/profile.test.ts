@@ -20,7 +20,7 @@ async function setup(root: string): Promise<string> {
   await mkdir(project, { recursive: true });
   await writeFile(path.join(project, "AGENTS.md"), "# Existing project instructions\n", "utf8");
   await initProject(project, { name: "agent-lab" });
-  const sources = ["reproducibility-core", "research-workflow", "experiment-workflow"];
+  const sources = ["reproducibility-core", "research-workflow", "experiment-workflow", "performance-engineering"];
   for (const source of sources) {
     const pkg = await installPackageSource(path.join(repositoryRoot, "examples", source));
     await putLock(project, pkg.lock);
@@ -28,6 +28,7 @@ async function setup(root: string): Promise<string> {
   await addPackageToProject(project, "reproducibility-core", { base: true });
   await addPackageToProject(project, "research-workflow", { profile: "research" });
   await addPackageToProject(project, "experiment-workflow", { profile: "experiment" });
+  await addPackageToProject(project, "performance-engineering", { profile: "performance" });
   await setBinding(project, "test", "npm test");
   await setBinding(project, "benchmark", "npm run benchmark");
   return project;
@@ -113,6 +114,27 @@ test("research switches to experiment with base retention and handoff", { concur
     assert.equal(await readFile(path.join(project, "AGENTS.md"), "utf8"), "# Existing project instructions\n");
     await assert.rejects(readFile(path.join(project, "CLAUDE.md")), /ENOENT/);
     assert.match(await readFile(path.join(project, handoff), "utf8"), /baseline is reproducible/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("research switches directly to a benchmark-bound performance loop", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-profile-"));
+  try {
+    const project = await setup(root);
+    await switchProfile(project, "research");
+    const coreActivatedAt = (await readState(project)).activations["reproducibility-core"]?.activatedAt;
+    const switched = await switchProfile(project, "performance");
+    assert.deepEqual(switched.packages, ["reproducibility-core", "performance-engineering"]);
+    const state = await readState(project);
+    assert.equal(state.profile?.name, "performance");
+    assert.equal(state.activations["reproducibility-core"]?.activatedAt, coreActivatedAt);
+    assert.equal(state.activations["research-workflow"], undefined);
+    assert.ok(state.activations["performance-engineering"]);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "performance-loop", "SKILL.md"), "utf8"), /Performance loop/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /benchmark: `npm run benchmark`/);
+    assert.equal((await doctorProject(project)).some((check) => check.status === "fail"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

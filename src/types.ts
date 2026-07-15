@@ -6,6 +6,12 @@ export interface EnvironmentRequirement {
   optional: boolean;
 }
 
+export interface BindingRequirement {
+  name: string;
+  description?: string | undefined;
+  optional: boolean;
+}
+
 export interface SkillSpec {
   name: string;
   path: string;
@@ -52,6 +58,7 @@ export interface HarnessManifest {
     requirements: {
       env: EnvironmentRequirement[];
       commands: string[];
+      bindings: BindingRequirement[];
     };
     skills: SkillSpec[];
     mcpServers: McpServer[];
@@ -87,6 +94,7 @@ export type ManagedArtifact =
       jsonPath: string[];
       value: unknown;
       managed: boolean;
+      fileCreated?: boolean | undefined;
     }
   | {
       kind: "json-array-entry";
@@ -94,6 +102,7 @@ export type ManagedArtifact =
       jsonPath: string[];
       value: unknown;
       managed: boolean;
+      fileCreated?: boolean | undefined;
     }
   | {
       kind: "toml-block";
@@ -101,6 +110,7 @@ export type ManagedArtifact =
       marker: string;
       block: string;
       managed: boolean;
+      fileCreated?: boolean | undefined;
     };
 
 export interface ActivationRecord {

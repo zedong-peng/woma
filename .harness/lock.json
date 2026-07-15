@@ -27,6 +27,15 @@
       "integrity": "sha256-497fcb588e02c7c9f22653677a85f36b8e4c91422018da85147551d618e3780f",
       "cacheKey": "24c32659147ce936d822",
       "installedAt": "2026-07-15T18:26:25.017Z"
+    },
+    "performance-engineering": {
+      "name": "performance-engineering",
+      "version": "0.2.0",
+      "source": "builtin:performance-engineering",
+      "resolved": "sha256-23bc10a7341bedb37194bd6fe9e15c702532b9c042002e3f3585859dd1d52d03",
+      "integrity": "sha256-23bc10a7341bedb37194bd6fe9e15c702532b9c042002e3f3585859dd1d52d03",
+      "cacheKey": "2b303dc0e181fa43d11b",
+      "installedAt": "2026-07-15T19:05:48.397Z"
     }
   }
 }

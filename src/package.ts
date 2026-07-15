@@ -15,7 +15,7 @@ interface MaterializedSource {
   cleanup?: () => Promise<void>;
 }
 
-const builtinNames = new Set(["reproducibility-core", "research-workflow", "experiment-workflow"]);
+const builtinNames = new Set(["reproducibility-core", "research-workflow", "experiment-workflow", "performance-engineering"]);
 
 function builtinPath(name: string): string {
   if (!builtinNames.has(name)) throw new Error(`Unknown built-in Harness: ${name}`);
@@ -139,6 +139,12 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
         if (info.isDirectory()) pending.push(candidate);
       }
     }
+  }
+
+  const bindingNames = new Set<string>();
+  for (const requirement of manifest.spec.requirements.bindings) {
+    if (bindingNames.has(requirement.name)) throw new Error(`Duplicate binding requirement: ${requirement.name}`);
+    bindingNames.add(requirement.name);
   }
 
   const declaredEnv = new Set(manifest.spec.requirements.env.map((item) => item.name));

@@ -18,6 +18,11 @@ spec:
         description: GitHub API access for private repositories.
         optional: false
     commands: [git, node]
+    bindings:
+      - name: test
+        description: Project correctness command used by this workflow.
+      - name: benchmark
+        description: Repeatable project benchmark command.
   skills:
     - name: repository-research
       path: ./skills/repository-research
@@ -55,3 +60,9 @@ mcpServers:
 | Hook | entry in `.codex/hooks.json` | entry in `.claude/settings.json` |
 
 `.harness/lock.json` records source, resolved revision, content integrity, and cache key. `.harness/state.json` is machine-local ownership state and must not be committed.
+
+## Requirements
+
+`commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values. `bindings` declares project-level commands that the reusable workflow needs without hard-coding one repository's build system.
+
+A required binding blocks profile activation before any files change. Configure it in `.harness/project.yaml` or with `harness bind <name> <command...>`. Set `optional: true` only when the workflow has a valid degraded path. `doctor` reports missing inactive-profile bindings as warnings and missing active-profile bindings as failures.

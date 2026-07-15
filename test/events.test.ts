@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { appendWorkflowEvent, eventsPath, readWorkflowEvents, recordOutcome, workflowStats } from "../src/events.js";
+import { appendWorkflowEvent, classifyFailure, eventsPath, readWorkflowEvents, recordOutcome, workflowStats } from "../src/events.js";
 import { onboardProject } from "../src/onboard.js";
 
 test("local workflow stats aggregate transitions, sessions, handoffs, and outcomes", async () => {
@@ -33,6 +33,13 @@ test("local workflow stats aggregate transitions, sessions, handoffs, and outcom
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("missing domain bindings are configuration failures", () => {
+  assert.equal(
+    classifyFailure(new Error("Profile performance requires project binding benchmark for performance-engineering")),
+    "configuration",
+  );
 });
 
 test("outcomes attach evidence to the active profile and remain local", { concurrency: false }, async () => {
