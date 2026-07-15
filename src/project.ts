@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
@@ -30,6 +31,7 @@ const projectSchema = z
               .object({
                 description: z.string().min(1).max(300),
                 packages: z.array(nameSchema).default([]),
+                handoff: z.enum(["optional", "required"]).default("optional"),
               })
               .strict(),
           )
@@ -43,6 +45,44 @@ const projectSchema = z
 
 export function projectConfigPath(projectRoot: string): string {
   return path.join(projectRoot, ".harness", "project.yaml");
+}
+
+function gitPath(projectRoot: string, gitPathName: string): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["-C", projectRoot, "rev-parse", "--git-path", gitPathName], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => (output += chunk.toString()));
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") resolve(undefined);
+      else reject(error);
+    });
+    child.on("close", (code) => {
+      if (code !== 0) resolve(undefined);
+      else {
+        const value = output.trim();
+        resolve(path.isAbsolute(value) ? value : path.resolve(projectRoot, value));
+      }
+    });
+  });
+}
+
+async function ensureLocalGitExcludes(projectRoot: string): Promise<void> {
+  const excludePath = await gitPath(projectRoot, "info/exclude");
+  if (!excludePath) return;
+  const existing = await readFile(excludePath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  });
+  const required = ["/.harness/state.json", "/.harness/local/"];
+  const missing = required.filter((entry) => !existing.split("\n").includes(entry));
+  if (missing.length === 0) return;
+  const prefix = existing.trimEnd();
+  await writeTextAtomic(
+    excludePath,
+    `${prefix}${prefix ? "\n\n" : ""}# harness-conda machine-local state\n${missing.join("\n")}\n`,
+  );
 }
 
 function slug(input: string, fallback?: string): string {
@@ -105,10 +145,12 @@ export async function initProject(
         research: {
           description: "Find prior work, collect evidence, and produce testable hypotheses.",
           packages: [],
+          handoff: "optional",
         },
         experiment: {
           description: "Turn hypotheses into reproducible experiments, evaluate results, and record failures.",
           packages: [],
+          handoff: "required",
         },
       },
       bindings: {},
@@ -116,6 +158,7 @@ export async function initProject(
     },
   };
   await writeProjectConfig(projectRoot, config);
+  await ensureLocalGitExcludes(projectRoot);
   return config;
 }
 
@@ -138,6 +181,7 @@ export async function addPackageToProject(
     const profile = config.spec.profiles[profileName] ?? {
       description: `${profileName} workflow.`,
       packages: [],
+      handoff: "optional" as const,
     };
     if (!profile.packages.includes(packageName)) profile.packages.push(packageName);
     config.spec.profiles[profileName] = profile;

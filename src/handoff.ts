@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
+import { appendWorkflowEvent } from "./events.js";
 import { assertInside, pathExists, relativeDisplay, writeTextAtomic } from "./fs.js";
 import { readProjectConfig } from "./project.js";
 import { readState } from "./store.js";
@@ -10,6 +11,16 @@ interface HandoffMetadata {
   to: string;
   createdAt: string;
 }
+
+const requiredSections = ["Decision", "Evidence", "Hypotheses", "Required inputs", "Failure cases and uncertainty", "Acceptance criteria"];
+const placeholderFragments = [
+  "State what the next profile should do and why.",
+  "List source paths, citations, measurements, and commands that support the decision.",
+  "List falsifiable hypotheses in priority order.",
+  "List datasets, checkpoints, branches, environment variables, and external dependencies.",
+  "Record rejected approaches, known failure modes, and unresolved uncertainty.",
+  "Define the objective checks that make the next phase complete.",
+];
 
 function parseFrontmatter(input: string): HandoffMetadata | undefined {
   const match = /^---\n([\s\S]*?)\n---\n/.exec(input);
@@ -44,6 +55,22 @@ export async function latestHandoff(projectRoot: string, toProfile: string): Pro
   candidates.sort((left, right) => right.modified - left.modified);
   const latest = candidates[0]?.path;
   return latest ? relativeDisplay(projectRoot, latest) : undefined;
+}
+
+export async function handoffIssues(projectRoot: string, relativePath: string): Promise<string[]> {
+  const absolute = path.resolve(projectRoot, relativePath);
+  assertInside(projectRoot, absolute, "Handoff");
+  if (!(await pathExists(absolute))) return ["handoff file is missing"];
+  const input = await readFile(absolute, "utf8");
+  const issues: string[] = [];
+  for (const section of requiredSections) {
+    const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(`^## ${escaped}\\n+([\\s\\S]*?)(?=\\n## |$)`, "m").exec(input);
+    const content = match?.[1]?.trim() ?? "";
+    if (!content) issues.push(`${section} is empty`);
+    else if (placeholderFragments.some((placeholder) => content.includes(placeholder))) issues.push(`${section} still contains template text`);
+  }
+  return issues;
 }
 
 export async function createHandoff(projectRoot: string, toProfile: string): Promise<string> {
@@ -99,5 +126,12 @@ Record rejected approaches, known failure modes, and unresolved uncertainty.
 Define the objective checks that make the next phase complete.
 `,
   );
-  return relativeDisplay(projectRoot, filePath);
+  const relative = relativeDisplay(projectRoot, filePath);
+  await appendWorkflowEvent(projectRoot, {
+    type: "handoff",
+    from: active.name,
+    to: toProfile,
+    handoff: relative,
+  }).catch(() => undefined);
+  return relative;
 }

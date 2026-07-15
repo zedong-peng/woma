@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { cp, lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { assertInside, harnessHome, hashDirectory, pathExists } from "./fs.js";
 import { loadManifest } from "./schema.js";
@@ -12,6 +13,14 @@ interface MaterializedSource {
   source: string;
   resolved: string;
   cleanup?: () => Promise<void>;
+}
+
+const builtinNames = new Set(["reproducibility-core", "research-workflow", "experiment-workflow"]);
+
+function builtinPath(name: string): string {
+  if (!builtinNames.has(name)) throw new Error(`Unknown built-in Harness: ${name}`);
+  const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  return path.join(packageRoot, "examples", name);
 }
 
 function run(command: string, args: string[], cwd?: string): Promise<string> {
@@ -62,6 +71,12 @@ function normalizeGitSource(source: string): { url: string; canonical: string; r
 }
 
 async function materializeSource(source: string, cwd: string): Promise<MaterializedSource> {
+  if (source.startsWith("builtin:")) {
+    const name = source.slice("builtin:".length);
+    const root = builtinPath(name);
+    if (!(await pathExists(root))) throw new Error(`Built-in Harness is missing from this installation: ${name}`);
+    return { root, source: `builtin:${name}`, resolved: "builtin" };
+  }
   const git = normalizeGitSource(source);
   if (!git) {
     const root = path.resolve(cwd, source.replace(/^file:/, ""));
@@ -133,8 +148,12 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
     }
   }
 
-  if (manifest.spec.hooks.length > 0 && !manifest.spec.platforms.includes("claude")) {
-    throw new Error("Hooks require the claude platform");
+  for (const hook of manifest.spec.hooks) {
+    for (const platform of hook.platforms ?? manifest.spec.platforms) {
+      if (!manifest.spec.platforms.includes(platform)) {
+        throw new Error(`Hook ${hook.event} targets ${platform}, which is not listed in spec.platforms`);
+      }
+    }
   }
 }
 
@@ -153,7 +172,7 @@ export async function installPackageSource(source: string, cwd = process.cwd()):
     const manifest = await loadManifest(materialized.root);
     await validatePackage(materialized.root, manifest);
     const integrity = await hashDirectory(materialized.root);
-    const resolved = materialized.resolved === "local" ? integrity : materialized.resolved;
+    const resolved = materialized.resolved === "local" || materialized.resolved === "builtin" ? integrity : materialized.resolved;
     const key = cacheKey(materialized.source, resolved, integrity);
     const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
     if (!(await pathExists(cacheRoot))) {
@@ -190,7 +209,7 @@ export async function loadCachedPackage(lock: LockedPackage): Promise<InstalledP
 }
 
 function sourceAtRevision(source: string, resolved: string): string {
-  if (source.startsWith("file:")) return source;
+  if (source.startsWith("file:") || source.startsWith("builtin:")) return source;
   const { locator } = splitRef(source);
   return `${locator}#${resolved}`;
 }
@@ -218,7 +237,7 @@ export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledP
     if (integrity !== lock.integrity) {
       throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
     }
-    if (!lock.source.startsWith("file:") && materialized.resolved !== lock.resolved) {
+    if (!lock.source.startsWith("file:") && !lock.source.startsWith("builtin:") && materialized.resolved !== lock.resolved) {
       throw new Error(`Locked revision mismatch for ${lock.name}: expected ${lock.resolved}, got ${materialized.resolved}`);
     }
     await mkdir(path.dirname(expectedRoot), { recursive: true });

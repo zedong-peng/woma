@@ -4,8 +4,10 @@ import { Command } from "commander";
 import { activatePackage, deactivatePackage } from "./activation.js";
 import { captureHarness } from "./capture.js";
 import { doctorPackage, doctorProject, type Check } from "./doctor.js";
+import { recordOutcome, workflowStats, type OutcomeStatus } from "./events.js";
 import { createHandoff } from "./handoff.js";
 import { installPackageSource, loadCachedPackage, syncLockedPackage } from "./package.js";
+import { onboardProject } from "./onboard.js";
 import { enterProfile, leaveProfile, switchProfile, type ProfileSwitchResult } from "./profile.js";
 import {
   addPackageToProject,
@@ -61,6 +63,12 @@ function printChecks(checks: Check[]): void {
   for (const check of checks) console.log(`  [${check.status}] ${check.label}: ${check.detail}`);
 }
 
+function formatDuration(milliseconds: number): string {
+  if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
+  if (milliseconds < 60_000) return `${(milliseconds / 1000).toFixed(1)}s`;
+  return `${(milliseconds / 60_000).toFixed(1)}m`;
+}
+
 function printSwitch(result: ProfileSwitchResult, dryRun: boolean): void {
   printActions(result.actions, dryRun);
   if (dryRun) return;
@@ -81,7 +89,7 @@ async function ensureProject(project: string): Promise<void> {
 program
   .name("harness")
   .description("Switch reproducible workflow profiles across Codex and Claude Code")
-  .version("0.2.0")
+  .version("0.3.0")
   .enablePositionalOptions()
   .option("-p, --project <directory>", "project to configure", process.cwd());
 
@@ -114,6 +122,38 @@ program
     if (options.base) console.log("  profile    base");
     if (options.profile) console.log(`  profile    ${options.profile}`);
   });
+
+program
+  .command("onboard")
+  .description("detect this repository and activate a ready-to-use research workflow")
+  .option("--name <name>", "project name")
+  .option("--agent <agent>", "default agent: auto, codex, or claude", "auto")
+  .option("--target <target>", "auto, codex, claude, both, or a comma-separated list", "auto")
+  .option("--no-switch", "configure profiles without activating research")
+  .action(
+    async (
+      options: { name?: string; agent: string; target: string; switch: boolean },
+      command: Command,
+    ) => {
+      if (options.agent !== "auto" && options.agent !== "codex" && options.agent !== "claude") {
+        throw new Error("--agent must be auto, codex, or claude");
+      }
+      const result = await onboardProject(projectRoot(command), {
+        ...(options.name ? { name: options.name } : {}),
+        ...(options.agent === "auto" ? {} : { agent: options.agent }),
+        ...(options.target === "auto" ? {} : { targets: targets(options.target) }),
+        switchToResearch: options.switch,
+      });
+      console.log("Harness project is ready.");
+      console.log(`  stack     ${result.detection.stacks.join(", ") || "unclassified"}`);
+      console.log(`  targets   ${result.detection.targets.join(", ")}`);
+      console.log(`  agent     ${result.detection.agent}`);
+      for (const [name, value] of Object.entries(result.detection.bindings)) console.log(`  ${name.padEnd(9)} ${value}`);
+      console.log(`  packages  ${result.packages.join(", ")}`);
+      if (result.active) console.log("  profile   research");
+      console.log(`Next: harness enter --agent ${result.detection.agent} research`);
+    },
+  );
 
 program
   .command("sync")
@@ -236,6 +276,49 @@ program
   });
 
 program
+  .command("outcome <status>")
+  .description("record a local-only result for the active profile")
+  .option("--artifact <path>", "result, report, benchmark, or other evidence path")
+  .option("--note <text>", "short private note stored only in .harness/local")
+  .action(
+    async (
+      status: string,
+      options: { artifact?: string; note?: string },
+      command: Command,
+    ) => {
+      if (status !== "success" && status !== "failure" && status !== "inconclusive") {
+        throw new Error("status must be success, failure, or inconclusive");
+      }
+      const event = await recordOutcome(projectRoot(command), status as OutcomeStatus, options);
+      console.log(`Recorded ${status} for ${event.profile}.`);
+      if (event.artifact) console.log(`  artifact  ${event.artifact}`);
+      console.log("  privacy   local only; no data uploaded");
+    },
+  );
+
+program
+  .command("stats")
+  .description("summarize local workflow transitions, sessions, handoffs, and outcomes")
+  .action(async (_options: unknown, command: Command) => {
+    const stats = await workflowStats(projectRoot(command));
+    console.log("Local workflow evidence");
+    console.log(`  switches   ${stats.transitions.success} succeeded, ${stats.transitions.failure} failed`);
+    console.log(`  handoffs   ${stats.handoffs}`);
+    console.log(
+      `  sessions   ${stats.sessions.completed}/${stats.sessions.started} completed, ${stats.sessions.nonzeroExit} nonzero${
+        stats.sessions.medianDurationMs === undefined ? "" : `, median ${formatDuration(stats.sessions.medianDurationMs)}`
+      }`,
+    );
+    console.log(
+      `  outcomes   ${stats.outcomes.success} success, ${stats.outcomes.failure} failure, ${stats.outcomes.inconclusive} inconclusive`,
+    );
+    for (const [profile, outcomes] of Object.entries(stats.profiles)) {
+      console.log(`  ${profile.padEnd(10)} ${outcomes.success} success, ${outcomes.failure} failure, ${outcomes.inconclusive} inconclusive`);
+    }
+    console.log("  privacy    read from .harness/local; no data uploaded");
+  });
+
+program
   .command("enter <profile> [agentArgs...]")
   .description("switch profile and launch a fresh Codex or Claude session")
   .option("-a, --agent <agent>", "codex or claude")
@@ -336,10 +419,10 @@ program
 
 program
   .command("doctor [name]")
-  .description("verify dependencies, credentials, cache integrity, and active skills")
+  .description("verify workflow composition, dependencies, integrity, routing, and drift")
   .action(async (name: string | undefined, _options: unknown, command: Command) => {
     const project = projectRoot(command);
-    const lock = await readLock(project);
+    const [lock, state] = await Promise.all([readLock(project), readState(project)]);
     const names = name ? [resolveName(lock, name)] : Object.keys(lock.packages).sort();
     let failed = false;
     console.log("project");
@@ -352,7 +435,9 @@ program
     for (const selected of names) {
       const pkg = await loadCachedPackage(lock.packages[selected]!);
       console.log(`${selected}@${pkg.manifest.metadata.version}`);
-      const checks = await doctorPackage(pkg, project);
+      const checks = await doctorPackage(pkg, project, {
+        ...(name === undefined && state.profile ? { activationExpected: state.profile.packages.includes(selected) } : {}),
+      });
       printChecks(checks);
       failed ||= checks.some((check) => check.status === "fail");
     }

@@ -34,7 +34,11 @@ async function findCommand(command: string): Promise<string | undefined> {
   return undefined;
 }
 
-export async function doctorPackage(pkg: InstalledPackage, projectRoot: string): Promise<Check[]> {
+export async function doctorPackage(
+  pkg: InstalledPackage,
+  projectRoot: string,
+  options: { activationExpected?: boolean } = {},
+): Promise<Check[]> {
   const checks: Check[] = [];
   checks.push({ status: "ok", label: "manifest", detail: `${pkg.manifest.metadata.name}@${pkg.manifest.metadata.version}` });
   checks.push({ status: "ok", label: "integrity", detail: pkg.lock.integrity });
@@ -64,7 +68,11 @@ export async function doctorPackage(pkg: InstalledPackage, projectRoot: string):
   const state = await readState(projectRoot);
   const activation = state.activations[pkg.manifest.metadata.name];
   if (!activation) {
-    checks.push({ status: "warn", label: "activation", detail: "installed but not active in this project" });
+    checks.push({
+      status: options.activationExpected === false ? "ok" : "warn",
+      label: "activation",
+      detail: options.activationExpected === false ? "installed for an inactive profile" : "installed but not active in this project",
+    });
     return checks;
   }
 

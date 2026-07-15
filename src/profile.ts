@@ -1,8 +1,10 @@
 import { readFile, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { activatePackage, deactivatePackage } from "./activation.js";
-import { latestHandoff } from "./handoff.js";
+import { appendWorkflowEvent, classifyFailure } from "./events.js";
+import { handoffIssues, latestHandoff } from "./handoff.js";
 import { relativeDisplay, writeTextAtomic } from "./fs.js";
 import { loadCachedPackage } from "./package.js";
 import { readProjectConfig } from "./project.js";
@@ -74,7 +76,7 @@ ${bindingLines.join("\n") || "- No project-specific commands declared."}
 
 ${handoff ? `Read the latest handoff before acting: \`${handoff}\`` : "No handoff targets this profile. Establish inputs and assumptions before acting."}
 
-Before moving to another phase, create a structured handoff with \`harness handoff <next-profile>\`.
+Before ending a meaningful task, record its result with \`harness outcome success|failure|inconclusive\`. Before moving to another phase, create a structured handoff with \`harness handoff <next-profile>\`.
 <!-- <<< ${instructionMarker} -->`;
 }
 
@@ -202,6 +204,12 @@ async function switchInternal(
   const allNames = [...new Set([...desiredNames, ...previousNames])];
   const packages = await loadProfilePackages(project, allNames);
   const desiredTargets = new Map(desiredNames.map((name) => [name, packageTargets(packages.get(name)!, config.spec.targets)]));
+  const handoff = profileName ? await latestHandoff(project, profileName) : undefined;
+  if (profile?.handoff === "required") {
+    if (!handoff) throw new Error(`Profile ${profileName} requires a handoff; run harness handoff ${profileName} from the previous phase`);
+    const issues = await handoffIssues(project, handoff);
+    if (issues.length > 0) throw new Error(`Handoff ${handoff} is not ready: ${issues.join("; ")}`);
+  }
 
   const previousSet = new Set(previousNames);
   const desiredSet = new Set(desiredNames);
@@ -270,7 +278,6 @@ async function switchInternal(
       added.push(name);
     }
 
-    const handoff = profileName ? await latestHandoff(project, profileName) : undefined;
     const block = profileName
       ? activeBlock(config.metadata.name, profileName, profile!.description, desiredNames.map((name) => packages.get(name)!), config.spec.bindings, handoff)
       : undefined;
@@ -311,14 +318,65 @@ export async function switchProfile(
   profileName: string,
   options: { dryRun?: boolean; repair?: boolean } = {},
 ): Promise<ProfileSwitchResult> {
-  return switchInternal(projectRoot, profileName, options);
+  if (options.dryRun) return switchInternal(projectRoot, profileName, options);
+  const started = Date.now();
+  const from = (await readState(projectRoot)).profile?.name;
+  try {
+    const result = await switchInternal(projectRoot, profileName, options);
+    if (from !== profileName) {
+      await appendWorkflowEvent(projectRoot, {
+        type: "profile_transition",
+        ...(from ? { from } : {}),
+        to: profileName,
+        status: "success",
+        durationMs: Date.now() - started,
+        packages: result.packages,
+        ...(result.handoff ? { handoff: result.handoff } : {}),
+      }).catch(() => undefined);
+    }
+    return result;
+  } catch (error) {
+    await appendWorkflowEvent(projectRoot, {
+      type: "profile_transition",
+      ...(from ? { from } : {}),
+      to: profileName,
+      status: "failure",
+      reason: classifyFailure(error),
+      durationMs: Date.now() - started,
+    }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function leaveProfile(
   projectRoot: string,
   options: { dryRun?: boolean; repair?: boolean } = {},
 ): Promise<ProfileSwitchResult> {
-  return switchInternal(projectRoot, undefined, options);
+  if (options.dryRun) return switchInternal(projectRoot, undefined, options);
+  const started = Date.now();
+  const from = (await readState(projectRoot)).profile?.name;
+  try {
+    const result = await switchInternal(projectRoot, undefined, options);
+    if (from) {
+      await appendWorkflowEvent(projectRoot, {
+        type: "profile_transition",
+        from,
+        status: "success",
+        durationMs: Date.now() - started,
+        packages: [],
+      }).catch(() => undefined);
+    }
+    return result;
+  } catch (error) {
+    await appendWorkflowEvent(projectRoot, {
+      type: "profile_transition",
+      ...(from ? { from } : {}),
+      status: "failure",
+      reason: classifyFailure(error),
+      durationMs: Date.now() - started,
+    }).catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function enterProfile(
@@ -332,12 +390,44 @@ export async function enterProfile(
   const selectedAgent = agent ?? config.spec.agent;
   if (!config.spec.targets.includes(selectedAgent)) throw new Error(`${selectedAgent} is not configured as a project target`);
   await switchProfile(projectRoot, profileName, options);
+  const started = Date.now();
+  const sessionId = randomUUID();
+  await appendWorkflowEvent(projectRoot, {
+    type: "session_start",
+    profile: profileName,
+    agent: selectedAgent,
+    sessionId,
+  }).catch(() => undefined);
   return new Promise((resolve, reject) => {
     const child = spawn(selectedAgent, agentArgs, { cwd: projectRoot, stdio: "inherit", env: process.env });
-    child.on("error", (error: NodeJS.ErrnoException) => {
+    let settled = false;
+    child.on("error", async (error: NodeJS.ErrnoException) => {
+      if (settled) return;
+      settled = true;
+      await appendWorkflowEvent(projectRoot, {
+        type: "session_end",
+        profile: profileName,
+        agent: selectedAgent,
+        sessionId,
+        exitCode: 127,
+        durationMs: Date.now() - started,
+      }).catch(() => undefined);
       if (error.code === "ENOENT") reject(new Error(`${selectedAgent} is not installed or not on PATH`));
       else reject(error);
     });
-    child.on("close", (code) => resolve(code ?? 1));
+    child.on("close", async (code) => {
+      if (settled) return;
+      settled = true;
+      const exitCode = code ?? 1;
+      await appendWorkflowEvent(projectRoot, {
+        type: "session_end",
+        profile: profileName,
+        agent: selectedAgent,
+        sessionId,
+        exitCode,
+        durationMs: Date.now() - started,
+      }).catch(() => undefined);
+      resolve(exitCode);
+    });
   });
 }

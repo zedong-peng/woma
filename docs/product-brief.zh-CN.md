@@ -6,7 +6,9 @@
 
 ## 用户问题
 
-高质量 Agent 能力正在以 Skill、MCP、hook、脚本和配置片段的形式散落在 GitHub、博客、社区和个人电脑中。团队实际复用时仍靠 README、自然语言或复制配置，缺少四件事：版本、依赖、跨 Agent 适配和可逆安装。
+Codex 与 Claude Code 已有原生 Plugins 和 marketplace，可以分发 Skill、MCP、hook 与 connector。单纯做跨平台打包和 Hub 会被平台能力快速商品化，不能作为公司的核心。
+
+仍未被解决的是任务层：用户现在处于调研、实验还是 debug；哪些通用能力应保留、哪些阶段能力必须撤下；本项目实际怎么 build/test/benchmark；上一阶段的证据如何交给下一阶段；这套 Harness 究竟提高了结果质量还是只增加配置。
 
 General-purpose coding agent 已经存在。机会不在重做 Codex 或 Claude Code，而在其上分发能完成闭环结果的 domain-specific harness，例如：
 
@@ -24,13 +26,13 @@ General-purpose coding agent 已经存在。机会不在重做 Codex 或 Claude 
 
 核心闭环：
 
-1. `project init` 建立 base、profiles、bindings 和 handoff；
-2. `install --profile/--base` 从 Git 获取、校验、缓存并锁版本；
-3. `switch` 排他切换阶段，同时保留 base 并写入强路由信号；
-4. `handoff` 把证据、假设、失败案例和验收标准交给下一阶段；
-5. `enter` 启动全新的 Codex / Claude session，避免旧上下文污染；
-6. `sync` 在新服务器恢复 lock 中的精确环境；
-7. `doctor` 检查命令、环境变量、组合、缓存、路由和配置漂移。
+1. `onboard` 识别仓库、Agent、包管理器和命令，一条命令进入 research；
+2. `switch` 排他切换阶段，同时保留 base 并写入强路由信号；
+3. `handoff` 把证据、假设、失败案例和验收标准交给下一阶段；
+4. `enter` 启动全新的 Codex / Claude session，避免旧上下文污染；
+5. `outcome` 由用户明确标注 success / failure / inconclusive，并关联产物；
+6. `stats` 只读取 Git 排除的本地事件，验证 Harness 是否真的有用；
+7. `sync` 与 `doctor` 恢复并核验跨服务器环境。
 
 ## 为什么现在做
 
@@ -60,4 +62,4 @@ Agent 的基础能力持续增强，会淘汰过细的提示约束，但不会�
 - 团队：私有 registry、签名、策略、评测、版本推广；
 - 企业：SSO、审计、内部 failure-case eval、私有部署与成功率看板。
 
-当前仓库交付 CLI v0.2：可组合 profile、排他切换、项目 binding、强路由、handoff、fresh session 和跨服务器 sync。公共 registry、签名和远程 eval 属于下一阶段，不能在没有优质包和真实复用数据前过度建设。
+当前仓库交付 CLI v0.3：一键 onboarding、可组合 profile、排他切换、项目 binding、强路由、handoff、fresh session、跨服务器 sync，以及本地 outcome evidence。公共 registry 不再是近期目标；下一阶段是用真实项目比较裸 Agent 与 Harness 的任务结果，并接入两端原生 Plugins 作为依赖来源。

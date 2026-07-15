@@ -35,6 +35,7 @@ export interface HookSpec {
   matcher?: string | undefined;
   command: string;
   timeout?: number | undefined;
+  platforms?: Platform[] | undefined;
 }
 
 export interface HarnessManifest {
@@ -119,6 +120,7 @@ export interface StateFile {
 export interface ProjectProfile {
   description: string;
   packages: string[];
+  handoff: "optional" | "required";
 }
 
 export interface HarnessProject {

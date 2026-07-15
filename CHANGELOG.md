@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+- Added one-command `onboard` with repository stack, package manager, command binding, and Agent detection.
+- Bundled research, experiment, and reproducibility workflows for a zero-download first run.
+- Added portable `builtin:` lock sources and exact cache restoration.
+- Added local-only transition, handoff, session, and outcome evidence with `stats`.
+- Added automatic Git exclusion for machine-local state and private outcome notes.
+- Added required handoff quality gates before experiment activation.
+- Added project Codex hook installation, deactivation, and capture support.
+- Repositioned the product above native Codex and Claude plugin marketplaces instead of competing with them.
+
 ## 0.2.0
 
 - Added project-level `base` and exclusive task profiles.

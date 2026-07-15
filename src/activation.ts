@@ -145,13 +145,45 @@ function claudeValue(server: McpServer): Record<string, unknown> {
   };
 }
 
-function claudeHook(hook: HookSpec): Record<string, unknown> {
+function hookValue(hook: HookSpec): Record<string, unknown> {
   const handler: Record<string, unknown> = { type: "command", command: hook.command };
   if (hook.timeout !== undefined) handler.timeout = hook.timeout;
   return {
     ...(hook.matcher ? { matcher: hook.matcher } : {}),
     hooks: [handler],
   };
+}
+
+async function prepareHooks(
+  projectRoot: string,
+  filePath: string,
+  platformLabel: string,
+  hooksToAdd: HookSpec[],
+  actions: Action[],
+  artifacts: ManagedArtifact[],
+  files: PreparedFile[],
+): Promise<void> {
+  if (hooksToAdd.length === 0) return;
+  const original = await readOptional(filePath);
+  const settings = parseJsonObject(original, relativeDisplay(projectRoot, filePath));
+  const hooks = getObject(settings, "hooks", relativeDisplay(projectRoot, filePath));
+  let changed = false;
+  for (const hook of hooksToAdd) {
+    const value = hookValue(hook);
+    const eventHooks = getArray(hooks, hook.event, relativeDisplay(projectRoot, filePath));
+    const display = relativeDisplay(projectRoot, filePath);
+    const jsonPath = ["hooks", hook.event];
+    if (eventHooks.some((item) => equal(item, value))) {
+      actions.push({ verb: "adopt", path: display, detail: `${platformLabel} hook ${hook.event} already matches` });
+      artifacts.push({ kind: "json-array-entry", path: display, jsonPath, value, managed: false });
+    } else {
+      eventHooks.push(value);
+      changed = true;
+      actions.push({ verb: "merge", path: display, detail: `${platformLabel} hook ${hook.event}` });
+      artifacts.push({ kind: "json-array-entry", path: display, jsonPath, value, managed: true });
+    }
+  }
+  if (changed) files.push({ path: filePath, original, content: `${JSON.stringify(settings, null, 2)}\n` });
 }
 
 function getAtPath(root: Record<string, unknown>, jsonPath: string[]): unknown {
@@ -248,6 +280,15 @@ async function prepareActivation(
       const prefix = original && original.trimEnd() ? `${original.trimEnd()}\n\n` : "";
       files.push({ path: configPath, original, content: `${prefix}${blocks.join("\n\n")}\n` });
     }
+    await prepareHooks(
+      projectRoot,
+      path.join(projectRoot, ".codex", "hooks.json"),
+      "Codex",
+      pkg.manifest.spec.hooks.filter((hook) => !hook.platforms || hook.platforms.includes("codex")),
+      actions,
+      artifacts,
+      files,
+    );
   }
 
   if (targets.includes("claude")) {
@@ -275,31 +316,15 @@ async function prepareActivation(
     }
     if (mcpChanged) files.push({ path: mcpPath, original: originalMcp, content: `${JSON.stringify(mcpRoot, null, 2)}\n` });
 
-    if (pkg.manifest.spec.hooks.length > 0) {
-      const settingsPath = path.join(projectRoot, ".claude", "settings.json");
-      const originalSettings = await readOptional(settingsPath);
-      const settings = parseJsonObject(originalSettings, relativeDisplay(projectRoot, settingsPath));
-      const hooks = getObject(settings, "hooks", relativeDisplay(projectRoot, settingsPath));
-      let settingsChanged = false;
-      for (const hook of pkg.manifest.spec.hooks) {
-        const value = claudeHook(hook);
-        const eventHooks = getArray(hooks, hook.event, relativeDisplay(projectRoot, settingsPath));
-        const display = relativeDisplay(projectRoot, settingsPath);
-        const jsonPath = ["hooks", hook.event];
-        if (eventHooks.some((item) => equal(item, value))) {
-          actions.push({ verb: "adopt", path: display, detail: `Claude hook ${hook.event} already matches` });
-          artifacts.push({ kind: "json-array-entry", path: display, jsonPath, value, managed: false });
-        } else {
-          eventHooks.push(value);
-          settingsChanged = true;
-          actions.push({ verb: "merge", path: display, detail: `Claude hook ${hook.event}` });
-          artifacts.push({ kind: "json-array-entry", path: display, jsonPath, value, managed: true });
-        }
-      }
-      if (settingsChanged) {
-        files.push({ path: settingsPath, original: originalSettings, content: `${JSON.stringify(settings, null, 2)}\n` });
-      }
-    }
+    await prepareHooks(
+      projectRoot,
+      path.join(projectRoot, ".claude", "settings.json"),
+      "Claude",
+      pkg.manifest.spec.hooks.filter((hook) => !hook.platforms || hook.platforms.includes("claude")),
+      actions,
+      artifacts,
+      files,
+    );
   }
 
   return { actions, artifacts, files, directories };

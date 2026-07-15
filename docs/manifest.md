@@ -32,6 +32,7 @@ spec:
       matcher: Edit|Write
       command: git diff --check
       timeout: 10
+      platforms: [codex, claude]
 ```
 
 Remote MCP headers map HTTP header names to environment variable names:
@@ -51,6 +52,6 @@ mcpServers:
 | --- | --- | --- |
 | Skill | `.agents/skills/<name>` | `.claude/skills/<name>` |
 | MCP server | managed block in `.codex/config.toml` | entry in `.mcp.json` |
-| Hook | not installed | entry in `.claude/settings.json` |
+| Hook | entry in `.codex/hooks.json` | entry in `.claude/settings.json` |
 
 `.harness/lock.json` records source, resolved revision, content integrity, and cache key. `.harness/state.json` is machine-local ownership state and must not be committed.

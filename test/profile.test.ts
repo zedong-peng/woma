@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { doctorProject } from "../src/doctor.js";
+import { readWorkflowEvents } from "../src/events.js";
 import { createHandoff } from "../src/handoff.js";
 import { installPackageSource } from "../src/package.js";
 import { leaveProfile, switchProfile } from "../src/profile.js";
@@ -30,6 +31,26 @@ async function setup(root: string): Promise<string> {
   await setBinding(project, "test", "npm test");
   await setBinding(project, "benchmark", "npm run benchmark");
   return project;
+}
+
+async function completeHandoff(project: string, relative: string): Promise<void> {
+  const filePath = path.join(project, relative);
+  let input = await readFile(filePath, "utf8");
+  const replacements: Record<string, string> = {
+    "State what the next profile should do and why.": "Run the controlled benchmark to test the ranked optimization hypothesis.",
+    "List source paths, citations, measurements, and commands that support the decision.":
+      "The baseline in research-report.md is reproducible across five runs.",
+    "List falsifiable hypotheses in priority order. Include the expected observation for each.":
+      "H1: batching removes scheduler overhead; expect at least ten percent lower median latency.",
+    "List datasets, checkpoints, branches, environment variables, and external dependencies.":
+      "Use fixtures/workload.json, the current branch, and the declared benchmark binding.",
+    "Record rejected approaches, known failure modes, and unresolved uncertainty.":
+      "A cache-only change was rejected; thermal variance remains a known uncertainty.",
+    "Define the objective checks that make the next phase complete.":
+      "All correctness tests pass and median latency improves beyond observed baseline noise.",
+  };
+  for (const [placeholder, replacement] of Object.entries(replacements)) input = input.replace(placeholder, replacement);
+  await writeFile(filePath, input, "utf8");
 }
 
 function runCli(args: string[], env: NodeJS.ProcessEnv): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -63,6 +84,10 @@ test("research switches to experiment with base retention and handoff", { concur
     assert.match(await readFile(path.join(project, ".agents", "skills", "research-loop", "SKILL.md"), "utf8"), /Research loop/);
 
     const handoff = await createHandoff(project, "experiment");
+    const beforeRejectedSwitch = (await readState(project)).activations["research-workflow"]?.activatedAt;
+    await assert.rejects(switchProfile(project, "experiment"), /not ready/);
+    assert.equal((await readState(project)).activations["research-workflow"]?.activatedAt, beforeRejectedSwitch);
+    await completeHandoff(project, handoff);
     await appendFile(path.join(project, handoff), "\nObserved evidence: baseline is reproducible.\n", "utf8");
     const switched = await switchProfile(project, "experiment");
     assert.equal(switched.handoff, handoff);
@@ -98,6 +123,7 @@ test("failed profile switch rolls back packages and routing signal", { concurren
   try {
     const project = await setup(root);
     await switchProfile(project, "research");
+    await completeHandoff(project, await createHandoff(project, "experiment"));
     const before = await readFile(path.join(project, "AGENTS.md"), "utf8");
     const conflict = path.join(project, ".agents", "skills", "experiment-loop");
     await mkdir(conflict, { recursive: true });
@@ -109,6 +135,11 @@ test("failed profile switch rolls back packages and routing signal", { concurren
     assert.equal(state.activations["experiment-workflow"], undefined);
     assert.equal(await readFile(path.join(project, "AGENTS.md"), "utf8"), before);
     assert.match(await readFile(path.join(project, ".agents", "skills", "research-loop", "SKILL.md"), "utf8"), /Research loop/);
+    assert.ok(
+      (await readWorkflowEvents(project)).some(
+        (event) => event.type === "profile_transition" && event.status === "failure" && event.reason === "conflict",
+      ),
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -119,6 +150,7 @@ test("modified active instructions require explicit repair", { concurrency: fals
   try {
     const project = await setup(root);
     await switchProfile(project, "research");
+    await completeHandoff(project, await createHandoff(project, "experiment"));
     const researchActivatedAt = (await readState(project)).activations["research-workflow"]?.activatedAt;
     const agentsPath = path.join(project, "AGENTS.md");
     const modified = (await readFile(agentsPath, "utf8")).replace("Active Harness Profile: research", "Active Harness Profile: user-edit");

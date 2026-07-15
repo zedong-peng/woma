@@ -84,6 +84,7 @@ const manifestSchema = z
                 matcher: z.string().min(1).optional(),
                 command: z.string().min(1),
                 timeout: z.number().int().positive().optional(),
+                platforms: z.array(platform).min(1).optional(),
               })
               .strict(),
           )

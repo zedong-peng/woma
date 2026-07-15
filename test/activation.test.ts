@@ -91,6 +91,8 @@ test("activation merges both targets and deactivation preserves existing config"
     const settings = JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")) as Record<string, any>;
     assert.deepEqual(settings.permissions, { allow: ["Read"] });
     assert.equal(settings.hooks.PostToolUse[0].hooks[0].command, "git diff --check");
+    const codexHooks = JSON.parse(await readFile(path.join(project, ".codex", "hooks.json"), "utf8")) as Record<string, any>;
+    assert.equal(codexHooks.hooks.PostToolUse[0].hooks[0].command, "git diff --check");
 
     await deactivatePackage("test-harness", project);
     assert.equal(await readFile(path.join(project, ".codex", "config.toml"), "utf8"), 'model = "gpt-test"\n');
@@ -98,6 +100,7 @@ test("activation merges both targets and deactivation preserves existing config"
     assert.deepEqual(afterMcp, { mcpServers: { existing: { command: "keep" } } });
     const afterSettings = JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")) as Record<string, any>;
     assert.deepEqual(afterSettings, { permissions: { allow: ["Read"] } });
+    assert.deepEqual(JSON.parse(await readFile(path.join(project, ".codex", "hooks.json"), "utf8")), {});
     assert.equal((await readState(project)).activations["test-harness"], undefined);
   } finally {
     await rm(root, { recursive: true, force: true });

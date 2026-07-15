@@ -6,14 +6,15 @@
 
 用户正在判断一个研究或工程 idea 是否值得做。
 
-1. 进入 `research`，Agent 读取项目现状、检索一手资料、整理证据冲突并输出可证伪假设。
-2. 用户审阅结论，而不是检查 Skill 是否安装成功。
-3. Agent 生成面向 `experiment` 的 handoff，包含证据、假设、输入、失败案例和验收标准。
-4. 切换到 `experiment`。调研专属能力必须消失，通用 reproducibility base 必须保留。
-5. 新 Agent session 读取 handoff 和本项目的 build/test/benchmark binding，执行实验并保留负结果。
-6. 实验结束后进入 debug、report 或下一轮 research，不继承错误的阶段约束。
+1. 第一次运行 `onboard`，自动识别 Agent 与项目命令并进入 `research`；用户只审阅生成的项目配置。
+2. Agent 读取项目现状、检索一手资料、整理证据冲突并输出可证伪假设。
+3. 用户审阅结论，而不是检查 Skill 是否安装成功，并用 `outcome` 关联结果产物。
+4. Agent 生成面向 `experiment` 的 handoff，包含证据、假设、输入、失败案例和验收标准；空模板不得通过阶段门。
+5. 切换到 `experiment`。调研专属能力必须消失，通用 reproducibility base 必须保留。
+6. 新 Agent session 读取 handoff 和本项目的 build/test/benchmark binding，执行实验并保留负结果。
+7. 实验结束后记录 success / failure / inconclusive，再进入 debug、report 或下一轮 research，不继承错误的阶段约束。
 
-成功标准：切换少于一条命令；不会同时加载 research 与 experiment；下一阶段不需要用户重复解释上下文；输出能被另一个人复现。
+成功标准：onboard 到可用小于一分钟；不会同时加载 research 与 experiment；下一阶段不需要用户重复解释上下文；输出能被另一个人复现；本地 stats 能回答每套 profile 实际成功了几次。
 
 ## 用户 B：drip 的多项目、多服务器开发
 
