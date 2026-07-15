@@ -89,7 +89,7 @@ async function ensureProject(project: string): Promise<void> {
 program
   .name("harness")
   .description("Switch reproducible workflow profiles across Codex and Claude Code")
-  .version("0.3.0")
+  .version("0.3.1")
   .enablePositionalOptions()
   .option("-p, --project <directory>", "project to configure", process.cwd());
 

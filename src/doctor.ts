@@ -76,6 +76,18 @@ export async function doctorPackage(
     return checks;
   }
 
+  const identityMatches =
+    activation.packageVersion === pkg.lock.version &&
+    activation.packageIntegrity === pkg.lock.integrity &&
+    activation.packageCacheKey === pkg.lock.cacheKey;
+  checks.push({
+    status: identityMatches ? "ok" : "fail",
+    label: "activation-identity",
+    detail: identityMatches
+      ? `${pkg.lock.version} ${pkg.lock.cacheKey}`
+      : `active ${activation.packageVersion}/${activation.packageCacheKey ?? "legacy"} does not match lock ${pkg.lock.version}/${pkg.lock.cacheKey}`,
+  });
+
   checks.push({ status: "ok", label: "activation", detail: activation.targets.join(", ") });
   for (const artifact of activation.artifacts) {
     if (!artifact.managed || artifact.kind !== "directory") continue;
@@ -139,10 +151,24 @@ export async function doctorProject(projectRoot: string): Promise<Check[]> {
     });
   }
   for (const packageName of active.packages) {
+    const activation = state.activations[packageName];
+    const locked = lock.packages[packageName];
+    const identityMatches =
+      activation !== undefined &&
+      locked !== undefined &&
+      activation.packageVersion === locked.version &&
+      activation.packageIntegrity === locked.integrity &&
+      activation.packageCacheKey === locked.cacheKey;
     checks.push({
-      status: state.activations[packageName] ? "ok" : "fail",
+      status: identityMatches ? "ok" : "fail",
       label: `active:${packageName}`,
-      detail: state.activations[packageName] ? state.activations[packageName]!.targets.join(", ") : "activation record missing",
+      detail: !activation
+        ? "activation record missing"
+        : !locked
+          ? "lock entry missing"
+          : identityMatches
+            ? activation.targets.join(", ")
+            : `activation ${activation.packageVersion}/${activation.packageCacheKey ?? "legacy"} does not match lock ${locked.version}/${locked.cacheKey}`,
     });
   }
   for (const packageName of Object.keys(state.activations)) {

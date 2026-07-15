@@ -106,6 +106,8 @@ export type ManagedArtifact =
 export interface ActivationRecord {
   packageName: string;
   packageVersion: string;
+  packageIntegrity: string;
+  packageCacheKey: string;
   activatedAt: string;
   targets: Platform[];
   artifacts: ManagedArtifact[];

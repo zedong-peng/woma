@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- Reject Skill root symlinks and real-path escapes before package caching.
+- Populate cache entries atomically and verify existing entries before reuse.
+- Preserve shared Skills, MCP servers, and hooks until their final active owner exits.
+- Prevent active-package upgrades from replacing the lock identity and report identity drift in `doctor`.
+- Run static checks and unit tests on pushes and pull requests with least-privilege GitHub Actions workflows.
+
 ## 0.3.0
 
 - Added one-command `onboard` with repository stack, package manager, command binding, and Agent detection.

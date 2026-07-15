@@ -260,7 +260,7 @@ async function switchInternal(
 
   for (const name of removals) {
     const plan = await deactivatePackage(name, project, true);
-    if (plan.some((action) => action.verb === "keep")) {
+    if (plan.some((action) => action.verb === "keep" && !action.detail.startsWith("still used by "))) {
       throw new Error(`${name} has modified or missing managed files; resolve drift before switching profiles`);
     }
   }
