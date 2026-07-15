@@ -2,7 +2,7 @@ apiVersion: harness.conda/v1
 kind: Harness
 metadata:
   name: performance-engineering
-  version: 0.1.0
+  version: 0.2.0
   description: Evidence-first benchmark, profile, optimize, and regression-report loop for existing software.
   tags: [performance, benchmark, profiling]
 spec:
@@ -10,6 +10,11 @@ spec:
   requirements:
     env: []
     commands: [git, node]
+    bindings:
+      - name: test
+        description: Correctness command that must remain green before and after optimization.
+      - name: benchmark
+        description: Repeatable command that emits the primary performance metric.
   skills:
     - name: performance-loop
       path: ./skills/performance-loop

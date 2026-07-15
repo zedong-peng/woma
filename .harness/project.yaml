@@ -1,0 +1,32 @@
+apiVersion: harness.conda/project-v1
+kind: HarnessProject
+metadata:
+  name: harness-conda
+spec:
+  agent: codex
+  targets:
+    - codex
+    - claude
+  base:
+    - reproducibility-core
+  profiles:
+    research:
+      description: Find prior work, collect evidence, and produce testable hypotheses.
+      packages:
+        - research-workflow
+      handoff: optional
+    experiment:
+      description: Turn hypotheses into reproducible experiments, evaluate results, and record failures.
+      packages:
+        - experiment-workflow
+      handoff: required
+    performance:
+      description: Measure a real bottleneck, test one optimization at a time, and report quantified regressions.
+      packages:
+        - performance-engineering
+      handoff: optional
+  bindings:
+    build: npm run build
+    test: npm test
+    benchmark: npm run benchmark
+  handoffDirectory: .harness/handoffs

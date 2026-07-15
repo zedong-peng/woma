@@ -16,7 +16,7 @@ spec:
 
   assert.deepEqual(manifest.metadata.tags, []);
   assert.deepEqual(manifest.spec.platforms, ["codex", "claude"]);
-  assert.deepEqual(manifest.spec.requirements, { env: [], commands: [] });
+  assert.deepEqual(manifest.spec.requirements, { env: [], commands: [], bindings: [] });
   assert.deepEqual(manifest.spec.mcpServers, []);
   assert.deepEqual(manifest.spec.hooks, []);
 });

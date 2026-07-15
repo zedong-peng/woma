@@ -1,0 +1,41 @@
+{
+  "lockfileVersion": 1,
+  "packages": {
+    "reproducibility-core": {
+      "name": "reproducibility-core",
+      "version": "0.1.0",
+      "source": "builtin:reproducibility-core",
+      "resolved": "sha256-087d46e8a2f31cf2c2b1279242892806908db542d8ccf3300dd87668185c12d8",
+      "integrity": "sha256-087d46e8a2f31cf2c2b1279242892806908db542d8ccf3300dd87668185c12d8",
+      "cacheKey": "c58cc3a036cd89dbc0dc",
+      "installedAt": "2026-07-15T18:26:25.003Z"
+    },
+    "research-workflow": {
+      "name": "research-workflow",
+      "version": "0.1.0",
+      "source": "builtin:research-workflow",
+      "resolved": "sha256-292ebe8da84418c5ab9c9fd5953930df6e2b6a26837d5bc2ddb55246fd9c9871",
+      "integrity": "sha256-292ebe8da84418c5ab9c9fd5953930df6e2b6a26837d5bc2ddb55246fd9c9871",
+      "cacheKey": "bf7de7f7bfba27f22e3a",
+      "installedAt": "2026-07-15T18:26:25.010Z"
+    },
+    "experiment-workflow": {
+      "name": "experiment-workflow",
+      "version": "0.1.0",
+      "source": "builtin:experiment-workflow",
+      "resolved": "sha256-497fcb588e02c7c9f22653677a85f36b8e4c91422018da85147551d618e3780f",
+      "integrity": "sha256-497fcb588e02c7c9f22653677a85f36b8e4c91422018da85147551d618e3780f",
+      "cacheKey": "24c32659147ce936d822",
+      "installedAt": "2026-07-15T18:26:25.017Z"
+    },
+    "performance-engineering": {
+      "name": "performance-engineering",
+      "version": "0.2.0",
+      "source": "builtin:performance-engineering",
+      "resolved": "sha256-23bc10a7341bedb37194bd6fe9e15c702532b9c042002e3f3585859dd1d52d03",
+      "integrity": "sha256-23bc10a7341bedb37194bd6fe9e15c702532b9c042002e3f3585859dd1d52d03",
+      "cacheKey": "2b303dc0e181fa43d11b",
+      "installedAt": "2026-07-15T19:05:48.397Z"
+    }
+  }
+}

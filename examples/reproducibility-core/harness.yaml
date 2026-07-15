@@ -1,0 +1,17 @@
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: reproducibility-core
+  version: 0.1.0
+  description: Shared evidence, environment capture, and failure-recording discipline for every technical workflow phase.
+  tags: [reproducibility, evidence]
+spec:
+  platforms: [codex, claude]
+  requirements:
+    env: []
+    commands: [git]
+  skills:
+    - name: reproducibility-core
+      path: ./skills/reproducibility-core
+  mcpServers: []
+  hooks: []

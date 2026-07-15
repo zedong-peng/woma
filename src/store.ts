@@ -1,6 +1,6 @@
 import path from "node:path";
 import { readJson, writeJsonAtomic } from "./fs.js";
-import type { ActivationRecord, LockFile, LockedPackage, StateFile } from "./types.js";
+import type { ActivationRecord, ActiveProfileState, LockFile, LockedPackage, StateFile } from "./types.js";
 
 function emptyLock(): LockFile {
   return { lockfileVersion: 1, packages: {} };
@@ -29,21 +29,23 @@ export async function readLock(projectRoot: string): Promise<LockFile> {
 export async function putLock(projectRoot: string, pkg: LockedPackage): Promise<void> {
   const [lock, state] = await Promise.all([readLock(projectRoot), readState(projectRoot)]);
   const activation = state.activations[pkg.name];
-  const current = lock.packages[pkg.name];
   if (activation) {
-    const unchanged =
-      current !== undefined &&
+    const current = lock.packages[pkg.name];
+    const matchesActivation =
       activation.packageVersion === pkg.version &&
-      current.name === pkg.name &&
-      current.version === pkg.version &&
-      current.source === pkg.source &&
-      current.resolved === pkg.resolved &&
+      (activation.packageIntegrity === undefined || activation.packageIntegrity === pkg.integrity) &&
+      (activation.packageCacheKey === undefined || activation.packageCacheKey === pkg.cacheKey);
+    const legacyIdentityUnchanged =
+      activation.packageIntegrity === undefined &&
+      activation.packageCacheKey === undefined &&
+      current?.version === pkg.version &&
       current.integrity === pkg.integrity &&
       current.cacheKey === pkg.cacheKey;
-    if (!unchanged) {
-      throw new Error(`${pkg.name}@${activation.packageVersion} is active; deactivate it before installing a different version`);
+    if (!matchesActivation || (!activation.packageIntegrity && !legacyIdentityUnchanged)) {
+      throw new Error(
+        `Cannot update ${pkg.name} lock while ${activation.packageVersion} is active; deactivate it before installing a new version`,
+      );
     }
-    return;
   }
   lock.packages[pkg.name] = pkg;
   await writeJsonAtomic(lockPath(projectRoot), lock);
@@ -66,5 +68,17 @@ export async function putActivation(projectRoot: string, activation: ActivationR
 export async function deleteActivation(projectRoot: string, packageName: string): Promise<void> {
   const state = await readState(projectRoot);
   delete state.activations[packageName];
+  await writeJsonAtomic(statePath(projectRoot), state);
+}
+
+export async function putActiveProfile(projectRoot: string, profile: ActiveProfileState): Promise<void> {
+  const state = await readState(projectRoot);
+  state.profile = profile;
+  await writeJsonAtomic(statePath(projectRoot), state);
+}
+
+export async function deleteActiveProfile(projectRoot: string): Promise<void> {
+  const state = await readState(projectRoot);
+  delete state.profile;
   await writeJsonAtomic(statePath(projectRoot), state);
 }

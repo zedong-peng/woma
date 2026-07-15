@@ -55,3 +55,22 @@ test("capture rejects literal MCP credentials before creating package files", as
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("capture exports project Codex command hooks", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-capture-"));
+  try {
+    const source = path.join(root, "source");
+    const output = path.join(root, "captured");
+    await write(path.join(source, ".agents", "skills", "verify", "SKILL.md"), "---\ndescription: Verify.\n---\nVerify.\n");
+    await write(
+      path.join(source, ".codex", "hooks.json"),
+      JSON.stringify({ hooks: { PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "git diff --check" }] }] } }),
+    );
+    const result = await captureHarness({ sourceRoot: source, outputRoot: output, platform: "codex", name: "codex-capture" });
+    assert.equal(result.manifest.spec.hooks[0]?.event, "PostToolUse");
+    assert.deepEqual(result.manifest.spec.hooks[0]?.platforms, ["codex"]);
+    assert.equal(result.manifest.spec.hooks[0]?.command, "git diff --check");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

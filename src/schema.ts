@@ -62,9 +62,20 @@ const manifestSchema = z
               )
               .default([]),
             commands: z.array(z.string().min(1)).default([]),
+            bindings: z
+              .array(
+                z
+                  .object({
+                    name: packageName,
+                    description: z.string().min(1).optional(),
+                    optional: z.boolean().default(false),
+                  })
+                  .strict(),
+              )
+              .default([]),
           })
           .strict()
-          .default({ env: [], commands: [] }),
+          .default({ env: [], commands: [], bindings: [] }),
         skills: z
           .array(
             z
@@ -84,6 +95,7 @@ const manifestSchema = z
                 matcher: z.string().min(1).optional(),
                 command: z.string().min(1),
                 timeout: z.number().int().positive().optional(),
+                platforms: z.array(platform).min(1).optional(),
               })
               .strict(),
           )
