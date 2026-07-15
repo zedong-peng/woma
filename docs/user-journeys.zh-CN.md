@@ -16,6 +16,8 @@
 
 成功标准：onboard 到可用小于一分钟；不会同时加载 research 与 experiment；下一阶段不需要用户重复解释上下文；输出能被另一个人复现；本地 stats 能回答每套 profile 实际成功了几次。
 
+在把某个 workflow 称为 golden 之前，用户把真实任务和可验证产物写成 eval definition。`eval plan` 必须明确展示两臂、HEAD、Agent、verifier 和 session 数；只有显式 `--execute` 才能消耗 Agent 配额。baseline 与 profile 使用同一 commit、隔离 worktree 和同一 verifier，结果失败能区分 Agent、verifier 与 timeout。
+
 ## 用户 B：drip 的多项目、多服务器开发
 
 用户在几台服务器推进不同项目。各项目的编译测试方式不同，但共享 GDB、性能分析、代码审查和实验方法。
@@ -27,6 +29,8 @@
 5. 用户按当前任务 `enter debug`、`enter performance` 或 `enter experiment`，而不是手工增删 MCP 和 Skills。
 
 成功标准：新服务器不依赖原机器的隐式状态；项目差异不需要 fork 通用 Harness；同一 failure case 不被不同 Agent session 反复踩中。
+
+当 drip 修改共享方法论时，先在一个开发任务集上运行成对 eval，再在未参与调优的 held-out 项目上复测。profile 没有稳定胜过 baseline 时不得推广到其他服务器或全公司。
 
 ## 作者：发布 golden Harness
 

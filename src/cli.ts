@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { activatePackage, deactivatePackage } from "./activation.js";
 import { captureHarness } from "./capture.js";
 import { doctorPackage, doctorProject, type Check } from "./doctor.js";
+import { createEvalDefinition, planEval, runEval, type EvalPlan } from "./eval.js";
 import { recordOutcome, workflowStats, type OutcomeStatus } from "./events.js";
 import { createHandoff } from "./handoff.js";
 import { installPackageSource, loadCachedPackage, syncLockedPackage } from "./package.js";
@@ -82,6 +83,20 @@ function printSwitch(result: ProfileSwitchResult, dryRun: boolean): void {
   }
 }
 
+function printEvalPlan(plan: EvalPlan): void {
+  console.log(`Eval: ${plan.definition.metadata.name}`);
+  console.log(`  definition  ${plan.definitionPath}`);
+  console.log(`  HEAD        ${plan.head.slice(0, 12)}`);
+  console.log(`  worktree    ${plan.clean ? "clean" : "dirty; execution will be refused"}`);
+  console.log(`  agent       ${plan.agent}`);
+  console.log(`  treatment   ${plan.profile}`);
+  console.log("  baseline    project profile off");
+  console.log(`  verifier    ${plan.verifier}`);
+  console.log(`  sessions    ${plan.sessions} (${plan.repetitions} paired repetition${plan.repetitions === 1 ? "" : "s"})`);
+  console.log(`  timeout     ${plan.timeoutSeconds}s per process`);
+  console.log("  privacy     prompts and Agent output are not copied into results or uploaded");
+}
+
 async function ensureProject(project: string): Promise<void> {
   if (!(await pathExists(projectConfigPath(project)))) await initProject(project);
 }
@@ -89,7 +104,7 @@ async function ensureProject(project: string): Promise<void> {
 program
   .name("harness")
   .description("Switch reproducible workflow profiles across Codex and Claude Code")
-  .version("0.3.1")
+  .version("0.4.0")
   .enablePositionalOptions()
   .option("-p, --project <directory>", "project to configure", process.cwd());
 
@@ -317,6 +332,100 @@ program
     }
     console.log("  privacy    read from .harness/local; no data uploaded");
   });
+
+const evalCommand = program.command("eval").description("compare a profile with the same Agent on an identical Git revision");
+
+evalCommand
+  .command("init <name>")
+  .description("create a committed, reviewable paired-eval definition")
+  .requiredOption("--profile <profile>", "profile used by the treatment arm")
+  .option("--agent <agent>", "codex or claude; defaults to the project Agent")
+  .option("--verify-binding <name>", "project binding used as the objective verifier")
+  .option("--verify-command <command>", "explicit shell verifier used for both arms")
+  .action(
+    async (
+      name: string,
+      options: { profile: string; agent?: string; verifyBinding?: string; verifyCommand?: string },
+      command: Command,
+    ) => {
+      if (options.agent !== undefined && options.agent !== "codex" && options.agent !== "claude") {
+        throw new Error("--agent must be codex or claude");
+      }
+      if (Boolean(options.verifyBinding) === Boolean(options.verifyCommand)) {
+        throw new Error("Choose exactly one of --verify-binding or --verify-command");
+      }
+      const filePath = await createEvalDefinition(projectRoot(command), name, {
+        profile: options.profile,
+        ...(options.agent ? { agent: options.agent } : {}),
+        verify: options.verifyBinding ? { binding: options.verifyBinding } : { command: options.verifyCommand! },
+      });
+      console.log(`Created eval: ${filePath}`);
+      console.log("Replace the prompt placeholder, commit the definition and task fixture, then run harness eval plan <name>.");
+    },
+  );
+
+evalCommand
+  .command("plan <name-or-path>")
+  .description("show the exact paired sessions without launching an Agent")
+  .option("--agent <agent>", "override codex or claude")
+  .option("--repeat <count>", "override paired repetitions", Number.parseInt)
+  .action(async (input: string, options: { agent?: string; repeat?: number }, command: Command) => {
+    if (options.agent !== undefined && options.agent !== "codex" && options.agent !== "claude") {
+      throw new Error("--agent must be codex or claude");
+    }
+    const plan = await planEval(projectRoot(command), input, {
+      ...(options.agent ? { agent: options.agent } : {}),
+      ...(options.repeat !== undefined ? { repetitions: options.repeat } : {}),
+    });
+    printEvalPlan(plan);
+  });
+
+evalCommand
+  .command("run <name-or-path>")
+  .description("plan by default; add --execute to launch isolated baseline and profile sessions")
+  .option("--agent <agent>", "override codex or claude")
+  .option("--repeat <count>", "override paired repetitions", Number.parseInt)
+  .option("--execute", "launch Agent sessions and run the verifier", false)
+  .option("--keep-failures", "preserve failed arm worktrees for local inspection", false)
+  .action(
+    async (
+      input: string,
+      options: { agent?: string; repeat?: number; execute: boolean; keepFailures: boolean },
+      command: Command,
+    ) => {
+      if (options.agent !== undefined && options.agent !== "codex" && options.agent !== "claude") {
+        throw new Error("--agent must be codex or claude");
+      }
+      const project = projectRoot(command);
+      const overrides = {
+        ...(options.agent ? { agent: options.agent as Platform } : {}),
+        ...(options.repeat !== undefined ? { repetitions: options.repeat } : {}),
+      };
+      const plan = await planEval(project, input, overrides);
+      printEvalPlan(plan);
+      if (!options.execute) {
+        console.log("Plan only. Re-run with --execute to spend Agent sessions.");
+        return;
+      }
+      const result = await runEval(project, input, {
+        execute: true,
+        ...overrides,
+        keepFailures: options.keepFailures,
+        onArmStart: (arm, repetition, order) => {
+          console.log(`\n[${repetition}/${plan.repetitions} order ${order}] ${arm}`);
+        },
+      });
+      console.log("\nPaired eval result");
+      console.log(`  baseline  ${result.summary.baseline.passed}/${result.summary.baseline.total}`);
+      console.log(`  profile   ${result.summary.profile.passed}/${result.summary.profile.total}`);
+      console.log(`  result    ${result.resultPath}`);
+      for (const item of result.results.filter((arm) => arm.worktree)) {
+        console.log(`  failure   ${item.arm} worktree kept at ${item.worktree}`);
+      }
+      console.log("  privacy   local only; no prompt or Agent output persisted");
+      if (result.summary.profile.passRate <= result.summary.baseline.passRate) process.exitCode = 2;
+    },
+  );
 
 program
   .command("enter <profile> [agentArgs...]")

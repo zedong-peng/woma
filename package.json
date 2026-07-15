@@ -1,6 +1,6 @@
 {
   "name": "harness-conda",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Switch reproducible workflow profiles across Codex and Claude Code.",
   "type": "module",
   "bin": {
@@ -9,10 +9,14 @@
   },
   "files": [
     "dist/src",
+    "docs",
+    "examples/performance-engineering",
     "examples/reproducibility-core",
     "examples/research-workflow",
     "examples/experiment-workflow",
-    "README.md"
+    "CHANGELOG.md",
+    "README.md",
+    "SECURITY.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",

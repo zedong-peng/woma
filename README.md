@@ -30,6 +30,21 @@ harness stats
 
 `enter` starts a clean Codex or Claude session. Use `harness enter --agent codex experiment -- --full-auto` to select an Agent and pass through its arguments.
 
+## Prove a Harness helps
+
+Create a paired task with an objective verifier:
+
+```bash
+harness eval init regression-fix --profile experiment --verify-binding test
+# Replace the prompt placeholder and commit the task fixture.
+harness eval plan regression-fix
+harness eval run regression-fix --repeat 3 --execute
+```
+
+Each repetition runs a baseline and profile arm in separate worktrees at the same Git commit, starts a fresh non-persistent Agent session, and applies the same verifier. `run` is plan-only without `--execute`. Result metadata and failure stage stay under Git-excluded `.harness/local/evals/`; prompts and Agent output are not persisted or uploaded. Add `--keep-failures` only when complete failed worktrees are needed for local diagnosis. A tie or loss is a reason to revise or remove the Harness, not to reinterpret the metric.
+
+See [the paired evaluation protocol](docs/evals.md). The checked-in `research-audit-smoke` scenario validates the mechanism and report structure only; it is deliberately not presented as proof of improved research quality.
+
 ## What a switch guarantees
 
 | Concern | Behavior |
@@ -109,6 +124,7 @@ harness enter research --agent codex
 | `harness handoff <profile>` | Create a structured artifact for the next phase |
 | `harness outcome <status>` | Record local-only success, failure, or inconclusive evidence |
 | `harness stats` | Summarize local transitions, sessions, handoffs, and outcomes |
+| `harness eval init/plan/run` | Compare baseline and profile on identical commits with an objective verifier |
 | `harness current` | Show the active phase, composition, bindings, and handoff |
 | `harness leave` | Remove the profile environment while preserving handoffs |
 | `harness sync` | Restore locked packages on a new machine |

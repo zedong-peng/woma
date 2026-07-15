@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Added committed paired-eval definitions with `eval init` and inspectable `eval plan`.
+- Added opt-in `eval run --execute` with identical detached Git worktrees for baseline and profile arms.
+- Launch fresh Codex or Claude sessions, alternate arm order, and run the same objective verifier for both arms.
+- Persist only local result metadata, pass rates, and agent/verifier/timeout failure stages without prompts or Agent output.
+- Added explicit `--keep-failures` retention for inspecting failed work products without making sensitive output the default.
+- Reject dirty worktrees, active state at HEAD, prompt placeholders, and Agent arguments that weaken isolation.
+- Added a self-hosted research audit smoke eval and documented why it is not evidence of general quality improvement.
+
 ## 0.3.1
 
 - Reject Skill root symlinks and real-path escapes before package caching.
