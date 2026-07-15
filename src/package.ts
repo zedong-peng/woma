@@ -1,0 +1,190 @@
+import { createHash } from "node:crypto";
+import { cp, lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { assertInside, harnessHome, hashDirectory, pathExists } from "./fs.js";
+import { loadManifest } from "./schema.js";
+import type { HarnessManifest, InstalledPackage, LockedPackage } from "./types.js";
+
+interface MaterializedSource {
+  root: string;
+  source: string;
+  resolved: string;
+  cleanup?: () => Promise<void>;
+}
+
+function run(command: string, args: string[], cwd?: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error(`${command} ${args[0] ?? ""} failed: ${stderr.trim() || `exit ${code}`}`));
+    });
+  });
+}
+
+function splitRef(source: string): { locator: string; ref?: string } {
+  const index = source.lastIndexOf("#");
+  if (index <= source.indexOf(":")) return { locator: source };
+  const locator = source.slice(0, index);
+  const ref = source.slice(index + 1);
+  return ref ? { locator, ref } : { locator };
+}
+
+function normalizeGitSource(source: string): { url: string; canonical: string; ref?: string } | undefined {
+  const { locator, ref } = splitRef(source);
+  const shorthand = /^(?:gh|github):([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/.exec(locator);
+  if (shorthand?.[1]) {
+    const repo = shorthand[1].replace(/\.git$/, "");
+    return {
+      url: `https://github.com/${repo}.git`,
+      canonical: `gh:${repo}${ref ? `#${ref}` : ""}`,
+      ...(ref ? { ref } : {}),
+    };
+  }
+  if (/^(?:https?:\/\/|ssh:\/\/|git@)/.test(locator) || locator.endsWith(".git")) {
+    return {
+      url: locator,
+      canonical: `${locator}${ref ? `#${ref}` : ""}`,
+      ...(ref ? { ref } : {}),
+    };
+  }
+  return undefined;
+}
+
+async function materializeSource(source: string, cwd: string): Promise<MaterializedSource> {
+  const git = normalizeGitSource(source);
+  if (!git) {
+    const root = path.resolve(cwd, source.replace(/^file:/, ""));
+    if (!(await pathExists(root))) throw new Error(`Local source does not exist: ${root}`);
+    return { root, source: `file:${root}`, resolved: "local" };
+  }
+
+  const temp = await mkdtemp(path.join(os.tmpdir(), "harness-conda-"));
+  try {
+    if (git.ref) {
+      await run("git", ["clone", "--filter=blob:none", "--no-checkout", git.url, temp]);
+      await run("git", ["fetch", "--depth", "1", "origin", git.ref], temp);
+      await run("git", ["checkout", "--detach", "FETCH_HEAD"], temp);
+    } else {
+      await rm(temp, { recursive: true, force: true });
+      await run("git", ["clone", "--depth", "1", git.url, temp]);
+    }
+    const resolved = await run("git", ["rev-parse", "HEAD"], temp);
+    return {
+      root: temp,
+      source: git.canonical,
+      resolved,
+      cleanup: () => rm(temp, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await rm(temp, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function selectedPlatforms(manifest: HarnessManifest, itemPlatforms?: ("codex" | "claude")[]): Set<string> {
+  return new Set(itemPlatforms ?? manifest.spec.platforms);
+}
+
+export async function validatePackage(root: string, manifest: HarnessManifest): Promise<void> {
+  const names = new Set<string>();
+  for (const skill of manifest.spec.skills) {
+    if (names.has(`skill:${skill.name}`)) throw new Error(`Duplicate skill name: ${skill.name}`);
+    names.add(`skill:${skill.name}`);
+    const skillRoot = path.resolve(root, skill.path);
+    assertInside(root, skillRoot, `Skill ${skill.name}`);
+    if (!(await pathExists(path.join(skillRoot, "SKILL.md")))) {
+      throw new Error(`Skill ${skill.name} has no SKILL.md at ${skill.path}`);
+    }
+    const pending = [skillRoot];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      for (const entry of await readdir(current)) {
+        const candidate = path.join(current, entry);
+        const info = await lstat(candidate);
+        if (info.isSymbolicLink()) throw new Error(`Skill ${skill.name} contains unsupported symlink: ${path.relative(root, candidate)}`);
+        if (info.isDirectory()) pending.push(candidate);
+      }
+    }
+  }
+
+  const declaredEnv = new Set(manifest.spec.requirements.env.map((item) => item.name));
+  for (const server of manifest.spec.mcpServers) {
+    if (names.has(`mcp:${server.name}`)) throw new Error(`Duplicate MCP server name: ${server.name}`);
+    names.add(`mcp:${server.name}`);
+    const usedEnv = server.transport === "stdio" ? server.env : Object.values(server.headers);
+    for (const variable of usedEnv) {
+      if (!declaredEnv.has(variable)) {
+        throw new Error(`MCP server ${server.name} uses undeclared environment variable ${variable}`);
+      }
+    }
+    if ((server.transport === "sse" || server.transport === "ws") && selectedPlatforms(manifest, server.platforms).has("codex")) {
+      throw new Error(`MCP transport ${server.transport} for ${server.name} is Claude-only; set platforms: [claude]`);
+    }
+  }
+
+  if (manifest.spec.hooks.length > 0 && !manifest.spec.platforms.includes("claude")) {
+    throw new Error("Hooks require the claude platform");
+  }
+}
+
+function cacheKey(source: string, resolved: string, integrity: string): string {
+  return createHash("sha256").update(`${source}\0${resolved}\0${integrity}`).digest("hex").slice(0, 20);
+}
+
+function copyFilter(source: string): boolean {
+  const name = path.basename(source);
+  return ![".git", ".harness", "node_modules", ".DS_Store"].includes(name);
+}
+
+export async function installPackageSource(source: string, cwd = process.cwd()): Promise<InstalledPackage> {
+  const materialized = await materializeSource(source, cwd);
+  try {
+    const manifest = await loadManifest(materialized.root);
+    await validatePackage(materialized.root, manifest);
+    const integrity = await hashDirectory(materialized.root);
+    const resolved = materialized.resolved === "local" ? integrity : materialized.resolved;
+    const key = cacheKey(materialized.source, resolved, integrity);
+    const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
+    if (!(await pathExists(cacheRoot))) {
+      await mkdir(path.dirname(cacheRoot), { recursive: true });
+      await cp(materialized.root, cacheRoot, { recursive: true, errorOnExist: true, filter: copyFilter });
+    }
+    const lock: LockedPackage = {
+      name: manifest.metadata.name,
+      version: manifest.metadata.version,
+      source: materialized.source,
+      resolved,
+      integrity,
+      cacheKey: key,
+      installedAt: new Date().toISOString(),
+    };
+    return { manifest, root: cacheRoot, lock };
+  } finally {
+    await materialized.cleanup?.();
+  }
+}
+
+export async function loadCachedPackage(lock: LockedPackage): Promise<InstalledPackage> {
+  const root = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
+  if (!(await pathExists(root))) {
+    throw new Error(`Package ${lock.name}@${lock.version} is not cached; run harness install ${lock.source}`);
+  }
+  const integrity = await hashDirectory(root);
+  if (integrity !== lock.integrity) {
+    throw new Error(`Integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
+  }
+  const manifest = await loadManifest(root);
+  await validatePackage(root, manifest);
+  return { manifest, root, lock };
+}

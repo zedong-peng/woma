@@ -1,0 +1,21 @@
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: performance-engineering
+  version: 0.1.0
+  description: Evidence-first benchmark, profile, optimize, and regression-report loop for existing software.
+  tags: [performance, benchmark, profiling]
+spec:
+  platforms: [codex, claude]
+  requirements:
+    env: []
+    commands: [git, node]
+  skills:
+    - name: performance-loop
+      path: ./skills/performance-loop
+  mcpServers: []
+  hooks:
+    - event: PostToolUse
+      matcher: Edit|Write
+      command: git diff --check
+      timeout: 10
