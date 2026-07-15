@@ -67,7 +67,18 @@ export async function doctorPackage(pkg: InstalledPackage, projectRoot: string):
     return checks;
   }
 
-  checks.push({ status: "ok", label: "activation", detail: activation.targets.join(", ") });
+  const activationMatches =
+    activation.packageName === pkg.lock.name &&
+    activation.packageVersion === pkg.lock.version &&
+    pkg.manifest.metadata.name === pkg.lock.name &&
+    pkg.manifest.metadata.version === pkg.lock.version;
+  checks.push({
+    status: activationMatches ? "ok" : "fail",
+    label: "activation",
+    detail: activationMatches
+      ? `${activation.packageVersion} on ${activation.targets.join(", ")}`
+      : `active ${activation.packageName}@${activation.packageVersion}, locked ${pkg.lock.name}@${pkg.lock.version}`,
+  });
   for (const artifact of activation.artifacts) {
     if (!artifact.managed || artifact.kind !== "directory") continue;
     const absolute = path.join(projectRoot, artifact.path);
@@ -76,7 +87,7 @@ export async function doctorPackage(pkg: InstalledPackage, projectRoot: string):
     } else if ((await hashDirectory(absolute)) !== artifact.integrity) {
       checks.push({ status: "warn", label: artifact.path, detail: "managed skill was modified after activation" });
     } else {
-      checks.push({ status: "ok", label: artifact.path, detail: "managed skill matches lock" });
+      checks.push({ status: "ok", label: artifact.path, detail: "managed skill matches activation state" });
     }
   }
   return checks;

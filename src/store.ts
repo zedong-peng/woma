@@ -27,7 +27,24 @@ export async function readLock(projectRoot: string): Promise<LockFile> {
 }
 
 export async function putLock(projectRoot: string, pkg: LockedPackage): Promise<void> {
-  const lock = await readLock(projectRoot);
+  const [lock, state] = await Promise.all([readLock(projectRoot), readState(projectRoot)]);
+  const activation = state.activations[pkg.name];
+  const current = lock.packages[pkg.name];
+  if (activation) {
+    const unchanged =
+      current !== undefined &&
+      activation.packageVersion === pkg.version &&
+      current.name === pkg.name &&
+      current.version === pkg.version &&
+      current.source === pkg.source &&
+      current.resolved === pkg.resolved &&
+      current.integrity === pkg.integrity &&
+      current.cacheKey === pkg.cacheKey;
+    if (!unchanged) {
+      throw new Error(`${pkg.name}@${activation.packageVersion} is active; deactivate it before installing a different version`);
+    }
+    return;
+  }
   lock.packages[pkg.name] = pkg;
   await writeJsonAtomic(lockPath(projectRoot), lock);
 }

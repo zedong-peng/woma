@@ -13,14 +13,14 @@ async function write(filePath: string, content: string): Promise<void> {
   await writeFile(filePath, content, "utf8");
 }
 
-async function fixture(root: string): Promise<string> {
-  const packageRoot = path.join(root, "package");
+async function fixture(root: string, packageName = "test-harness", directoryName = "package"): Promise<string> {
+  const packageRoot = path.join(root, directoryName);
   await write(
     path.join(packageRoot, "harness.yaml"),
     `apiVersion: harness.conda/v1
 kind: Harness
 metadata:
-  name: test-harness
+  name: ${packageName}
   version: 1.0.0
   description: Test both adapters.
 spec:
@@ -153,6 +153,40 @@ test("deactivation retains a managed Codex MCP block modified by the user", { co
     const actions = await deactivatePackage("test-harness", project);
     assert.ok(actions.some((action) => action.verb === "keep" && action.detail.includes("changed or absent")));
     assert.match(await readFile(configPath, "utf8"), /node-custom/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shared artifacts remain until their final owning harness is deactivated", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-test-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const project = path.join(root, "project");
+    const first = await installPackageSource(await fixture(root, "owner-a", "package-a"));
+    const second = await installPackageSource(await fixture(root, "owner-b", "package-b"));
+    await activatePackage(first, project, ["codex", "claude"]);
+    await activatePackage(second, project, ["codex", "claude"]);
+
+    await deactivatePackage("owner-a", project);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "test-workflow", "SKILL.md"), "utf8"), /Run tests/);
+    assert.match(await readFile(path.join(project, ".claude", "skills", "test-workflow", "SKILL.md"), "utf8"), /Run tests/);
+    const codex = parseToml(await readFile(path.join(project, ".codex", "config.toml"), "utf8")) as Record<string, any>;
+    assert.equal(codex.mcp_servers["test-server"].command, "node");
+    const claudeMcp = JSON.parse(await readFile(path.join(project, ".mcp.json"), "utf8")) as Record<string, any>;
+    assert.equal(claudeMcp.mcpServers["test-server"].command, "node");
+    const settings = JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")) as Record<string, any>;
+    assert.equal(settings.hooks.PostToolUse.length, 1);
+    assert.ok((await readState(project)).activations["owner-b"]);
+
+    await deactivatePackage("owner-b", project);
+    await assert.rejects(readFile(path.join(project, ".agents", "skills", "test-workflow", "SKILL.md")), /ENOENT/);
+    const finalCodex = parseToml(await readFile(path.join(project, ".codex", "config.toml"), "utf8")) as Record<string, any>;
+    assert.equal(finalCodex.mcp_servers, undefined);
+    const finalClaudeMcp = JSON.parse(await readFile(path.join(project, ".mcp.json"), "utf8")) as Record<string, any>;
+    assert.deepEqual(finalClaudeMcp, {});
+    const finalSettings = JSON.parse(await readFile(path.join(project, ".claude", "settings.json"), "utf8")) as Record<string, any>;
+    assert.deepEqual(finalSettings, {});
   } finally {
     await rm(root, { recursive: true, force: true });
   }

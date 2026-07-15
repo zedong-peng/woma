@@ -55,3 +55,35 @@ test("packages reject skill symlinks", { concurrency: false }, async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("packages reject a symlink used as the skill root", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = await packageFixture(root);
+    const skillRoot = path.join(packageRoot, "skills", "integrity-skill");
+    const outside = path.join(root, "outside-skill");
+    await mkdir(outside, { recursive: true });
+    await write(path.join(outside, "SKILL.md"), "---\ndescription: Outside.\n---\nOutside.\n");
+    await rm(skillRoot, { recursive: true });
+    await symlink(outside, skillRoot);
+
+    await assert.rejects(installPackageSource(packageRoot), /skill root.*symlink/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("install refuses to reuse a modified cache entry", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = await packageFixture(root);
+    const pkg = await installPackageSource(packageRoot);
+    await writeFile(path.join(pkg.root, "skills", "integrity-skill", "SKILL.md"), "tampered", "utf8");
+
+    await assert.rejects(installPackageSource(packageRoot), /integrity mismatch/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

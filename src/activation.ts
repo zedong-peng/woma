@@ -11,6 +11,7 @@ import type {
   ManagedArtifact,
   McpServer,
   Platform,
+  StateFile,
 } from "./types.js";
 
 interface PreparedFile {
@@ -33,6 +34,40 @@ function stable(value: unknown): string {
 
 function equal(left: unknown, right: unknown): boolean {
   return stable(left) === stable(right);
+}
+
+function tomlPayload(block: string): string {
+  return block
+    .split("\n")
+    .filter((line) => !line.startsWith("# >>> harness-conda:") && !line.startsWith("# <<< harness-conda:"))
+    .join("\n");
+}
+
+function sameArtifactResource(left: ManagedArtifact, right: ManagedArtifact): boolean {
+  if (left.kind !== right.kind || left.path !== right.path) return false;
+  if (left.kind === "directory" && right.kind === "directory") return left.integrity === right.integrity;
+  if (left.kind === "toml-block" && right.kind === "toml-block") return tomlPayload(left.block) === tomlPayload(right.block);
+  if (left.kind === "json-entry" && right.kind === "json-entry") {
+    return equal(left.jsonPath, right.jsonPath) && equal(left.value, right.value);
+  }
+  if (left.kind === "json-array-entry" && right.kind === "json-array-entry") {
+    return equal(left.jsonPath, right.jsonPath) && equal(left.value, right.value);
+  }
+  return false;
+}
+
+function samePhysicalArtifact(left: ManagedArtifact, right: ManagedArtifact): boolean {
+  const { managed: _leftManaged, ...leftValue } = left;
+  const { managed: _rightManaged, ...rightValue } = right;
+  return equal(leftValue, rightValue);
+}
+
+function adoptedArtifact(state: StateFile, candidate: ManagedArtifact): ManagedArtifact {
+  for (const activation of Object.values(state.activations)) {
+    const existing = activation.artifacts.find((artifact) => artifact.managed && sameArtifactResource(artifact, candidate));
+    if (existing) return { ...existing, managed: true };
+  }
+  return candidate;
 }
 
 async function readOptional(filePath: string): Promise<string | null> {
@@ -186,6 +221,7 @@ async function prepareActivation(
   pkg: InstalledPackage,
   projectRoot: string,
   targets: Platform[],
+  state: StateFile,
 ): Promise<{ actions: Action[]; artifacts: ManagedArtifact[]; files: PreparedFile[]; directories: { source: string; destination: string }[] }> {
   const actions: Action[] = [];
   const artifacts: ManagedArtifact[] = [];
@@ -205,7 +241,7 @@ async function prepareActivation(
           throw new Error(`Refusing to overwrite existing skill at ${display}`);
         }
         actions.push({ verb: "adopt", path: display, detail: `${target} skill already matches` });
-        artifacts.push({ kind: "directory", path: display, integrity: sourceIntegrity, managed: false });
+        artifacts.push(adoptedArtifact(state, { kind: "directory", path: display, integrity: sourceIntegrity, managed: false }));
       } else {
         actions.push({ verb: "create", path: display, detail: `${target} skill ${skill.name}` });
         artifacts.push({ kind: "directory", path: display, integrity: sourceIntegrity, managed: true });
@@ -237,7 +273,7 @@ async function prepareActivation(
           throw new Error(`Refusing to overwrite MCP server ${server.name} in ${display}`);
         }
         actions.push({ verb: "adopt", path: display, detail: `Codex MCP ${server.name} already matches` });
-        artifacts.push({ kind: "toml-block", path: display, marker, block, managed: false });
+        artifacts.push(adoptedArtifact(state, { kind: "toml-block", path: display, marker, block, managed: false }));
       } else {
         blocks.push(block);
         actions.push({ verb: "merge", path: display, detail: `Codex MCP ${server.name}` });
@@ -265,7 +301,7 @@ async function prepareActivation(
           throw new Error(`Refusing to overwrite MCP server ${server.name} in ${display}`);
         }
         actions.push({ verb: "adopt", path: display, detail: `Claude MCP ${server.name} already matches` });
-        artifacts.push({ kind: "json-entry", path: display, jsonPath, value, managed: false });
+        artifacts.push(adoptedArtifact(state, { kind: "json-entry", path: display, jsonPath, value, managed: false }));
       } else {
         mcpServers[server.name] = value;
         mcpChanged = true;
@@ -288,7 +324,7 @@ async function prepareActivation(
         const jsonPath = ["hooks", hook.event];
         if (eventHooks.some((item) => equal(item, value))) {
           actions.push({ verb: "adopt", path: display, detail: `Claude hook ${hook.event} already matches` });
-          artifacts.push({ kind: "json-array-entry", path: display, jsonPath, value, managed: false });
+          artifacts.push(adoptedArtifact(state, { kind: "json-array-entry", path: display, jsonPath, value, managed: false }));
         } else {
           eventHooks.push(value);
           settingsChanged = true;
@@ -322,7 +358,7 @@ export async function activatePackage(
     if (!pkg.manifest.spec.platforms.includes(target)) throw new Error(`${name} does not support ${target}`);
   }
 
-  const prepared = await prepareActivation(pkg, project, targets);
+  const prepared = await prepareActivation(pkg, project, targets, state);
   if (dryRun) return prepared.actions;
 
   const createdDirectories: string[] = [];
@@ -380,6 +416,14 @@ export async function deactivatePackage(packageName: string, projectRoot: string
 
   for (const artifact of [...activation.artifacts].reverse()) {
     if (!artifact.managed) continue;
+    const otherOwner = Object.entries(state.activations).find(
+      ([name, record]) =>
+        name !== packageName && record.artifacts.some((candidate) => candidate.managed && samePhysicalArtifact(candidate, artifact)),
+    );
+    if (otherOwner) {
+      actions.push({ verb: "keep", path: artifact.path, detail: `still required by ${otherOwner[0]}` });
+      continue;
+    }
     const absolute = path.join(project, artifact.path);
     if (artifact.kind === "directory") {
       if (!(await pathExists(absolute))) {
