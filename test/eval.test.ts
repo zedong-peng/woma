@@ -60,7 +60,7 @@ test("paired eval isolates arms and persists only local result metadata", { conc
     await onboardProject(project, {
       name: "eval-fixture",
       agent: "codex",
-      targets: ["codex"],
+      targets: ["codex", "claude"],
       switchToResearch: false,
     });
     const definitionPath = await createEvalDefinition(project, "profile-signal", {
@@ -88,6 +88,15 @@ fi
 `,
     );
     await chmod(path.join(fakeBin, "codex"), 0o755);
+    await write(
+      path.join(fakeBin, "claude"),
+      `#!/bin/sh
+if [ -f .claude/skills/research-loop/SKILL.md ]; then
+  echo ready > answer.txt
+fi
+`,
+    );
+    await chmod(path.join(fakeBin, "claude"), 0o755);
     process.env.PATH = `${fakeBin}${path.delimiter}${previousPath ?? ""}`;
 
     const plan = await planEval(project, "profile-signal");
@@ -127,6 +136,11 @@ fi
     await run("git", ["worktree", "remove", "--force", retained], project);
     const cleanedWorktrees = await run("git", ["worktree", "list", "--porcelain"], project);
     assert.equal(cleanedWorktrees.split("\n").filter((line) => line.startsWith("worktree ")).length, 1);
+
+    const claudeResult = await runEval(project, "profile-signal", { execute: true, agent: "claude" });
+    assert.equal(claudeResult.agent, "claude");
+    assert.equal(claudeResult.summary.baseline.passRate, 0);
+    assert.equal(claudeResult.summary.profile.passRate, 1);
 
     const unsafePath = await createEvalDefinition(project, "unsafe", {
       profile: "research",
