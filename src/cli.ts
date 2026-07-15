@@ -3,10 +3,20 @@ import path from "node:path";
 import { Command } from "commander";
 import { activatePackage, deactivatePackage } from "./activation.js";
 import { captureHarness } from "./capture.js";
-import { doctorPackage, type Check } from "./doctor.js";
-import { installPackageSource, loadCachedPackage } from "./package.js";
+import { doctorPackage, doctorProject, type Check } from "./doctor.js";
+import { createHandoff } from "./handoff.js";
+import { installPackageSource, loadCachedPackage, syncLockedPackage } from "./package.js";
+import { enterProfile, leaveProfile, switchProfile, type ProfileSwitchResult } from "./profile.js";
+import {
+  addPackageToProject,
+  initProject,
+  projectConfigPath,
+  readProjectConfig,
+  setBinding,
+} from "./project.js";
 import { scaffoldHarness } from "./scaffold.js";
 import { readLock, putLock, readState } from "./store.js";
+import { pathExists } from "./fs.js";
 import type { Action, LockFile, Platform } from "./types.js";
 
 const program = new Command();
@@ -51,10 +61,28 @@ function printChecks(checks: Check[]): void {
   for (const check of checks) console.log(`  [${check.status}] ${check.label}: ${check.detail}`);
 }
 
+function printSwitch(result: ProfileSwitchResult, dryRun: boolean): void {
+  printActions(result.actions, dryRun);
+  if (dryRun) return;
+  if (result.name) {
+    console.log(`Profile: ${result.name}`);
+    console.log(`  packages  ${result.packages.join(", ") || "none"}`);
+    console.log(`  targets   ${result.targets.join(", ")}`);
+    if (result.handoff) console.log(`  handoff   ${result.handoff}`);
+  } else {
+    console.log("Profile environment is off.");
+  }
+}
+
+async function ensureProject(project: string): Promise<void> {
+  if (!(await pathExists(projectConfigPath(project)))) await initProject(project);
+}
+
 program
   .name("harness")
-  .description("Reproducible, cross-agent environments for skills, MCP servers, and hooks")
-  .version("0.1.0")
+  .description("Switch reproducible workflow profiles across Codex and Claude Code")
+  .version("0.2.0")
+  .enablePositionalOptions()
   .option("-p, --project <directory>", "project to configure", process.cwd());
 
 program
@@ -69,13 +97,157 @@ program
 program
   .command("install <source>")
   .description("resolve and lock a local or Git harness (for example gh:org/repo#v1.0.0)")
-  .action(async (source: string, _options: unknown, command: Command) => {
+  .option("--profile <profile>", "add the installed package to a workflow profile")
+  .option("--base", "add the installed package to every profile", false)
+  .action(async (source: string, options: { profile?: string; base: boolean }, command: Command) => {
+    if (options.profile && options.base) throw new Error("Choose --profile or --base, not both");
     const project = projectRoot(command);
     const pkg = await installPackageSource(source, process.cwd());
     await putLock(project, pkg.lock);
+    if (options.profile || options.base) {
+      await ensureProject(project);
+      await addPackageToProject(project, pkg.manifest.metadata.name, options.base ? { base: true } : { profile: options.profile! });
+    }
     console.log(`Installed ${pkg.manifest.metadata.name}@${pkg.manifest.metadata.version}`);
     console.log(`  source     ${pkg.lock.source}`);
     console.log(`  integrity  ${pkg.lock.integrity}`);
+    if (options.base) console.log("  profile    base");
+    if (options.profile) console.log(`  profile    ${options.profile}`);
+  });
+
+program
+  .command("sync")
+  .description("restore every locked Harness package into the local cache")
+  .action(async (_options: unknown, command: Command) => {
+    const lock = await readLock(projectRoot(command));
+    const packages = Object.values(lock.packages);
+    if (packages.length === 0) throw new Error("No packages in .harness/lock.json");
+    for (const locked of packages) {
+      await syncLockedPackage(locked);
+      console.log(`  [ok] ${locked.name}@${locked.version}  ${locked.resolved}`);
+    }
+    console.log(`Synced ${packages.length} package${packages.length === 1 ? "" : "s"}.`);
+  });
+
+const projectCommand = program.command("project").description("configure this project's workflow environment");
+
+projectCommand
+  .command("init")
+  .description("create .harness/project.yaml with research and experiment profiles")
+  .option("--name <name>", "project name")
+  .option("--agent <agent>", "default agent: codex or claude", "codex")
+  .option("--target <target>", "codex, claude, both, or a comma-separated list", "both")
+  .action(async (options: { name?: string; agent: string; target: string }, command: Command) => {
+    if (options.agent !== "codex" && options.agent !== "claude") throw new Error("--agent must be codex or claude");
+    const project = projectRoot(command);
+    const config = await initProject(project, {
+      ...(options.name ? { name: options.name } : {}),
+      agent: options.agent,
+      targets: targets(options.target),
+    });
+    console.log(`Created Harness project ${config.metadata.name}`);
+    console.log(`  config    ${projectConfigPath(project)}`);
+    console.log(`  profiles  ${Object.keys(config.spec.profiles).join(", ")}`);
+  });
+
+const profileCommand = program.command("profile").description("compose packages into task profiles");
+
+profileCommand
+  .command("add <profile> <package>")
+  .description("add an installed package to a profile; use profile name 'base' for every profile")
+  .action(async (profile: string, packageName: string, _options: unknown, command: Command) => {
+    const project = projectRoot(command);
+    const config = await addPackageToProject(project, packageName, profile === "base" ? { base: true } : { profile });
+    console.log(`Added ${packageName} to ${profile}`);
+    if ((await readState(project)).profile) console.log("Run harness switch <profile> to apply the updated composition.");
+    console.log(`  base      ${config.spec.base.join(", ") || "none"}`);
+  });
+
+profileCommand
+  .command("list")
+  .alias("ls")
+  .description("show profile composition and the active phase")
+  .action(async (_options: unknown, command: Command) => {
+    const project = projectRoot(command);
+    const [config, state] = await Promise.all([readProjectConfig(project), readState(project)]);
+    console.log(`base: ${config.spec.base.join(", ") || "none"}`);
+    for (const [name, profile] of Object.entries(config.spec.profiles)) {
+      console.log(`${state.profile?.name === name ? "*" : " "} ${name}: ${profile.packages.join(", ") || "no packages"}`);
+      console.log(`    ${profile.description}`);
+    }
+  });
+
+program
+  .command("bind <name> <command...>")
+  .description("bind a reusable workflow to this project's build, test, benchmark, or other command")
+  .action(async (name: string, commandParts: string[], _options: unknown, command: Command) => {
+    const project = projectRoot(command);
+    const config = await setBinding(project, name, commandParts.join(" "));
+    const active = (await readState(project)).profile;
+    if (active) await switchProfile(project, active.name);
+    console.log(`Bound ${name}: ${commandParts.join(" ")}`);
+  });
+
+program
+  .command("switch <profile>")
+  .description("atomically replace the active workflow profile while keeping base packages")
+  .option("--dry-run", "show the profile transition without writing", false)
+  .option("--repair", "replace a modified managed active-profile instruction block", false)
+  .action(async (profile: string, options: { dryRun: boolean; repair: boolean }, command: Command) => {
+    const result = await switchProfile(projectRoot(command), profile, options);
+    printSwitch(result, options.dryRun);
+  });
+
+program
+  .command("leave")
+  .description("deactivate the current profile and remove its routing signal")
+  .option("--dry-run", "show the profile transition without writing", false)
+  .option("--repair", "remove a modified managed active-profile instruction block", false)
+  .action(async (options: { dryRun: boolean; repair: boolean }, command: Command) => {
+    const result = await leaveProfile(projectRoot(command), options);
+    printSwitch(result, options.dryRun);
+  });
+
+program
+  .command("current")
+  .description("show the active workflow phase, composition, bindings, and handoff")
+  .action(async (_options: unknown, command: Command) => {
+    const project = projectRoot(command);
+    const [config, state] = await Promise.all([readProjectConfig(project), readState(project)]);
+    if (!state.profile) {
+      console.log("No active profile.");
+      return;
+    }
+    console.log(`Profile: ${state.profile.name}`);
+    console.log(`  packages  ${state.profile.packages.join(", ") || "none"}`);
+    console.log(`  targets   ${state.profile.targets.join(", ")}`);
+    console.log(`  agent     ${config.spec.agent}`);
+    if (state.profile.handoff) console.log(`  handoff   ${state.profile.handoff}`);
+    for (const [name, value] of Object.entries(config.spec.bindings)) console.log(`  ${name.padEnd(9)} ${value}`);
+  });
+
+program
+  .command("handoff <profile>")
+  .description("create a structured phase handoff for the next profile")
+  .action(async (profile: string, _options: unknown, command: Command) => {
+    const filePath = await createHandoff(projectRoot(command), profile);
+    console.log(`Created handoff: ${filePath}`);
+    console.log(`Fill the evidence and acceptance criteria, then run: harness switch ${profile}`);
+  });
+
+program
+  .command("enter <profile> [agentArgs...]")
+  .description("switch profile and launch a fresh Codex or Claude session")
+  .option("-a, --agent <agent>", "codex or claude")
+  .option("--repair", "replace a modified managed active-profile instruction block", false)
+  .allowUnknownOption(true)
+  .passThroughOptions()
+  .action(async (profile: string, agentArgs: string[], options: { agent?: string; repair: boolean }, command: Command) => {
+    if (options.agent !== undefined && options.agent !== "codex" && options.agent !== "claude") {
+      throw new Error("--agent must be codex or claude");
+    }
+    const code = await enterProfile(projectRoot(command), profile, options.agent, agentArgs, { repair: options.repair });
+    process.exitCode = code;
   });
 
 program
@@ -105,6 +277,7 @@ program
   .option("--dry-run", "show changes without writing", false)
   .action(async (name: string | undefined, options: { target: string; dryRun: boolean }, command: Command) => {
     const project = projectRoot(command);
+    if ((await readState(project)).profile) throw new Error("A workflow profile is active; use harness profile add and harness switch instead");
     const lock = await readLock(project);
     const selected = resolveName(lock, name);
     const pkg = await loadCachedPackage(lock.packages[selected]!);
@@ -120,6 +293,7 @@ program
   .option("--dry-run", "resolve and show activation changes without writing target configs", false)
   .action(async (source: string, options: { target: string; dryRun: boolean }, command: Command) => {
     const project = projectRoot(command);
+    if ((await readState(project)).profile) throw new Error("A workflow profile is active; install with --profile and run harness switch instead");
     const pkg = await installPackageSource(source, process.cwd());
     if (!options.dryRun) await putLock(project, pkg.lock);
     const actions = await activatePackage(pkg, project, targets(options.target), options.dryRun);
@@ -133,6 +307,9 @@ program
   .option("--dry-run", "show changes without writing", false)
   .action(async (name: string, options: { dryRun: boolean }, command: Command) => {
     const project = projectRoot(command);
+    if ((await readState(project)).profile?.packages.includes(name)) {
+      throw new Error(`${name} belongs to the active profile; run harness leave or switch profiles`);
+    }
     const actions = await deactivatePackage(name, project, options.dryRun);
     printActions(actions, options.dryRun);
     if (!options.dryRun) console.log(`Deactivated ${name}`);
@@ -164,8 +341,14 @@ program
     const project = projectRoot(command);
     const lock = await readLock(project);
     const names = name ? [resolveName(lock, name)] : Object.keys(lock.packages).sort();
-    if (names.length === 0) throw new Error("No harnesses installed in this project");
     let failed = false;
+    console.log("project");
+    const projectChecks = await doctorProject(project);
+    printChecks(projectChecks);
+    failed ||= projectChecks.some((check) => check.status === "fail");
+    if (names.length === 0 && !(await pathExists(projectConfigPath(project)))) {
+      throw new Error("No Harness project or installed packages found");
+    }
     for (const selected of names) {
       const pkg = await loadCachedPackage(lock.packages[selected]!);
       console.log(`${selected}@${pkg.manifest.metadata.version}`);

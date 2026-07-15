@@ -2,7 +2,7 @@
 
 ## 一句话
 
-把一套领域 Agent 工作流像 Conda 环境一样安装、锁定、切换和迁移，并同时分发到 Codex 与 Claude Code。
+告诉 Agent “我现在处于哪个工作阶段”，立即得到一套确定、可复现、能向下一阶段交接结果的工作环境。
 
 ## 用户问题
 
@@ -20,15 +20,17 @@ General-purpose coding agent 已经存在。机会不在重做 Codex 或 Claude 
 
 ## MVP 楔子
 
-先解决“我自己的 golden harness 能否在另一台机器和另一种 Agent 上一条命令复现”，再做公共 Hub。
+先解决两个高频真问题，再做公共 Hub：同一项目能否在 research / experiment / debug 等阶段之间无污染切换；同一套 golden Harness 能否在另一台机器和另一种 Agent 上一条命令复现。
 
 核心闭环：
 
-1. `capture` 从现有项目生成 secret-safe 配方；
-2. `install` 从本地或 Git 获取、校验、缓存并锁版本；
-3. `activate` 合并到 Codex / Claude Code 标准配置；
-4. `doctor` 检查命令、环境变量、缓存和配置漂移；
-5. `deactivate` 只撤销本工具拥有且未被用户修改的内容。
+1. `project init` 建立 base、profiles、bindings 和 handoff；
+2. `install --profile/--base` 从 Git 获取、校验、缓存并锁版本；
+3. `switch` 排他切换阶段，同时保留 base 并写入强路由信号；
+4. `handoff` 把证据、假设、失败案例和验收标准交给下一阶段；
+5. `enter` 启动全新的 Codex / Claude session，避免旧上下文污染；
+6. `sync` 在新服务器恢复 lock 中的精确环境；
+7. `doctor` 检查命令、环境变量、组合、缓存、路由和配置漂移。
 
 ## 为什么现在做
 
@@ -50,7 +52,7 @@ Agent 的基础能力持续增强，会淘汰过细的提示约束，但不会�
 
 不先做空 Hub。团队亲自维护 3 到 5 个能产生可验证结果的包，用案例报告分发：性能优化、代码审查、科研实验、文献证据、专利草拟。社区渠道用于招募作者和设计伙伴，不把安装量当成质量。
 
-北极星指标是“在新环境成功完成一次可验证闭环的激活次数”，辅助指标包括首次成功时间、doctor 通过率、30 天复用率、跨平台成功率和版本回滚率。
+北极星指标是“完成一次有可验证产物的阶段转换”，例如 research handoff 被 experiment 成功消费。辅助指标包括首次成功时间、切换后环境污染率、handoff 复述减少量、doctor 通过率、30 天复用率、跨平台成功率和版本回滚率。
 
 ## 商业化
 
@@ -58,4 +60,4 @@ Agent 的基础能力持续增强，会淘汰过细的提示约束，但不会�
 - 团队：私有 registry、签名、策略、评测、版本推广；
 - 企业：SSO、审计、内部 failure-case eval、私有部署与成功率看板。
 
-当前仓库交付 CLI MVP。公共 registry、签名和远程 eval 属于下一阶段，不能在没有优质包和真实复用数据前过度建设。
+当前仓库交付 CLI v0.2：可组合 profile、排他切换、项目 binding、强路由、handoff、fresh session 和跨服务器 sync。公共 registry、签名和远程 eval 属于下一阶段，不能在没有优质包和真实复用数据前过度建设。

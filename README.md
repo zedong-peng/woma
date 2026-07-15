@@ -1,115 +1,136 @@
 # harness-conda
 
-Install a domain Agent environment once, reproduce it across Codex and Claude Code.
+Switch your Agent's workflow, not just its model.
 
-`harness-conda` packages Skills, MCP servers, Claude Code hooks, command dependencies, and environment-variable requirements in one versioned `harness.yaml`. Packages can live in any Git repository; the CLI resolves them into a content-addressed cache, writes a lock file, and safely merges their configuration into a target project.
+`harness-conda` gives a project explicit task profiles such as `research`, `experiment`, `debug`, and `report`. A switch keeps shared base capabilities, removes the previous phase, activates the next phase's Skills/MCP/hooks, updates strong project instructions, and carries a structured handoff into a fresh Codex or Claude session.
 
-## Quick start
+## Research to experiment
 
 ```bash
 npm install
 npm run build
 npm link
 
-mkdir /tmp/harness-demo
-harness --project /tmp/harness-demo use ./examples/performance-engineering --target both
-harness --project /tmp/harness-demo doctor performance-engineering
+mkdir /tmp/agent-lab
+harness --project /tmp/agent-lab project init --target both
+
+harness --project /tmp/agent-lab install ./examples/reproducibility-core --base
+harness --project /tmp/agent-lab install ./examples/research-workflow --profile research
+harness --project /tmp/agent-lab install ./examples/experiment-workflow --profile experiment
+
+harness --project /tmp/agent-lab bind test npm test
+harness --project /tmp/agent-lab bind benchmark npm run benchmark
+
+harness --project /tmp/agent-lab switch research
+harness --project /tmp/agent-lab handoff experiment
+harness --project /tmp/agent-lab switch experiment
 ```
 
-This creates the same Skill in `.agents/skills/` for Codex and `.claude/skills/` for Claude Code. It also merges target-specific MCP and hook configuration without replacing existing files.
-
-Install directly from GitHub:
+Use `harness current` to inspect the selected phase. Use `harness enter --agent codex research` to switch and launch a clean Agent session in one command. Arguments after `--` are passed to the Agent:
 
 ```bash
-harness install gh:owner/performance-harness#v1.0.0
-harness activate performance-harness --target codex
+harness enter --agent codex experiment -- --full-auto
 ```
+
+## What a switch guarantees
+
+| Concern | Behavior |
+| --- | --- |
+| Shared methods | `base` packages remain active across every profile |
+| Phase isolation | Packages outside the selected profile are removed |
+| Agent routing | Managed blocks in `AGENTS.md` and `CLAUDE.md` name the active phase, bindings, packages, and handoff |
+| Cross-Agent config | Skills, MCP servers, and Claude hooks map to each target's official project format |
+| Failure safety | Conflicts stop the switch; completed changes roll back if a later activation fails |
+| User edits | Modified managed resources block switching until reviewed; `--repair` is explicit |
+| Phase transfer | Markdown handoffs preserve evidence, hypotheses, failure cases, inputs, and acceptance criteria |
+
+The project definition is committed at `.harness/project.yaml`:
+
+```yaml
+apiVersion: harness.conda/project-v1
+kind: HarnessProject
+metadata:
+  name: agent-lab
+spec:
+  agent: codex
+  targets: [codex, claude]
+  base: [reproducibility-core]
+  profiles:
+    research:
+      description: Find prior work and produce testable hypotheses.
+      packages: [research-workflow]
+    experiment:
+      description: Test hypotheses with reproducible measurements.
+      packages: [experiment-workflow]
+  bindings:
+    build: make release
+    test: make test
+    benchmark: ./scripts/benchmark.sh
+  handoffDirectory: .harness/handoffs
+```
+
+Packages hold reusable methodology. Profiles compose packages for a task phase. Bindings connect reusable methodology to the current repository's actual commands. Handoffs transfer state between phases without carrying an old chat context forward.
+
+## Multiple servers
+
+Use Git sources for portable packages, then commit `.harness/project.yaml` and `.harness/lock.json`:
+
+```bash
+harness install gh:owner/research-workflow#v1.0.0 --profile research
+git add .harness/project.yaml .harness/lock.json
+git commit -m "Define Agent workflow environment"
+```
+
+On another server:
+
+```bash
+git pull
+harness sync
+harness doctor
+harness enter research --agent codex
+```
+
+`sync` restores exact locked commits into the content-addressed cache and rejects source drift. Environment variable names are declared in packages, while secret values stay in the machine environment.
 
 ## Commands
 
 | Command | Outcome |
 | --- | --- |
-| `harness init <dir>` | Scaffold a package with a portable Skill |
-| `harness capture <dir> --from codex` | Export an existing project as a secret-safe package |
-| `harness install <source>` | Validate, cache, hash, and lock a local or Git package |
-| `harness activate [name]` | Merge a locked package into Codex, Claude, or both |
-| `harness use <source>` | Install and activate in one command |
-| `harness doctor [name]` | Check dependencies, env, integrity, activation, and drift |
-| `harness deactivate <name>` | Remove unchanged artifacts owned by the package |
-| `harness list` | Show installed and active packages |
-| `harness inspect <source-or-name>` | Review package contents before activation |
+| `harness project init` | Create opinionated research and experiment profiles |
+| `harness install <source> --profile <name>` | Lock a package and add it to one phase |
+| `harness install <source> --base` | Add shared capability to every phase |
+| `harness profile add <profile> <package>` | Compose an installed package into a profile |
+| `harness bind <name> <command...>` | Bind build/test/benchmark behavior to this repository |
+| `harness switch <profile>` | Atomically select a workflow phase |
+| `harness enter <profile>` | Switch and launch a fresh Codex or Claude session |
+| `harness handoff <profile>` | Create a structured artifact for the next phase |
+| `harness current` | Show the active phase, composition, bindings, and handoff |
+| `harness leave` | Remove the profile environment while preserving handoffs |
+| `harness sync` | Restore locked packages on a new machine |
+| `harness doctor` | Verify project composition, dependencies, integrity, routing, and drift |
+| `harness capture <dir> --from codex` | Export existing Agent resources without literal secrets |
+| `harness init <dir>` | Scaffold a reusable Harness package |
 
-All project commands accept `--project <directory>`. Activation and deactivation accept `--dry-run`.
+Low-level `activate`, `deactivate`, `use`, `list`, and `inspect` remain available for package development and compatibility.
 
-## Manifest
+## Package format
 
-```yaml
-apiVersion: harness.conda/v1
-kind: Harness
-metadata:
-  name: repository-research
-  version: 0.1.0
-  description: Search and analyze repositories with a repeatable evidence workflow.
-  tags: [research]
-spec:
-  platforms: [codex, claude]
-  requirements:
-    env:
-      - name: GITHUB_TOKEN
-        description: GitHub API access for private repositories.
-        optional: false
-    commands: [git, node]
-  skills:
-    - name: repository-research
-      path: ./skills/repository-research
-  mcpServers:
-    - name: github
-      transport: stdio
-      command: npx
-      args: [-y, "@modelcontextprotocol/server-github"]
-      env: [GITHUB_TOKEN]
-  hooks:
-    - event: PostToolUse
-      matcher: Edit|Write
-      command: git diff --check
-      timeout: 10
-```
+Every package contains a strict `harness.yaml` and one or more Agent Skills. It may also declare MCP servers, Claude hooks, required commands, and environment variable names. Sources may be local directories, `gh:owner/repo#ref`, HTTPS Git URLs, or SSH Git URLs.
 
-Remote MCP headers map header names to environment variable names. Secret values never belong in the manifest:
+See [the package manifest reference](docs/manifest.md) and the included [research](examples/research-workflow), [experiment](examples/experiment-workflow), [reproducibility](examples/reproducibility-core), and [performance engineering](examples/performance-engineering) packages.
 
-```yaml
-mcpServers:
-  - name: internal-docs
-    transport: http
-    url: https://mcp.example.com/mcp
-    headers:
-      Authorization: INTERNAL_MCP_AUTHORIZATION
-```
+## Safety and compatibility
 
-## Target mapping
+Activation refuses conflicting Skills and MCP entries. Deactivation removes only unchanged resources owned by the package. `capture` refuses literal MCP environment or header values, and Skill symlinks are rejected. Project-scoped MCP servers still use the target Agent's trust flow.
 
-| Package resource | Codex project | Claude Code project |
-| --- | --- | --- |
-| Skill | `.agents/skills/<name>` | `.claude/skills/<name>` |
-| MCP server | managed block in `.codex/config.toml` | entry in `.mcp.json` |
-| Hook | not installed | entry in `.claude/settings.json` |
-
-The CLI adopts identical existing entries but does not claim ownership of them. A conflicting entry stops activation. Managed Skill directories are removed only while their content hash still matches the activated package; modified content is retained.
-
-The adapters follow the official [Codex Skills](https://developers.openai.com/codex/skills/), [Codex MCP](https://developers.openai.com/codex/mcp/), [Claude Code Skills](https://code.claude.com/docs/en/skills), [Claude Code MCP](https://code.claude.com/docs/en/mcp), and [Claude Code Hooks](https://code.claude.com/docs/en/hooks) configuration contracts.
-
-## Package sources and lock
-
-Sources may be local directories, `gh:owner/repo#ref`, HTTPS Git URLs, or SSH Git URLs. `.harness/lock.json` records source, resolved commit, content integrity, and cache key. The cache defaults to `~/.harness-conda` and can be relocated with `HARNESS_HOME`.
-
-For repeatable team use, commit `.harness/lock.json` and pin a tag or commit. `.harness/state.json` is machine-local ownership state and is ignored by Git.
+The adapters follow the official [Codex Skills](https://developers.openai.com/codex/skills/), [Codex MCP](https://developers.openai.com/codex/mcp/), [Claude Code Skills](https://code.claude.com/docs/en/skills), [Claude Code MCP](https://code.claude.com/docs/en/mcp), and [Claude Code Hooks](https://code.claude.com/docs/en/hooks) contracts. Read [SECURITY.md](SECURITY.md) before activating third-party packages.
 
 ## Development
 
 ```bash
 npm run check
 npm test
-bash scripts/demo.sh
+bash scripts/demo-workflow.sh
 ```
 
-See [the Chinese product brief](docs/product-brief.zh-CN.md) for positioning, cold start, moat, and commercialization assumptions. Read [SECURITY.md](SECURITY.md) before activating third-party packages.
+The [Chinese product brief](docs/product-brief.zh-CN.md) covers positioning and commercialization. The [user journeys](docs/user-journeys.zh-CN.md) define the workflows this product must earn the right to serve.

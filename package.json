@@ -1,7 +1,7 @@
 {
   "name": "harness-conda",
-  "version": "0.1.0",
-  "description": "Reproducible, cross-agent environments for skills, MCP servers, and hooks.",
+  "version": "0.2.0",
+  "description": "Switch reproducible workflow profiles across Codex and Claude Code.",
   "type": "module",
   "bin": {
     "harness": "dist/src/cli.js",
@@ -15,6 +15,7 @@
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
+    "demo": "bash scripts/demo-workflow.sh",
     "start": "node dist/src/cli.js"
   },
   "engines": {
@@ -29,6 +30,14 @@
     "harness"
   ],
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zedong-peng/harness-conda.git"
+  },
+  "homepage": "https://github.com/zedong-peng/harness-conda#readme",
+  "bugs": {
+    "url": "https://github.com/zedong-peng/harness-conda/issues"
+  },
   "dependencies": {
     "commander": "^14.0.0",
     "smol-toml": "^1.4.2",

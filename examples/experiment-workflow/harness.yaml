@@ -1,0 +1,21 @@
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: experiment-workflow
+  version: 0.1.0
+  description: Reproducible hypothesis testing from preregistered protocol through implementation, measurement, failure analysis, and report.
+  tags: [experiment, benchmark, evaluation]
+spec:
+  platforms: [codex, claude]
+  requirements:
+    env: []
+    commands: [git]
+  skills:
+    - name: experiment-loop
+      path: ./skills/experiment-loop
+  mcpServers: []
+  hooks:
+    - event: PostToolUse
+      matcher: Edit|Write
+      command: git diff --check
+      timeout: 10

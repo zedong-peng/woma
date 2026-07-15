@@ -1,6 +1,6 @@
 import path from "node:path";
 import { readJson, writeJsonAtomic } from "./fs.js";
-import type { ActivationRecord, LockFile, LockedPackage, StateFile } from "./types.js";
+import type { ActivationRecord, ActiveProfileState, LockFile, LockedPackage, StateFile } from "./types.js";
 
 function emptyLock(): LockFile {
   return { lockfileVersion: 1, packages: {} };
@@ -49,5 +49,17 @@ export async function putActivation(projectRoot: string, activation: ActivationR
 export async function deleteActivation(projectRoot: string, packageName: string): Promise<void> {
   const state = await readState(projectRoot);
   delete state.activations[packageName];
+  await writeJsonAtomic(statePath(projectRoot), state);
+}
+
+export async function putActiveProfile(projectRoot: string, profile: ActiveProfileState): Promise<void> {
+  const state = await readState(projectRoot);
+  state.profile = profile;
+  await writeJsonAtomic(statePath(projectRoot), state);
+}
+
+export async function deleteActiveProfile(projectRoot: string): Promise<void> {
+  const state = await readState(projectRoot);
+  delete state.profile;
   await writeJsonAtomic(statePath(projectRoot), state);
 }

@@ -188,3 +188,46 @@ export async function loadCachedPackage(lock: LockedPackage): Promise<InstalledP
   await validatePackage(root, manifest);
   return { manifest, root, lock };
 }
+
+function sourceAtRevision(source: string, resolved: string): string {
+  if (source.startsWith("file:")) return source;
+  const { locator } = splitRef(source);
+  return `${locator}#${resolved}`;
+}
+
+export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
+  const expectedRoot = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
+  if (await pathExists(expectedRoot)) {
+    try {
+      return await loadCachedPackage(lock);
+    } catch {
+      await rm(expectedRoot, { recursive: true, force: true });
+    }
+  }
+
+  const materialized = await materializeSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
+  try {
+    const manifest = await loadManifest(materialized.root);
+    await validatePackage(materialized.root, manifest);
+    const integrity = await hashDirectory(materialized.root);
+    if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
+      throw new Error(
+        `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
+      );
+    }
+    if (integrity !== lock.integrity) {
+      throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
+    }
+    if (!lock.source.startsWith("file:") && materialized.resolved !== lock.resolved) {
+      throw new Error(`Locked revision mismatch for ${lock.name}: expected ${lock.resolved}, got ${materialized.resolved}`);
+    }
+    await mkdir(path.dirname(expectedRoot), { recursive: true });
+    await cp(materialized.root, expectedRoot, { recursive: true, errorOnExist: true, filter: copyFilter });
+    return { manifest, root: expectedRoot, lock };
+  } catch (error) {
+    await rm(expectedRoot, { recursive: true, force: true });
+    throw error;
+  } finally {
+    await materialized.cleanup?.();
+  }
+}

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { installPackageSource, loadCachedPackage } from "../src/package.js";
+import { installPackageSource, loadCachedPackage, syncLockedPackage } from "../src/package.js";
 
 async function write(filePath: string, content: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -51,6 +51,35 @@ test("packages reject skill symlinks", { concurrency: false }, async () => {
     await write(path.join(root, "outside.txt"), "outside");
     await symlink(path.join(root, "outside.txt"), path.join(packageRoot, "skills", "integrity-skill", "outside.txt"));
     await assert.rejects(installPackageSource(packageRoot), /unsupported symlink/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sync restores a locked package after cache loss", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const pkg = await installPackageSource(await packageFixture(root));
+    await rm(pkg.root, { recursive: true, force: true });
+    const restored = await syncLockedPackage(pkg.lock);
+    assert.equal(restored.manifest.metadata.name, "integrity-test");
+    assert.equal(restored.root, pkg.root);
+    await loadCachedPackage(pkg.lock);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sync refuses a local source that drifted from its lock", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = await packageFixture(root);
+    const pkg = await installPackageSource(packageRoot);
+    await rm(pkg.root, { recursive: true, force: true });
+    await writeFile(path.join(packageRoot, "skills", "integrity-skill", "SKILL.md"), "drifted", "utf8");
+    await assert.rejects(syncLockedPackage(pkg.lock), /Locked integrity mismatch/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

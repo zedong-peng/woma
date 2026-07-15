@@ -113,6 +113,42 @@ export interface ActivationRecord {
 export interface StateFile {
   stateVersion: 1;
   activations: Record<string, ActivationRecord>;
+  profile?: ActiveProfileState | undefined;
+}
+
+export interface ProjectProfile {
+  description: string;
+  packages: string[];
+}
+
+export interface HarnessProject {
+  apiVersion: "harness.conda/project-v1";
+  kind: "HarnessProject";
+  metadata: {
+    name: string;
+  };
+  spec: {
+    agent: Platform;
+    targets: Platform[];
+    base: string[];
+    profiles: Record<string, ProjectProfile>;
+    bindings: Record<string, string>;
+    handoffDirectory: string;
+  };
+}
+
+export interface ActiveInstruction {
+  path: string;
+  block: string;
+}
+
+export interface ActiveProfileState {
+  name: string;
+  packages: string[];
+  targets: Platform[];
+  activatedAt: string;
+  instructions: ActiveInstruction[];
+  handoff?: string | undefined;
 }
 
 export interface InstalledPackage {
