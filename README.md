@@ -1,186 +1,205 @@
 # harness-conda
 
-Switch your Agent's workflow, not just its model.
+Create, reproduce, and switch isolated Agent environments.
 
-`harness-conda` gives a project explicit task profiles such as `research`, `experiment`, `debug`, and `report`. A switch keeps shared base capabilities, removes the previous phase, activates the next phase's Skills/MCP/hooks, updates strong project instructions, and carries a structured handoff into a fresh Codex or Claude session.
+Harness Conda manages versioned packages containing Skills, meta-skills, MCP servers, and hooks. A meta-skill is an ordinary Skill whose natural-language method composes other Skills; package dependencies make the complete method installable and reproducible without turning it into a workflow DAG.
 
-## First value in 30 seconds
+## Install from source
+
+Harness Conda is not published to the npm Registry yet. Install the current CLI from this repository:
 
 ```bash
-npm install
+git clone https://github.com/zedong-peng/harness-conda.git
+cd harness-conda
+npm ci
 npm run build
 npm link
-
-cd /path/to/your/project
-harness onboard
-harness enter research
+harness --version
 ```
 
-`onboard` detects installed Agents, repository stacks, the checked-in package manager, and standard build/test/benchmark/lint commands. It installs the built-in reproducibility, research, experiment, and performance workflows and activates `research`. Review the generated `.harness/project.yaml`, then work normally.
-
-When research produces a decision:
+`npm link` exposes the locally built `harness` and `harness-conda` binaries. To avoid a global link, replace `harness` in the examples below with:
 
 ```bash
-harness outcome success --artifact research-report.md
-harness handoff experiment
-harness enter experiment
-harness outcome inconclusive --note "Need more benchmark samples"
-harness stats
+node /path/to/harness-conda/dist/src/cli.js
 ```
 
-`enter` starts a clean Codex or Claude session. Use `harness enter --agent codex experiment -- --full-auto` to select an Agent and pass through its arguments.
-
-When the task changes from understanding the system to optimizing it:
+## Quick start
 
 ```bash
-# Usually detected from package.json, Make, Just, Cargo, or Go metadata.
-harness bind benchmark "npm run benchmark"
-harness enter performance
+harness env create research --target codex
+harness install -n research builtin:auto-research
+harness activate research
+
+codex
+
+harness deactivate
 ```
 
-The performance profile requires both `test` and `benchmark` project bindings. Missing requirements stop the switch before research Skills or routing are removed. The activated workflow establishes a repeated baseline, profiles the exact workload, tests one hypothesis at a time, reruns correctness checks, and keeps only improvements larger than observed noise.
+Installing `auto-research` recursively installs and locks its component packages. Activating `research` makes the complete dependency closure available to the selected Agent in dependency-first order.
 
-## Prove a Harness helps
+Only one Environment is active in a project. Activating another Environment atomically removes packages unique to the old Environment, preserves identical shared packages, activates the new closure, and rolls back if the transition fails.
 
-Create a paired task with an objective verifier:
+## Mental model
+
+```text
+Package
+  = versioned distribution unit containing Skills, MCP, hooks, or scripts
+
+Meta-Skill
+  = ordinary Skill with a natural-language method and Package dependencies
+
+Environment
+  = root Packages + recursive dependency closure + targets + bindings + lock
+```
+
+Harness Conda does not decide what phase a task is in, advance workflow steps, require handoffs, or record outcomes. The user and Agent define and execute the method; Harness Conda installs, isolates, locks, activates, migrates, and shares it.
+
+## Environments
 
 ```bash
-harness eval init regression-fix --profile experiment --verify-binding test
-# Replace the prompt placeholder and commit the task fixture.
-harness eval plan regression-fix
-harness eval run regression-fix --repeat 3 --execute
+harness env create cpp-performance --target codex
+harness env list
+harness env show cpp-performance
+harness env remove cpp-performance
 ```
 
-Each repetition runs a baseline and profile arm in separate worktrees at the same Git commit, starts a fresh non-persistent Agent session, and applies the same verifier. `run` is plan-only without `--execute`. Result metadata and failure stage stay under Git-excluded `.harness/local/evals/`; prompts and Agent output are not persisted or uploaded. Add `--keep-failures` only when complete failed worktrees are needed for local diagnosis. A tie or loss is a reason to revise or remove the Harness, not to reinterpret the metric.
+Environment state is project-local:
 
-See [the paired evaluation protocol](docs/evals.md). The checked-in `research-audit-smoke` scenario validates the mechanism and report structure only; it is deliberately not presented as proof of improved research quality.
+```text
+.harness/
+├── environments/
+│   └── cpp-performance.yaml
+├── locks/
+│   └── cpp-performance.lock.json
+└── state.json
+```
 
-## What a switch guarantees
+The YAML recipe records user-selected root packages, Agent targets, and project bindings. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `state.json` is machine-local activation ownership state.
 
-| Concern | Behavior |
-| --- | --- |
-| Shared methods | `base` packages remain active across every profile |
-| Phase isolation | Packages outside the selected profile are removed; Harness-created empty config files do not accumulate |
-| Agent routing | Managed blocks in `AGENTS.md` and `CLAUDE.md` name the active phase, bindings, packages, and handoff |
-| Cross-Agent config | Skills, MCP servers, and lifecycle hooks map to each target's official project format |
-| Failure safety | Conflicts stop the switch; completed changes roll back if a later activation fails |
-| User edits | Modified managed resources block switching until reviewed; `--repair` is explicit |
-| Phase transfer | Markdown handoffs preserve evidence, hypotheses, failure cases, inputs, and acceptance criteria |
-| Result evidence | Explicit outcomes connect success, failure, or uncertainty to the active profile and an optional artifact |
-| Privacy | Automatic events and private notes stay in Git-excluded `.harness/local`; the CLI uploads nothing |
+## Packages and meta-skills
 
-The project definition is committed at `.harness/project.yaml`:
+Install an atomic capability:
+
+```bash
+harness install -n research builtin:paper-search
+```
+
+Install a complete method:
+
+```bash
+harness install -n research builtin:auto-research
+```
+
+Example meta-skill manifest:
 
 ```yaml
-apiVersion: harness.conda/project-v1
-kind: HarnessProject
+apiVersion: harness.conda/v1
+kind: Harness
 metadata:
-  name: agent-lab
+  name: auto-research
+  version: 1.0.0
+  description: Turn related work into a defensible experiment plan.
 spec:
-  agent: codex
-  targets: [codex, claude]
-  base: [reproducibility-core]
-  profiles:
-    research:
-      description: Find prior work and produce testable hypotheses.
-      packages: [research-workflow]
-      handoff: optional
-    experiment:
-      description: Test hypotheses with reproducible measurements.
-      packages: [experiment-workflow]
-      handoff: required
-    performance:
-      description: Measure a bottleneck and report quantified regressions.
-      packages: [performance-engineering]
-      handoff: optional
-  bindings:
-    build: make release
-    test: make test
-    benchmark: ./scripts/benchmark.sh
-  handoffDirectory: .harness/handoffs
+  platforms: [codex, claude]
+  dependencies:
+    - name: paper-search
+      version: ^1.0.0
+      source: builtin:paper-search
+    - name: idea-gen
+      version: ^1.0.0
+      source: builtin:idea-gen
+    - name: exp-design
+      version: ^1.0.0
+      source: builtin:exp-design
+  entrypoints:
+    - name: research
+      skill: auto-research
+      description: Produce an evidence-backed, falsifiable experiment plan.
+  skills:
+    - name: auto-research
+      path: ./skills/auto-research
 ```
 
-Packages hold reusable methodology. Profiles compose packages for a task phase. Binding requirements let a package name the project commands it needs; bindings connect that methodology to the current repository's actual commands. Handoffs transfer state between phases without carrying an old chat context forward. A missing required binding or handoff blocks the next phase before the active environment changes.
+The `auto-research/SKILL.md` file describes how and when to use the component Skills, including branching, retry, interruption recovery, stopping conditions, and expected outputs. Harness Conda reads only the package graph; the Agent interprets the method.
 
-## Multiple servers
+The four packages above are real built-ins shipped with the source distribution, so the Quick Start runs without a package Registry. Until a Registry exists, other dependencies include an explicit local, built-in, GitHub, HTTPS Git, or SSH Git source. Published packages should use immutable Git tags or revisions.
 
-Use Git sources for portable packages, then commit `.harness/project.yaml` and `.harness/lock.json`:
+## Project bindings
+
+Reusable Skills can require abstract project commands such as `test` or `benchmark`. Bind them per Environment:
 
 ```bash
-harness install gh:owner/research-workflow#v1.0.0 --profile research
-git add .harness/project.yaml .harness/lock.json
-git commit -m "Define Agent workflow environment"
+harness bind -n cpp-performance test "npm test"
+harness bind -n cpp-performance benchmark "./scripts/benchmark.sh"
 ```
 
-A package can also be a meta-skill: an ordinary Skill whose `SKILL.md` describes how several component Skills cooperate to complete an end-to-end task. Package dependencies are installed transitively and locked before the meta-skill, so users can install a complete method or install component Skills separately and ask an Agent to compose a new one:
+A missing required binding blocks activation before the current Environment changes. Harness Conda exposes the binding to the active method but does not decide when to execute it.
+
+## Reproduction
+
+Commit Environment recipes and locks:
 
 ```bash
-harness install ./auto-research
-harness install ./paper-search
+git add .harness/environments .harness/locks
+git commit -m "Define Agent environments"
 ```
 
-Harness Conda resolves and reproduces the capability graph; the Agent interprets the meta-skill's natural-language method. The core does not execute a workflow DAG. See [the package manifest reference](docs/manifest.md#dependencies-and-meta-skills).
-
-On another server:
+On another machine:
 
 ```bash
 git pull
-harness sync
-harness doctor
-harness enter research --agent codex
+harness sync -n research
+harness doctor -n research
+harness activate research
 ```
 
-`sync` restores exact locked commits into the content-addressed cache and rejects source drift. Environment variable names are declared in packages, while secret values stay in the machine environment.
+`sync` restores exact locked package snapshots into the content-addressed cache and rejects source drift. Manifests declare environment-variable names but never credential values.
 
 ## Commands
 
-| Command | Outcome |
+| Command | Purpose |
 | --- | --- |
-| `harness onboard` | Detect the repository, install built-ins, bind commands, and activate research |
-| `harness project init` | Create opinionated research and experiment profiles |
-| `harness install <source> --profile <name>` | Lock a package and add it to one phase |
-| `harness install <source> --base` | Add shared capability to every phase |
-| `harness profile add <profile> <package>` | Compose an installed package into a profile |
-| `harness bind <name> <command...>` | Bind build/test/benchmark behavior to this repository |
-| `harness switch <profile>` | Atomically select a workflow phase |
-| `harness enter <profile>` | Switch and launch a fresh Codex or Claude session |
-| `harness handoff <profile>` | Create a structured artifact for the next phase |
-| `harness outcome <status>` | Record local-only success, failure, or inconclusive evidence |
-| `harness stats` | Summarize local transitions, sessions, handoffs, and outcomes |
-| `harness eval init/plan/run` | Compare baseline and profile on identical commits with an objective verifier |
-| `harness current` | Show the active phase, composition, bindings, and handoff |
-| `harness leave` | Remove the profile environment while preserving handoffs |
-| `harness sync` | Restore locked packages on a new machine |
-| `harness doctor` | Verify project composition, dependencies, integrity, routing, and drift |
-| `harness capture <dir> --from codex` | Export existing Agent resources without literal secrets |
-| `harness init <dir>` | Scaffold a reusable Harness package |
+| `harness env create <name>` | Create an empty named Environment |
+| `harness env list` | List Environments and mark the active one |
+| `harness env show <name>` | Show roots, resolved packages, targets, and bindings |
+| `harness env remove <name>` | Remove an inactive Environment |
+| `harness install -n <env> <source>` | Install a Package and recursive dependencies |
+| `harness bind -n <env> <name> <command...>` | Configure a project command for Skills |
+| `harness activate <env>` | Atomically activate or switch an Environment |
+| `harness deactivate` | Deactivate the complete active Environment |
+| `harness current` | Show the active Environment and package closure |
+| `harness sync [-n <env>]` | Restore exact locked packages |
+| `harness doctor [-n <env>]` | Verify lock, requirements, bindings, and activation |
+| `harness init [directory]` | Scaffold a Package or meta-skill |
+| `harness inspect <source>` | Inspect a Package manifest without installing it |
+| `harness capture <directory>` | Capture Agent resources as a Package |
 
-Low-level `activate`, `deactivate`, `use`, `list`, and `inspect` remain available for package development and compatibility.
+## Removed workflow commands
 
-## Why not just use plugins?
+Version 0.6 removes `onboard`, `project`, `profile`, `switch`, `leave`, `enter`, `handoff`, `outcome`, `stats`, `use`, and `eval` from the core CLI. These commands encoded a research-specific phase model that does not belong in a neutral environment manager.
 
-You should use native plugins. [Codex Plugins](https://developers.openai.com/codex/plugins/) and [Claude Code Plugins](https://code.claude.com/docs/en/discover-plugins) already distribute Skills, MCP servers, hooks, and connectors through marketplaces. Packaging and discovery are platform capabilities, not this product's moat.
+Migration mapping:
 
-`harness-conda` operates one layer above them: it selects the task phase, composes shared and phase-specific capabilities, binds generic workflows to this repository, starts a clean session, transfers evidence to the next phase, and measures whether the workflow produced a useful result. Its current portable package adapter bridges both Agents; native plugin dependencies are a future interoperability path, not a reason to rebuild their marketplaces.
-
-## Package format
-
-Every package contains a strict `harness.yaml` and one or more Agent Skills. It may also declare MCP servers, lifecycle hooks, required commands, and environment variable names. Sources may be built-ins, local directories, `gh:owner/repo#ref`, HTTPS Git URLs, or SSH Git URLs.
-
-See [the package manifest reference](docs/manifest.md) and the included [research](examples/research-workflow), [experiment](examples/experiment-workflow), [reproducibility](examples/reproducibility-core), and [performance engineering](examples/performance-engineering) packages.
-
-## Safety and compatibility
-
-Activation refuses conflicting Skills and MCP entries. Deactivation removes only unchanged resources owned by the package. `capture` refuses literal MCP environment or header values, and Skill symlinks are rejected. Project-scoped MCP servers still use the target Agent's trust flow. Automatic workflow evidence contains metadata only; outcome notes are explicit, local, and never uploaded.
-
-The adapters follow the official [Codex Skills](https://developers.openai.com/codex/skills/), [Codex MCP](https://developers.openai.com/codex/mcp/), [Codex Hooks](https://developers.openai.com/codex/hooks/), [Claude Code Skills](https://code.claude.com/docs/en/skills), [Claude Code MCP](https://code.claude.com/docs/en/mcp), and [Claude Code Hooks](https://code.claude.com/docs/en/hooks) contracts. Read [SECURITY.md](SECURITY.md) before activating third-party packages.
-
-## Development
-
-```bash
-npm run check
-npm test
-bash scripts/demo-workflow.sh
+```text
+profile add / install --profile  -> install -n <environment>
+switch <profile>                 -> activate <environment>
+leave                            -> deactivate
+project init / onboard           -> env create
+enter <profile>                  -> activate <environment>, then launch the Agent
 ```
 
-The [Chinese product brief](docs/product-brief.zh-CN.md) covers positioning and commercialization. The [user journeys](docs/user-journeys.zh-CN.md) define the workflows this product must earn the right to serve.
+Handoffs, outcome tracking, workflow evaluation, and other execution policies can be distributed as optional Skills or separate tools.
+
+If a project still has an active v0.5 profile or low-level package activation, run the new `harness deactivate` once before creating or activating Environments. This cleanup path is retained for migration even though the old commands are no longer exposed.
+
+## Safety
+
+- Package cache entries are content-addressed and integrity-checked.
+- Environment lock updates validate the entire dependency graph before writing.
+- Activation refuses conflicting Skills and MCP entries.
+- Environment switching checks managed-file drift before changing active state.
+- Deactivation removes only unchanged resources owned by the Environment.
+- Git and built-in packages cannot use local dependency paths to read installation-machine files.
+- Captured MCP configuration contains environment-variable names, never literal secret values.
+
+See [the package manifest reference](docs/manifest.md) for the complete package schema.

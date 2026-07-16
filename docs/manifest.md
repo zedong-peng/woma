@@ -8,17 +8,17 @@ kind: Harness
 metadata:
   name: repository-research
   version: 0.1.0
-  description: Search and analyze repositories with a repeatable evidence workflow.
+  description: Search and analyze repositories with a repeatable evidence method.
   tags: [research]
 spec:
   platforms: [codex, claude]
   dependencies:
     - name: paper-search
-      version: ^1.2.0
-      source: gh:example/paper-search#v1.2.0
+      version: ^1.0.0
+      source: builtin:paper-search
     - name: idea-gen
-      version: ^2.0.0
-      source: gh:example/idea-gen#v2.0.0
+      version: ^1.0.0
+      source: builtin:idea-gen
   entrypoints:
     - name: research
       skill: repository-research
@@ -31,7 +31,7 @@ spec:
     commands: [git, node]
     bindings:
       - name: test
-        description: Project correctness command used by this workflow.
+        description: Project correctness command used by this method.
       - name: benchmark
         description: Repeatable project benchmark command.
   skills:
@@ -99,6 +99,6 @@ mcpServers:
 
 ## Requirements
 
-`commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values. `bindings` declares project-level commands that the reusable workflow needs without hard-coding one repository's build system.
+`commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values. `bindings` declares project-level commands that the reusable method needs without hard-coding one repository's build system.
 
-A required binding blocks profile activation before any files change. Configure it in `.harness/project.yaml` or with `harness bind <name> <command...>`. Set `optional: true` only when the workflow has a valid degraded path. `doctor` reports missing inactive-profile bindings as warnings and missing active-profile bindings as failures.
+A required binding blocks environment activation before any files change. Configure it with `harness bind -n <environment> <name> <command...>`. Set `optional: true` only when the Skill has a valid degraded path. `harness doctor -n <environment>` reports missing required bindings as failures.

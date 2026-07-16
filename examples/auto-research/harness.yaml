@@ -1,0 +1,26 @@
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: auto-research
+  version: 1.0.0
+  description: Compose evidence search, idea generation, and experiment design into a reusable research loop.
+  tags: [research, meta-skill]
+spec:
+  platforms: [codex, claude]
+  dependencies:
+    - name: paper-search
+      version: ^1.0.0
+      source: builtin:paper-search
+    - name: idea-gen
+      version: ^1.0.0
+      source: builtin:idea-gen
+    - name: exp-design
+      version: ^1.0.0
+      source: builtin:exp-design
+  entrypoints:
+    - name: research
+      skill: auto-research
+      description: Produce an evidence-backed idea and executable experiment specification.
+  skills:
+    - name: auto-research
+      path: ./skills/auto-research

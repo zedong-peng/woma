@@ -1,7 +1,7 @@
 {
   "name": "harness-conda",
-  "version": "0.5.0",
-  "description": "Switch reproducible workflow profiles across Codex and Claude Code.",
+  "version": "0.6.0",
+  "description": "Create, reproduce, and switch isolated Agent environments.",
   "type": "module",
   "bin": {
     "harness": "dist/src/cli.js",
@@ -12,19 +12,21 @@
     "docs",
     "examples/performance-engineering",
     "examples/reproducibility-core",
-    "examples/research-workflow",
-    "examples/experiment-workflow",
+    "examples/paper-search",
+    "examples/idea-gen",
+    "examples/exp-design",
+    "examples/auto-research",
     "scripts/benchmark-switch.mjs",
     "CHANGELOG.md",
     "README.md",
     "SECURITY.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean --silent && tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
     "benchmark": "npm run build --silent && node scripts/benchmark-switch.mjs",
-    "demo": "bash scripts/demo-workflow.sh",
     "start": "node dist/src/cli.js"
   },
   "engines": {
@@ -37,9 +39,9 @@
     "codex",
     "claude-code",
     "harness",
-    "workflow",
-    "research",
-    "evaluation"
+    "environment",
+    "package-manager",
+    "reproducibility"
   ],
   "license": "UNLICENSED",
   "repository": {

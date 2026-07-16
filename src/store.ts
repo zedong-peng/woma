@@ -2,7 +2,7 @@ import path from "node:path";
 import { satisfies } from "semver";
 import { readJson, writeJsonAtomic } from "./fs.js";
 import { loadCachedPackage } from "./package.js";
-import type { ActivationRecord, ActiveProfileState, LockFile, LockedPackage, StateFile } from "./types.js";
+import type { ActivationRecord, ActiveEnvironmentState, LockFile, LockedPackage, StateFile } from "./types.js";
 
 function emptyLock(): LockFile {
   return { lockfileVersion: 1, packages: {} };
@@ -96,14 +96,20 @@ export async function deleteActivation(projectRoot: string, packageName: string)
   await writeJsonAtomic(statePath(projectRoot), state);
 }
 
-export async function putActiveProfile(projectRoot: string, profile: ActiveProfileState): Promise<void> {
-  const state = await readState(projectRoot);
-  state.profile = profile;
-  await writeJsonAtomic(statePath(projectRoot), state);
-}
-
 export async function deleteActiveProfile(projectRoot: string): Promise<void> {
   const state = await readState(projectRoot);
   delete state.profile;
+  await writeJsonAtomic(statePath(projectRoot), state);
+}
+
+export async function putActiveEnvironment(projectRoot: string, environment: ActiveEnvironmentState): Promise<void> {
+  const state = await readState(projectRoot);
+  state.activeEnvironment = environment;
+  await writeJsonAtomic(statePath(projectRoot), state);
+}
+
+export async function deleteActiveEnvironment(projectRoot: string): Promise<void> {
+  const state = await readState(projectRoot);
+  delete state.activeEnvironment;
   await writeJsonAtomic(statePath(projectRoot), state);
 }
