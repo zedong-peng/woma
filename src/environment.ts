@@ -17,6 +17,26 @@ const environmentName = z
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
 const platform = z.enum(["codex", "claude"]);
 
+const lockedPackageSchema = z
+  .object({
+    name: environmentName,
+    version: z.string().min(1),
+    source: z.string().min(1),
+    resolved: z.string().min(1),
+    integrity: z.string().min(1),
+    cacheKey: z.string().min(1),
+    dependencies: z.array(environmentName),
+    installedAt: z.string().min(1),
+  })
+  .strict();
+
+const lockSchema = z
+  .object({
+    lockfileVersion: z.literal(1),
+    packages: z.record(environmentName, lockedPackageSchema),
+  })
+  .strict();
+
 const environmentSchema = z
   .object({
     apiVersion: z.literal("harness.conda/environment-v1"),
@@ -124,16 +144,22 @@ function emptyLock(): LockFile {
 export async function readEnvironmentLock(projectRoot: string, name: string): Promise<LockFile> {
   const filePath = environmentLockPath(projectRoot, name);
   if (!(await pathExists(filePath))) return emptyLock();
-  let lock: LockFile;
+  let document: unknown;
   try {
-    lock = JSON.parse(await readFile(filePath, "utf8")) as LockFile;
+    document = JSON.parse(await readFile(filePath, "utf8"));
   } catch (error) {
     throw new Error(`Cannot parse ${filePath}: ${(error as Error).message}`);
   }
-  if (lock.lockfileVersion !== 1 || !lock.packages || typeof lock.packages !== "object") {
-    throw new Error(`Unsupported lock file at ${filePath}`);
+  const parsed = lockSchema.safeParse(document);
+  if (!parsed.success) {
+    throw new Error(`${filePath}: invalid environment lock\n${formatIssues(parsed.error)}`);
   }
-  return lock;
+  for (const [packageName, locked] of Object.entries(parsed.data.packages)) {
+    if (packageName !== locked.name) {
+      throw new Error(`${filePath}: lock key ${packageName} does not match package identity ${locked.name}`);
+    }
+  }
+  return parsed.data;
 }
 
 export async function createEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<HarnessEnvironment> {
@@ -175,7 +201,8 @@ export async function removeEnvironment(projectRoot: string, name: string): Prom
 }
 
 async function validateLock(lock: LockFile): Promise<void> {
-  for (const locked of Object.values(lock.packages)) {
+  for (const [packageName, locked] of Object.entries(lock.packages)) {
+    if (packageName !== locked.name) throw new Error(`Lock key ${packageName} does not match package identity ${locked.name}`);
     const pkg = await loadCachedPackage(locked);
     const declared = pkg.manifest.spec.dependencies.map((dependency) => dependency.name);
     if (JSON.stringify(locked.dependencies ?? []) !== JSON.stringify(declared)) {
@@ -189,6 +216,28 @@ async function validateLock(lock: LockFile): Promise<void> {
       }
     }
   }
+}
+
+function validateEnvironmentLockGraph(environment: HarnessEnvironment, lock: LockFile): string[] {
+  const rootNames = environment.spec.roots.map((root) => root.name);
+  const names = dependencyOrder(lock, rootNames);
+  for (const root of environment.spec.roots) {
+    const locked = lock.packages[root.name];
+    if (!locked) throw new Error(`Root ${root.name} is missing from the environment lock`);
+    if (locked.source !== root.source) {
+      throw new Error(`Root ${root.name} source ${root.source} does not match lock source ${locked.source}`);
+    }
+  }
+  const reachable = new Set(names);
+  const unreachable = Object.keys(lock.packages).filter((name) => !reachable.has(name));
+  if (unreachable.length > 0) throw new Error(`Environment lock contains packages unreachable from its roots: ${unreachable.join(", ")}`);
+  return names;
+}
+
+async function validateEnvironmentLock(environment: HarnessEnvironment, lock: LockFile): Promise<string[]> {
+  const names = validateEnvironmentLockGraph(environment, lock);
+  await validateLock(lock);
+  return names;
 }
 
 export function dependencyOrder(lock: LockFile, roots: string[]): string[] {
@@ -230,6 +279,7 @@ export async function installIntoEnvironment(
   if (state.activeEnvironment?.name === environmentNameValue) {
     throw new Error(`Environment ${environmentNameValue} is active; run harness deactivate before installing packages`);
   }
+  validateEnvironmentLockGraph(environment, currentLock);
   const installation = await installPackageTree(source, cwd);
   const next: LockFile = { lockfileVersion: 1, packages: { ...currentLock.packages } };
   for (const pkg of installation.packages) next.packages[pkg.lock.name] = pkg.lock;
@@ -239,8 +289,8 @@ export async function installIntoEnvironment(
       )
     : [...environment.spec.roots, { name: installation.root.lock.name, source: installation.root.lock.source }];
   const pruned = reachableLock(next, roots.map((root) => root.name));
-  await validateLock(pruned);
   const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
+  await validateEnvironmentLock(updated, pruned);
   await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), pruned);
   try {
     await writeEnvironment(projectRoot, updated);
@@ -270,8 +320,7 @@ async function loadOrderedPackages(projectRoot: string, name: string): Promise<{
 }> {
   const environment = await readEnvironment(projectRoot, name);
   const lock = await readEnvironmentLock(projectRoot, name);
-  await validateLock(lock);
-  const names = dependencyOrder(lock, environment.spec.roots.map((root) => root.name));
+  const names = await validateEnvironmentLock(environment, lock);
   const packages = new Map<string, InstalledPackage>();
   for (const packageName of names) packages.set(packageName, await loadCachedPackage(lock.packages[packageName]!));
   for (const pkg of packages.values()) {
@@ -445,9 +494,10 @@ export async function deactivateEnvironment(projectRoot: string): Promise<Enviro
 }
 
 export async function syncEnvironment(projectRoot: string, name: string): Promise<LockedPackage[]> {
-  await readEnvironment(projectRoot, name);
+  const environment = await readEnvironment(projectRoot, name);
   const lock = await readEnvironmentLock(projectRoot, name);
-  for (const pkg of Object.values(lock.packages)) await syncLockedPackage(pkg);
+  const names = validateEnvironmentLockGraph(environment, lock);
+  for (const packageName of names) await syncLockedPackage(lock.packages[packageName]!);
   await validateLock(lock);
   return Object.values(lock.packages);
 }
@@ -473,21 +523,37 @@ async function findCommand(command: string): Promise<boolean> {
 export async function doctorEnvironment(projectRoot: string, name: string): Promise<EnvironmentCheck[]> {
   const checks: EnvironmentCheck[] = [];
   const environment = await readEnvironment(projectRoot, name);
-  const lock = await readEnvironmentLock(projectRoot, name);
+  let lock: LockFile;
+  let names: string[];
   try {
-    await validateLock(lock);
+    lock = await readEnvironmentLock(projectRoot, name);
+    names = await validateEnvironmentLock(environment, lock);
     checks.push({ status: "ok", label: "lock", detail: `${Object.keys(lock.packages).length} packages` });
   } catch (error) {
     checks.push({ status: "fail", label: "lock", detail: (error as Error).message });
     return checks;
   }
   const state = await readState(projectRoot);
-  const names = dependencyOrder(lock, environment.spec.roots.map((root) => root.name));
   checks.push({ status: "ok", label: "roots", detail: environment.spec.roots.map((root) => root.name).join(", ") || "none" });
   for (const packageName of names) {
     const pkg = await loadCachedPackage(lock.packages[packageName]!);
     checks.push({ status: "ok", label: `package:${packageName}`, detail: pkg.lock.version });
-    for (const command of pkg.manifest.spec.requirements.commands) {
+    const unsupportedTargets = environment.spec.targets.filter((target) => !pkg.manifest.spec.platforms.includes(target));
+    checks.push({
+      status: unsupportedTargets.length === 0 ? "ok" : "fail",
+      label: `platforms:${packageName}`,
+      detail: unsupportedTargets.length === 0
+        ? environment.spec.targets.join(", ")
+        : `does not support ${unsupportedTargets.join(", ")}`,
+    });
+    const commands = new Set(pkg.manifest.spec.requirements.commands);
+    for (const server of pkg.manifest.spec.mcpServers) {
+      const appliesToEnvironment = environment.spec.targets.some(
+        (target) => !server.platforms || server.platforms.includes(target),
+      );
+      if (server.transport === "stdio" && appliesToEnvironment) commands.add(server.command);
+    }
+    for (const command of commands) {
       const found = await findCommand(command);
       checks.push({ status: found ? "ok" : "fail", label: `command:${command}`, detail: found ? "found" : "not found on PATH" });
     }
@@ -511,12 +577,40 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
   const active = state.activeEnvironment?.name === name;
   checks.push({ status: active ? "ok" : "warn", label: "activation", detail: active ? environment.spec.targets.join(", ") : "inactive" });
   if (active) {
+    const activeEnvironment = state.activeEnvironment!;
+    const closureMatches = JSON.stringify(activeEnvironment.packages) === JSON.stringify(names);
+    checks.push({
+      status: closureMatches ? "ok" : "fail",
+      label: "active-environment",
+      detail: closureMatches
+        ? `${name}: ${names.join(", ") || "no packages"}`
+        : `recorded packages ${activeEnvironment.packages.join(", ") || "none"} do not match lock closure ${names.join(", ") || "none"}`,
+    });
+    const targetsMatch = JSON.stringify(activeEnvironment.targets) === JSON.stringify(environment.spec.targets);
+    checks.push({
+      status: targetsMatch ? "ok" : "fail",
+      label: "active-targets",
+      detail: targetsMatch
+        ? environment.spec.targets.join(", ")
+        : `recorded targets ${activeEnvironment.targets.join(", ")} do not match recipe ${environment.spec.targets.join(", ")}`,
+    });
     for (const packageName of names) {
       const activation = state.activations[packageName];
+      const locked = lock.packages[packageName]!;
+      const identityMatches =
+        activation !== undefined &&
+        activation.packageVersion === locked.version &&
+        activation.packageIntegrity === locked.integrity &&
+        activation.packageCacheKey === locked.cacheKey &&
+        JSON.stringify(activation.targets) === JSON.stringify(environment.spec.targets);
       checks.push({
-        status: activation?.packageCacheKey === lock.packages[packageName]!.cacheKey ? "ok" : "fail",
+        status: identityMatches ? "ok" : "fail",
         label: `active:${packageName}`,
-        detail: activation ? activation.targets.join(", ") : "activation record missing",
+        detail: !activation
+          ? "activation record missing"
+          : identityMatches
+            ? activation.targets.join(", ")
+            : `activation ${activation.packageVersion}/${activation.packageCacheKey} [${activation.targets.join(", ")}] does not match lock ${locked.version}/${locked.cacheKey} [${environment.spec.targets.join(", ")}]`,
       });
       for (const artifact of activation?.artifacts ?? []) {
         if (!artifact.managed || artifact.kind !== "directory") continue;
@@ -528,6 +622,11 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
         } else {
           checks.push({ status: "ok", label: artifact.path, detail: "managed Skill matches activation" });
         }
+      }
+    }
+    for (const packageName of Object.keys(state.activations)) {
+      if (!names.includes(packageName)) {
+        checks.push({ status: "fail", label: `foreign:${packageName}`, detail: "active outside the selected environment" });
       }
     }
   }
