@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { satisfies } from "semver";
 import { hashDirectory, pathExists } from "./fs.js";
 import { projectConfigPath, readProjectConfig } from "./project.js";
 import { readLock, readState } from "./store.js";
@@ -42,6 +43,23 @@ export async function doctorPackage(
   const checks: Check[] = [];
   checks.push({ status: "ok", label: "manifest", detail: `${pkg.manifest.metadata.name}@${pkg.manifest.metadata.version}` });
   checks.push({ status: "ok", label: "integrity", detail: pkg.lock.integrity });
+
+  const lock = await readLock(projectRoot);
+  const declaredDependencies = pkg.manifest.spec.dependencies.map((dependency) => dependency.name);
+  checks.push({
+    status: JSON.stringify(pkg.lock.dependencies ?? []) === JSON.stringify(declaredDependencies) ? "ok" : "fail",
+    label: "dependency-edges",
+    detail: declaredDependencies.join(", ") || "none",
+  });
+  for (const dependency of pkg.manifest.spec.dependencies) {
+    const locked = lock.packages[dependency.name];
+    const compatible = locked !== undefined && satisfies(locked.version, dependency.version, { includePrerelease: true });
+    checks.push({
+      status: compatible ? "ok" : "fail",
+      label: `dependency:${dependency.name}`,
+      detail: !locked ? "missing from lock" : compatible ? `${locked.version} satisfies ${dependency.version}` : `${locked.version} does not satisfy ${dependency.version}`,
+    });
+  }
 
   const commands = new Set(pkg.manifest.spec.requirements.commands);
   for (const server of pkg.manifest.spec.mcpServers) {

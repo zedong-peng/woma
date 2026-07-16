@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { validRange } from "semver";
 import type { HarnessManifest } from "./types.js";
 
 const packageName = z
@@ -11,6 +12,7 @@ const packageName = z
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
 const envName = z.string().regex(/^[A-Z_][A-Z0-9_]*$/, "must be an environment variable name");
 const platform = z.enum(["codex", "claude"]);
+const versionRange = z.string().min(1).refine((value) => validRange(value) !== null, "must be a valid semver range");
 
 const stdioMcp = z
   .object({
@@ -48,6 +50,28 @@ const manifestSchema = z
     spec: z
       .object({
         platforms: z.array(platform).min(1).default(["codex", "claude"]),
+        dependencies: z
+          .array(
+            z
+              .object({
+                name: packageName,
+                version: versionRange,
+                source: z.string().min(1),
+              })
+              .strict(),
+          )
+          .default([]),
+        entrypoints: z
+          .array(
+            z
+              .object({
+                name: packageName,
+                skill: packageName,
+                description: z.string().min(1).max(300),
+              })
+              .strict(),
+          )
+          .default([]),
         requirements: z
           .object({
             env: z

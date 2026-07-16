@@ -4,15 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
+import { satisfies } from "semver";
 import { assertInside, harnessHome, hashDirectory, pathExists } from "./fs.js";
 import { loadManifest } from "./schema.js";
-import type { HarnessManifest, InstalledPackage, LockedPackage } from "./types.js";
+import type { HarnessManifest, InstalledPackage, LockedPackage, PackageDependency } from "./types.js";
 
 interface MaterializedSource {
   root: string;
   source: string;
   resolved: string;
   cleanup?: () => Promise<void>;
+}
+
+export interface PackageInstallPlan {
+  root: InstalledPackage;
+  packages: InstalledPackage[];
 }
 
 const builtinNames = new Set(["reproducibility-core", "research-workflow", "experiment-workflow", "performance-engineering"]);
@@ -147,6 +153,22 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
     bindingNames.add(requirement.name);
   }
 
+  const dependencyNames = new Set<string>();
+  for (const dependency of manifest.spec.dependencies) {
+    if (dependencyNames.has(dependency.name)) throw new Error(`Duplicate package dependency: ${dependency.name}`);
+    dependencyNames.add(dependency.name);
+  }
+
+  const skillNames = new Set(manifest.spec.skills.map((skill) => skill.name));
+  const entrypointNames = new Set<string>();
+  for (const entrypoint of manifest.spec.entrypoints) {
+    if (entrypointNames.has(entrypoint.name)) throw new Error(`Duplicate entrypoint name: ${entrypoint.name}`);
+    entrypointNames.add(entrypoint.name);
+    if (!skillNames.has(entrypoint.skill)) {
+      throw new Error(`Entrypoint ${entrypoint.name} references unknown skill ${entrypoint.skill}`);
+    }
+  }
+
   const declaredEnv = new Set(manifest.spec.requirements.env.map((item) => item.name));
   for (const server of manifest.spec.mcpServers) {
     if (names.has(`mcp:${server.name}`)) throw new Error(`Duplicate MCP server name: ${server.name}`);
@@ -211,32 +233,106 @@ async function populateCache(sourceRoot: string, cacheRoot: string): Promise<voi
   }
 }
 
+async function cacheMaterializedPackage(materialized: MaterializedSource): Promise<InstalledPackage> {
+  const manifest = await loadManifest(materialized.root);
+  await validatePackage(materialized.root, manifest);
+  const integrity = await hashDirectory(materialized.root);
+  const resolved = materialized.resolved === "local" || materialized.resolved === "builtin" ? integrity : materialized.resolved;
+  const key = cacheKey(materialized.source, resolved, integrity);
+  const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
+  if (!(await pathExists(cacheRoot))) await populateCache(materialized.root, cacheRoot);
+  await verifyCache(cacheRoot, manifest, integrity);
+  const lock: LockedPackage = {
+    name: manifest.metadata.name,
+    version: manifest.metadata.version,
+    source: materialized.source,
+    resolved,
+    integrity,
+    cacheKey: key,
+    dependencies: manifest.spec.dependencies.map((dependency) => dependency.name),
+    installedAt: new Date().toISOString(),
+  };
+  return { manifest, root: cacheRoot, lock };
+}
+
 export async function installPackageSource(source: string, cwd = process.cwd()): Promise<InstalledPackage> {
   const materialized = await materializeSource(source, cwd);
   try {
-    const manifest = await loadManifest(materialized.root);
-    await validatePackage(materialized.root, manifest);
-    const integrity = await hashDirectory(materialized.root);
-    const resolved = materialized.resolved === "local" || materialized.resolved === "builtin" ? integrity : materialized.resolved;
-    const key = cacheKey(materialized.source, resolved, integrity);
-    const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
-    if (!(await pathExists(cacheRoot))) {
-      await populateCache(materialized.root, cacheRoot);
-    }
-    await verifyCache(cacheRoot, manifest, integrity);
-    const lock: LockedPackage = {
-      name: manifest.metadata.name,
-      version: manifest.metadata.version,
-      source: materialized.source,
-      resolved,
-      integrity,
-      cacheKey: key,
-      installedAt: new Date().toISOString(),
-    };
-    return { manifest, root: cacheRoot, lock };
+    return await cacheMaterializedPackage(materialized);
   } finally {
     await materialized.cleanup?.();
   }
+}
+
+function assertDependency(dependency: PackageDependency, pkg: InstalledPackage): void {
+  if (pkg.manifest.metadata.name !== dependency.name) {
+    throw new Error(
+      `Dependency ${dependency.name} resolved to package ${pkg.manifest.metadata.name} from ${dependency.source}`,
+    );
+  }
+  if (!satisfies(pkg.manifest.metadata.version, dependency.version, { includePrerelease: true })) {
+    throw new Error(
+      `Dependency ${dependency.name} requires ${dependency.version}, but ${dependency.source} resolved to ${pkg.manifest.metadata.version}`,
+    );
+  }
+}
+
+export async function installPackageTree(source: string, cwd = process.cwd()): Promise<PackageInstallPlan> {
+  const resolved = new Map<string, InstalledPackage>();
+  const visiting: string[] = [];
+  const ordered: InstalledPackage[] = [];
+
+  async function visit(candidateSource: string, candidateCwd: string, dependency?: PackageDependency): Promise<InstalledPackage> {
+    const materialized = await materializeSource(candidateSource, candidateCwd);
+    try {
+      const pkg = await cacheMaterializedPackage(materialized);
+      if (dependency) assertDependency(dependency, pkg);
+
+      const name = pkg.manifest.metadata.name;
+      const cycleAt = visiting.indexOf(name);
+      if (cycleAt !== -1) {
+        throw new Error(`Package dependency cycle: ${[...visiting.slice(cycleAt), name].join(" -> ")}`);
+      }
+
+      const existing = resolved.get(name);
+      if (existing) {
+        const sameResolution =
+          existing.lock.version === pkg.lock.version &&
+          existing.lock.source === pkg.lock.source &&
+          existing.lock.resolved === pkg.lock.resolved &&
+          existing.lock.integrity === pkg.lock.integrity;
+        if (!sameResolution) {
+          throw new Error(
+            `Conflicting resolutions for ${name}: ${existing.lock.source}@${existing.lock.version} and ${pkg.lock.source}@${pkg.lock.version}`,
+          );
+        }
+        return existing;
+      }
+
+      visiting.push(name);
+      try {
+        for (const child of pkg.manifest.spec.dependencies) {
+          const childIsPortable = child.source.startsWith("builtin:") || normalizeGitSource(child.source) !== undefined;
+          if (!materialized.source.startsWith("file:") && !childIsPortable) {
+            throw new Error(
+              `Package ${name} from ${materialized.source} cannot use local dependency source ${child.source}; use a Git or built-in source`,
+            );
+          }
+          await visit(child.source, materialized.root, child);
+        }
+      } finally {
+        visiting.pop();
+      }
+      resolved.set(name, pkg);
+      ordered.push(pkg);
+      return pkg;
+    } finally {
+      await materialized.cleanup?.();
+    }
+  }
+
+  const root = await visit(source, cwd);
+  return { root, packages: ordered };
 }
 
 export async function loadCachedPackage(lock: LockedPackage): Promise<InstalledPackage> {

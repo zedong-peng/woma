@@ -112,6 +112,15 @@ git add .harness/project.yaml .harness/lock.json
 git commit -m "Define Agent workflow environment"
 ```
 
+A package can also be a meta-skill: an ordinary Skill whose `SKILL.md` describes how several component Skills cooperate to complete an end-to-end task. Package dependencies are installed transitively and locked before the meta-skill, so users can install a complete method or install component Skills separately and ask an Agent to compose a new one:
+
+```bash
+harness install ./auto-research
+harness install ./paper-search
+```
+
+Harness Conda resolves and reproduces the capability graph; the Agent interprets the meta-skill's natural-language method. The core does not execute a workflow DAG. See [the package manifest reference](docs/manifest.md#dependencies-and-meta-skills).
+
 On another server:
 
 ```bash

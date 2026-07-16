@@ -199,6 +199,8 @@ export async function captureHarness(options: {
     },
     spec: {
       platforms: [options.platform],
+      dependencies: [],
+      entrypoints: [],
       requirements: {
         env: [...envNames].sort().map((env) => ({ name: env, description: "Required by a captured MCP server.", optional: false })),
         commands: [],

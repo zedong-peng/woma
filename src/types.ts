@@ -17,6 +17,18 @@ export interface SkillSpec {
   path: string;
 }
 
+export interface PackageDependency {
+  name: string;
+  version: string;
+  source: string;
+}
+
+export interface SkillEntrypoint {
+  name: string;
+  skill: string;
+  description: string;
+}
+
 export interface StdioMcpServer {
   name: string;
   transport: "stdio";
@@ -60,6 +72,8 @@ export interface HarnessManifest {
       commands: string[];
       bindings: BindingRequirement[];
     };
+    dependencies: PackageDependency[];
+    entrypoints: SkillEntrypoint[];
     skills: SkillSpec[];
     mcpServers: McpServer[];
     hooks: HookSpec[];
@@ -73,6 +87,7 @@ export interface LockedPackage {
   resolved: string;
   integrity: string;
   cacheKey: string;
+  dependencies: string[];
   installedAt: string;
 }
 
