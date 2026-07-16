@@ -1,6 +1,6 @@
 ---
 name: reproducibility-core
-description: Preserves reproducible evidence, exact commands, environment facts, and failure cases across research, experiment, debugging, and reporting phases. Use in every technical workflow that produces a claim or decision.
+description: Preserves reproducible evidence, exact commands, environment facts, and failure cases across research, experiments, debugging, and reporting. Use in every technical method that produces a claim or decision.
 ---
 
 # Reproducibility core
@@ -12,6 +12,6 @@ For every material claim, retain enough evidence for another person or Agent ses
 3. Separate observations from interpretations and decisions.
 4. Record failed commands, rejected hypotheses, and negative results; do not silently retry until something works.
 5. Keep credentials and private data out of reports, logs, and committed artifacts.
-6. Before changing workflow phases, write a Harness handoff with evidence, uncertainty, and objective acceptance criteria.
+6. Before transferring work, write a durable artifact with evidence, uncertainty, and objective acceptance criteria.
 
 Prefer artifacts in the repository's declared output directories. Do not claim reproducibility when inputs, dependencies, or environment facts are unknown.

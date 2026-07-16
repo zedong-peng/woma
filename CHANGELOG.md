@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0
+
+- Replaced workflow profiles with named, project-local Agent Environments.
+- Added per-Environment recipes, locks, root packages, targets, and project bindings.
+- Added recursive package dependencies and lightweight meta-skill entrypoints with SemVer conflict detection.
+- Install and lock complete meta-skill dependency closures into a selected Environment.
+- Atomically activate, switch, and deactivate full dependency closures with drift checks and rollback.
+- Added Environment-aware `current`, `sync`, `doctor`, and `bind` behavior.
+- Removed research-specific workflow commands from the core CLI: `onboard`, `project`, `profile`, `switch`, `leave`, `enter`, `handoff`, `outcome`, `stats`, `use`, and `eval`.
+- Reframed built-in packages as optional methods rather than mandatory workflow phases.
+
 ## 0.5.0
 
 - Promoted the performance engineering workflow from a package example to a built-in onboarding profile.

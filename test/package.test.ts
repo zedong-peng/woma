@@ -74,6 +74,23 @@ ${dependencyYaml}  entrypoints:
   return packageRoot;
 }
 
+test("the built-in auto-research meta-skill installs its documented component Skills", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-meta-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const installation = await installPackageTree("builtin:auto-research");
+    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), [
+      "paper-search",
+      "idea-gen",
+      "exp-design",
+      "auto-research",
+    ]);
+    assert.deepEqual(installation.root.lock.dependencies, ["paper-search", "idea-gen", "exp-design"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("installing a meta-skill resolves transitive dependencies in dependency-first order", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
   process.env.HARNESS_HOME = path.join(root, "home");

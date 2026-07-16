@@ -6,11 +6,16 @@ demo_root="$(mktemp -d)"
 trap 'rm -rf "$demo_root"' EXIT
 
 mkdir -p "$demo_root/project"
+export HARNESS_HOME="$demo_root/home"
 cd "$repo_root"
 npm run build >/dev/null
-node dist/src/cli.js --project "$demo_root/project" use ./examples/performance-engineering --target both
-node dist/src/cli.js --project "$demo_root/project" list
-node dist/src/cli.js --project "$demo_root/project" doctor performance-engineering
-node dist/src/cli.js --project "$demo_root/project" deactivate performance-engineering
+node dist/src/cli.js --project "$demo_root/project" env create performance --target both
+node dist/src/cli.js --project "$demo_root/project" install -n performance ./examples/performance-engineering
+node dist/src/cli.js --project "$demo_root/project" bind -n performance test "npm test"
+node dist/src/cli.js --project "$demo_root/project" bind -n performance benchmark "npm run benchmark"
+node dist/src/cli.js --project "$demo_root/project" activate performance
+node dist/src/cli.js --project "$demo_root/project" current
+node dist/src/cli.js --project "$demo_root/project" doctor -n performance
+node dist/src/cli.js --project "$demo_root/project" deactivate
 
 echo "Demo completed in $demo_root/project"

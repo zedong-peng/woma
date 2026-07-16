@@ -1,39 +1,39 @@
 #!/usr/bin/env node
 import { performance } from "node:perf_hooks";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { onboardProject } from "../dist/src/onboard.js";
-import { leaveProfile, switchProfile } from "../dist/src/profile.js";
+import {
+  activateEnvironment,
+  bindEnvironment,
+  createEnvironment,
+  deactivateEnvironment,
+  installIntoEnvironment,
+} from "../dist/src/environment.js";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "harness-switch-benchmark-"));
+const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-benchmark-"));
 const project = path.join(root, "project");
 const previousHome = process.env.HARNESS_HOME;
 process.env.HARNESS_HOME = path.join(root, "home");
 
 try {
   await mkdir(project, { recursive: true });
-  await writeFile(
-    path.join(project, "package.json"),
-    JSON.stringify({ scripts: { test: "true", benchmark: "true" } }),
-    "utf8",
-  );
-  await onboardProject(project, {
-    name: "switch-benchmark",
-    agent: "codex",
-    targets: ["codex"],
-    switchToResearch: false,
-  });
-  await switchProfile(project, "research");
+  await createEnvironment(project, "research", ["codex"]);
+  await createEnvironment(project, "performance", ["codex"]);
+  await installIntoEnvironment(project, "research", "builtin:auto-research");
+  await installIntoEnvironment(project, "performance", "builtin:performance-engineering");
+  await bindEnvironment(project, "performance", "test", "true");
+  await bindEnvironment(project, "performance", "benchmark", "true");
+  await activateEnvironment(project, "research");
 
   const samples = [];
   for (let index = 0; index < 20; index += 1) {
     const target = index % 2 === 0 ? "performance" : "research";
     const started = performance.now();
-    await switchProfile(project, target);
+    await activateEnvironment(project, target);
     samples.push(performance.now() - started);
   }
-  await leaveProfile(project);
+  await deactivateEnvironment(project);
 
   samples.sort((left, right) => left - right);
   const quantile = (fraction) => {
@@ -45,7 +45,7 @@ try {
   console.log(
     JSON.stringify(
       {
-        benchmark: "research-performance-profile-switch",
+        benchmark: "named-environment-switch",
         n: samples.length,
         medianMs: Number(quantile(0.5).toFixed(2)),
         p95Ms: Number(quantile(0.95).toFixed(2)),

@@ -5,7 +5,6 @@ import path from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { activatePackage, deactivatePackage } from "../src/activation.js";
-import { doctorPackage } from "../src/doctor.js";
 import { installPackageSource } from "../src/package.js";
 import { readState } from "../src/store.js";
 
@@ -212,31 +211,6 @@ test("shared skills, MCP servers, and hooks remain until their final owner deact
     await assert.rejects(readFile(path.join(project, ".mcp.json")), /ENOENT/);
     await assert.rejects(readFile(path.join(project, ".claude", "settings.json")), /ENOENT/);
     await assert.rejects(readFile(path.join(project, ".codex", "hooks.json")), /ENOENT/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("doctor fails when the active package identity differs from the lock", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-test-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
-  try {
-    const project = path.join(root, "project");
-    const pkg = await installPackageSource(await fixture(root));
-    await activatePackage(pkg, project, ["codex"]);
-    const mismatched = {
-      ...pkg,
-      lock: { ...pkg.lock, version: "2.0.0", cacheKey: "different-cache" },
-    };
-    const checks = await doctorPackage(mismatched, project);
-    assert.deepEqual(
-      checks.find((check) => check.label === "activation-identity"),
-      {
-        status: "fail",
-        label: "activation-identity",
-        detail: `active 1.0.0/${pkg.lock.cacheKey} does not match lock 2.0.0/different-cache`,
-      },
-    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

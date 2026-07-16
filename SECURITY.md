@@ -12,7 +12,7 @@ Harness packages can install agent instructions, MCP process definitions, and Ag
 - Profile switching writes a clearly marked managed block to `AGENTS.md` and/or `CLAUDE.md`; content outside that block is preserved.
 - `harness enter` launches the selected local `codex` or `claude` executable with inherited terminal access and environment.
 - Handoffs remain local project files and are never uploaded by the CLI. Review them before committing because they may contain private research context.
-- Automatic workflow events store phase names, durations, exit codes, and failure categories only. They do not store prompts, Agent arguments, command output, or error text.
-- `harness outcome --note` is explicit private input. It is stored under Git-excluded `.harness/local` and is never uploaded.
+- Environment recipes and locks contain package metadata, sources, bindings, and integrity values, but never environment-variable values or Agent prompts.
+- Machine-local activation ownership is stored in Git-excluded `.harness/state.json` and is never uploaded by Harness Conda.
 
 Report vulnerabilities privately to the repository owners. Do not include credentials or private Harness packages in an issue.

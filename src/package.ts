@@ -21,7 +21,14 @@ export interface PackageInstallPlan {
   packages: InstalledPackage[];
 }
 
-const builtinNames = new Set(["reproducibility-core", "research-workflow", "experiment-workflow", "performance-engineering"]);
+const builtinNames = new Set([
+  "reproducibility-core",
+  "performance-engineering",
+  "paper-search",
+  "idea-gen",
+  "exp-design",
+  "auto-research",
+]);
 
 function builtinPath(name: string): string {
   if (!builtinNames.has(name)) throw new Error(`Unknown built-in Harness: ${name}`);

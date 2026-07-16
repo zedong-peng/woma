@@ -33,126 +33,144 @@ function runCli(args: string[], cwd: string, home: string): Promise<CommandResul
   });
 }
 
-test("CLI refuses an install that would replace the lock of an active package", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-state-"));
-  const home = path.join(root, "home");
-  const project = path.join(root, "project");
-  const packageRoot = path.join(root, "package");
-  try {
-    await write(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
+async function packageFixture(
+  root: string,
+  name: string,
+  dependencies: { name: string; source: string }[] = [],
+  requirements = "",
+): Promise<string> {
+  const packageRoot = path.join(root, name);
+  const dependencyYaml = dependencies.length === 0
+    ? ""
+    : `  dependencies:\n${dependencies
+        .map((dependency) => `    - name: ${dependency.name}\n      version: ^1.0.0\n      source: ${dependency.source}`)
+        .join("\n")}\n`;
+  await write(
+    path.join(packageRoot, "harness.yaml"),
+    `apiVersion: harness.conda/v1
 kind: Harness
 metadata:
-  name: cli-state
+  name: ${name}
   version: 1.0.0
-  description: CLI state fixture.
+  description: ${name} fixture.
 spec:
   platforms: [codex]
-  skills:
-    - name: cli-state
-      path: ./skills/cli-state
+${dependencyYaml}${requirements}  skills:
+    - name: ${name}
+      path: ./skills/${name}
 `,
-    );
-    await write(path.join(packageRoot, "skills", "cli-state", "SKILL.md"), "---\ndescription: CLI state.\n---\nState.\n");
+  );
+  await write(path.join(packageRoot, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}.\n---\n\n${name}.\n`);
+  return packageRoot;
+}
 
-    const install = await runCli(["--project", project, "install", packageRoot], root, home);
+test("CLI exposes environment commands and removes workflow phase commands", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-help-"));
+  try {
+    const result = await runCli(["--help"], root, path.join(root, "home"));
+    assert.equal(result.code, 0, result.stderr);
+    for (const command of ["env", "install", "activate", "deactivate", "current", "sync", "doctor", "bind"]) {
+      assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
+    }
+    for (const command of ["onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
+      assert.doesNotMatch(result.stdout, new RegExp(`^  ${command}(?: |$)`, "m"));
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI installs and activates a complete meta-skill dependency closure", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-environment-"));
+  const home = path.join(root, "home");
+  const project = path.join(root, "project");
+  try {
+    await packageFixture(root, "paper-search");
+    const meta = await packageFixture(root, "auto-research", [{ name: "paper-search", source: "../paper-search" }]);
+    const create = await runCli(["--project", project, "env", "create", "research", "--target", "codex"], root, home);
+    assert.equal(create.code, 0, create.stderr);
+    assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/state\.json/);
+    const install = await runCli(["--project", project, "install", "-n", "research", meta], root, home);
     assert.equal(install.code, 0, install.stderr);
-    const activate = await runCli(["--project", project, "activate", "cli-state", "--target", "codex"], root, home);
+    assert.match(install.stdout, /dependencies\s+paper-search@1\.0\.0/);
+    const lock = JSON.parse(await readFile(path.join(project, ".harness", "locks", "research.lock.json"), "utf8")) as {
+      packages: Record<string, { cacheKey: string }>;
+    };
+    for (const [name, pkg] of Object.entries(lock.packages)) {
+      await rm(path.join(home, "packages", name, pkg.cacheKey), { recursive: true, force: true });
+    }
+    const sync = await runCli(["--project", project, "sync", "-n", "research"], root, home);
+    assert.equal(sync.code, 0, sync.stderr);
+    assert.match(sync.stdout, /Synced research: 2 packages/);
+    const activate = await runCli(["--project", project, "activate", "research"], root, home);
     assert.equal(activate.code, 0, activate.stderr);
+    assert.match(activate.stdout, /packages\s+paper-search, auto-research/);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "paper-search", "SKILL.md"), "utf8"), /paper-search/);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "auto-research", "SKILL.md"), "utf8"), /auto-research/);
 
-    const manifestPath = path.join(packageRoot, "harness.yaml");
-    await writeFile(manifestPath, (await readFile(manifestPath, "utf8")).replace("version: 1.0.0", "version: 2.0.0"), "utf8");
-    const upgrade = await runCli(["--project", project, "install", packageRoot], root, home);
-    assert.notEqual(upgrade.code, 0);
-    assert.match(upgrade.stderr, /deactivate it before installing a new version/);
+    const current = await runCli(["--project", project, "current"], root, home);
+    assert.equal(current.code, 0, current.stderr);
+    assert.match(current.stdout, /Environment: research/);
+    assert.match(current.stdout, /roots\s+auto-research/);
+    const list = await runCli(["--project", project, "env", "list"], root, home);
+    assert.equal(list.code, 0, list.stderr);
+    assert.match(list.stdout, /\* research/);
+    const show = await runCli(["--project", project, "env", "show", "research"], root, home);
+    assert.equal(show.code, 0, show.stderr);
+    assert.match(show.stdout, /paper-search@1\.0\.0/);
+    const installWhileActive = await runCli(["--project", project, "install", "-n", "research", meta], root, home);
+    assert.notEqual(installWhileActive.code, 0);
+    assert.match(installWhileActive.stderr, /is active.*deactivate/);
+    const removeWhileActive = await runCli(["--project", project, "env", "remove", "research"], root, home);
+    assert.notEqual(removeWhileActive.code, 0);
+    assert.match(removeWhileActive.stderr, /is active.*deactivate/);
+    const doctor = await runCli(["--project", project, "doctor", "-n", "research"], root, home);
+    assert.equal(doctor.code, 0, doctor.stderr || doctor.stdout);
+    assert.match(doctor.stdout, /\[ok\] active:auto-research/);
 
-    const lock = JSON.parse(await readFile(path.join(project, ".harness", "lock.json"), "utf8")) as {
-      packages: Record<string, { version: string }>;
-    };
-    assert.equal(lock.packages["cli-state"]?.version, "1.0.0");
+    const deactivate = await runCli(["--project", project, "deactivate"], root, home);
+    assert.equal(deactivate.code, 0, deactivate.stderr);
+    await assert.rejects(readFile(path.join(project, ".agents", "skills", "paper-search", "SKILL.md")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".agents", "skills", "auto-research", "SKILL.md")), /ENOENT/);
+    const removeEnvironment = await runCli(["--project", project, "env", "remove", "research"], root, home);
+    assert.equal(removeEnvironment.code, 0, removeEnvironment.stderr);
+    await assert.rejects(readFile(path.join(project, ".harness", "environments", "research.yaml")), /ENOENT/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("CLI onboarding gives an actionable performance binding when no benchmark is detected", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-onboard-"));
+test("CLI atomically switches environments and enforces required bindings", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-switch-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   try {
-    await write(path.join(project, "package.json"), JSON.stringify({ scripts: { test: "node --test" } }));
-    const result = await runCli(
-      ["--project", project, "onboard", "--agent", "codex", "--target", "codex", "--no-switch"],
+    const first = await packageFixture(root, "first-skill");
+    const second = await packageFixture(
       root,
-      home,
+      "second-skill",
+      [],
+      "  requirements:\n    bindings:\n      - name: test\n        optional: false\n",
     );
-    assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /performance\s+needs benchmark binding: harness bind benchmark <command>/);
-    assert.doesNotMatch(result.stdout, /needs test binding/);
-    const config = await readFile(path.join(project, ".harness", "project.yaml"), "utf8");
-    assert.match(config, /performance-engineering/);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+    for (const name of ["first", "second"]) {
+      const create = await runCli(["--project", project, "env", "create", name, "--target", "codex"], root, home);
+      assert.equal(create.code, 0, create.stderr);
+    }
+    assert.equal((await runCli(["--project", project, "install", "-n", "first", first], root, home)).code, 0);
+    assert.equal((await runCli(["--project", project, "install", "-n", "second", second], root, home)).code, 0);
+    assert.equal((await runCli(["--project", project, "activate", "first"], root, home)).code, 0);
 
-test("CLI install locks a meta-skill and its dependencies", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-dependencies-"));
-  const home = path.join(root, "home");
-  const project = path.join(root, "project");
-  const child = path.join(root, "paper-search");
-  const meta = path.join(root, "auto-research");
-  try {
-    await write(
-      path.join(child, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
-metadata:
-  name: paper-search
-  version: 1.0.0
-  description: Search papers.
-spec:
-  platforms: [codex]
-  skills:
-    - name: paper-search
-      path: ./skills/paper-search
-`,
-    );
-    await write(path.join(child, "skills", "paper-search", "SKILL.md"), "---\ndescription: Search papers.\n---\nSearch.\n");
-    await write(
-      path.join(meta, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
-metadata:
-  name: auto-research
-  version: 1.0.0
-  description: Complete research method.
-spec:
-  platforms: [codex]
-  dependencies:
-    - name: paper-search
-      version: ^1.0.0
-      source: ../paper-search
-  entrypoints:
-    - name: research
-      skill: auto-research
-      description: Run the complete research method.
-  skills:
-    - name: auto-research
-      path: ./skills/auto-research
-`,
-    );
-    await write(path.join(meta, "skills", "auto-research", "SKILL.md"), "---\ndescription: Complete research.\n---\nResearch.\n");
+    const blocked = await runCli(["--project", project, "activate", "second"], root, home);
+    assert.notEqual(blocked.code, 0);
+    assert.match(blocked.stderr, /requires binding test/);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
 
-    const result = await runCli(["--project", project, "install", meta], root, home);
-    assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /dependencies\s+paper-search@1\.0\.0/);
-    const lock = JSON.parse(await readFile(path.join(project, ".harness", "lock.json"), "utf8")) as {
-      packages: Record<string, { dependencies: string[] }>;
-    };
-    assert.deepEqual(Object.keys(lock.packages), ["paper-search", "auto-research"]);
-    assert.deepEqual(lock.packages["auto-research"]?.dependencies, ["paper-search"]);
+    const bind = await runCli(["--project", project, "bind", "-n", "second", "test", "npm", "test"], root, home);
+    assert.equal(bind.code, 0, bind.stderr);
+    const switched = await runCli(["--project", project, "activate", "second"], root, home);
+    assert.equal(switched.code, 0, switched.stderr);
+    await assert.rejects(readFile(path.join(project, ".agents", "skills", "first-skill", "SKILL.md")), /ENOENT/);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "second-skill", "SKILL.md"), "utf8"), /second-skill/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
