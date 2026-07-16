@@ -7,7 +7,7 @@ import { doctorPackage, doctorProject, type Check } from "./doctor.js";
 import { createEvalDefinition, planEval, runEval, type EvalPlan } from "./eval.js";
 import { recordOutcome, workflowStats, type OutcomeStatus } from "./events.js";
 import { createHandoff } from "./handoff.js";
-import { installPackageSource, loadCachedPackage, syncLockedPackage } from "./package.js";
+import { installPackageSource, installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
 import { onboardProject } from "./onboard.js";
 import { enterProfile, leaveProfile, switchProfile, type ProfileSwitchResult } from "./profile.js";
 import {
@@ -18,7 +18,7 @@ import {
   setBinding,
 } from "./project.js";
 import { scaffoldHarness } from "./scaffold.js";
-import { readLock, putLock, readState } from "./store.js";
+import { putLock, putLocks, readLock, readState } from "./store.js";
 import { pathExists } from "./fs.js";
 import type { Action, LockFile, Platform } from "./types.js";
 
@@ -125,8 +125,9 @@ program
   .action(async (source: string, options: { profile?: string; base: boolean }, command: Command) => {
     if (options.profile && options.base) throw new Error("Choose --profile or --base, not both");
     const project = projectRoot(command);
-    const pkg = await installPackageSource(source, process.cwd());
-    await putLock(project, pkg.lock);
+    const installation = await installPackageTree(source, process.cwd());
+    const pkg = installation.root;
+    await putLocks(project, installation.packages.map((item) => item.lock));
     if (options.profile || options.base) {
       await ensureProject(project);
       await addPackageToProject(project, pkg.manifest.metadata.name, options.base ? { base: true } : { profile: options.profile! });
@@ -134,6 +135,9 @@ program
     console.log(`Installed ${pkg.manifest.metadata.name}@${pkg.manifest.metadata.version}`);
     console.log(`  source     ${pkg.lock.source}`);
     console.log(`  integrity  ${pkg.lock.integrity}`);
+    if (installation.packages.length > 1) {
+      console.log(`  dependencies  ${installation.packages.slice(0, -1).map((item) => `${item.lock.name}@${item.lock.version}`).join(", ")}`);
+    }
     if (options.base) console.log("  profile    base");
     if (options.profile) console.log(`  profile    ${options.profile}`);
   });
@@ -576,6 +580,8 @@ program
     console.log(`${manifest.metadata.name}@${manifest.metadata.version}`);
     console.log(manifest.metadata.description);
     console.log(`  platforms  ${manifest.spec.platforms.join(", ")}`);
+    console.log(`  dependencies  ${manifest.spec.dependencies.map((dependency) => `${dependency.name}@${dependency.version}`).join(", ") || "none"}`);
+    console.log(`  entrypoints   ${manifest.spec.entrypoints.map((entrypoint) => entrypoint.name).join(", ") || "none"}`);
     console.log(`  skills     ${manifest.spec.skills.map((skill) => skill.name).join(", ") || "none"}`);
     console.log(`  MCP        ${manifest.spec.mcpServers.map((server) => server.name).join(", ") || "none"}`);
     console.log(`  hooks      ${manifest.spec.hooks.map((hook) => hook.event).join(", ") || "none"}`);

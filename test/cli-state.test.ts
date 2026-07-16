@@ -96,3 +96,64 @@ test("CLI onboarding gives an actionable performance binding when no benchmark i
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("CLI install locks a meta-skill and its dependencies", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-dependencies-"));
+  const home = path.join(root, "home");
+  const project = path.join(root, "project");
+  const child = path.join(root, "paper-search");
+  const meta = path.join(root, "auto-research");
+  try {
+    await write(
+      path.join(child, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: paper-search
+  version: 1.0.0
+  description: Search papers.
+spec:
+  platforms: [codex]
+  skills:
+    - name: paper-search
+      path: ./skills/paper-search
+`,
+    );
+    await write(path.join(child, "skills", "paper-search", "SKILL.md"), "---\ndescription: Search papers.\n---\nSearch.\n");
+    await write(
+      path.join(meta, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: auto-research
+  version: 1.0.0
+  description: Complete research method.
+spec:
+  platforms: [codex]
+  dependencies:
+    - name: paper-search
+      version: ^1.0.0
+      source: ../paper-search
+  entrypoints:
+    - name: research
+      skill: auto-research
+      description: Run the complete research method.
+  skills:
+    - name: auto-research
+      path: ./skills/auto-research
+`,
+    );
+    await write(path.join(meta, "skills", "auto-research", "SKILL.md"), "---\ndescription: Complete research.\n---\nResearch.\n");
+
+    const result = await runCli(["--project", project, "install", meta], root, home);
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /dependencies\s+paper-search@1\.0\.0/);
+    const lock = JSON.parse(await readFile(path.join(project, ".harness", "lock.json"), "utf8")) as {
+      packages: Record<string, { dependencies: string[] }>;
+    };
+    assert.deepEqual(Object.keys(lock.packages), ["paper-search", "auto-research"]);
+    assert.deepEqual(lock.packages["auto-research"]?.dependencies, ["paper-search"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -29,6 +29,11 @@ metadata:
   tags: []
 spec:
   platforms: [codex, claude]
+  dependencies: []
+  entrypoints:
+    - name: ${name}
+      skill: ${name}-workflow
+      description: Run the ${name} method.
   requirements:
     env: []
     commands: [git]
