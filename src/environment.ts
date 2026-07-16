@@ -218,7 +218,7 @@ async function validateLock(lock: LockFile): Promise<void> {
   }
 }
 
-async function validateEnvironmentLock(environment: HarnessEnvironment, lock: LockFile): Promise<string[]> {
+function validateEnvironmentLockGraph(environment: HarnessEnvironment, lock: LockFile): string[] {
   const rootNames = environment.spec.roots.map((root) => root.name);
   const names = dependencyOrder(lock, rootNames);
   for (const root of environment.spec.roots) {
@@ -231,6 +231,11 @@ async function validateEnvironmentLock(environment: HarnessEnvironment, lock: Lo
   const reachable = new Set(names);
   const unreachable = Object.keys(lock.packages).filter((name) => !reachable.has(name));
   if (unreachable.length > 0) throw new Error(`Environment lock contains packages unreachable from its roots: ${unreachable.join(", ")}`);
+  return names;
+}
+
+async function validateEnvironmentLock(environment: HarnessEnvironment, lock: LockFile): Promise<string[]> {
+  const names = validateEnvironmentLockGraph(environment, lock);
   await validateLock(lock);
   return names;
 }
@@ -274,6 +279,7 @@ export async function installIntoEnvironment(
   if (state.activeEnvironment?.name === environmentNameValue) {
     throw new Error(`Environment ${environmentNameValue} is active; run harness deactivate before installing packages`);
   }
+  validateEnvironmentLockGraph(environment, currentLock);
   const installation = await installPackageTree(source, cwd);
   const next: LockFile = { lockfileVersion: 1, packages: { ...currentLock.packages } };
   for (const pkg of installation.packages) next.packages[pkg.lock.name] = pkg.lock;
@@ -490,8 +496,9 @@ export async function deactivateEnvironment(projectRoot: string): Promise<Enviro
 export async function syncEnvironment(projectRoot: string, name: string): Promise<LockedPackage[]> {
   const environment = await readEnvironment(projectRoot, name);
   const lock = await readEnvironmentLock(projectRoot, name);
-  for (const pkg of Object.values(lock.packages)) await syncLockedPackage(pkg);
-  await validateEnvironmentLock(environment, lock);
+  const names = validateEnvironmentLockGraph(environment, lock);
+  for (const packageName of names) await syncLockedPackage(lock.packages[packageName]!);
+  await validateLock(lock);
   return Object.values(lock.packages);
 }
 
@@ -541,7 +548,10 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
     });
     const commands = new Set(pkg.manifest.spec.requirements.commands);
     for (const server of pkg.manifest.spec.mcpServers) {
-      if (server.transport === "stdio") commands.add(server.command);
+      const appliesToEnvironment = environment.spec.targets.some(
+        (target) => !server.platforms || server.platforms.includes(target),
+      );
+      if (server.transport === "stdio" && appliesToEnvironment) commands.add(server.command);
     }
     for (const command of commands) {
       const found = await findCommand(command);
