@@ -4,11 +4,28 @@ Create, reproduce, and switch isolated Agent environments.
 
 Harness Conda manages versioned packages containing Skills, meta-skills, MCP servers, and hooks. A meta-skill is an ordinary Skill whose natural-language method composes other Skills; package dependencies make the complete method installable and reproducible without turning it into a workflow DAG.
 
+## Install from source
+
+Harness Conda is not published to the npm Registry yet. Install the current CLI from this repository:
+
+```bash
+git clone https://github.com/zedong-peng/harness-conda.git
+cd harness-conda
+npm ci
+npm run build
+npm link
+harness --version
+```
+
+`npm link` exposes the locally built `harness` and `harness-conda` binaries. To avoid a global link, replace `harness` in the examples below with:
+
+```bash
+node /path/to/harness-conda/dist/src/cli.js
+```
+
 ## Quick start
 
 ```bash
-npm install -g harness-conda
-
 harness env create research --target codex
 harness install -n research builtin:auto-research
 harness activate research
@@ -105,7 +122,7 @@ spec:
 
 The `auto-research/SKILL.md` file describes how and when to use the component Skills, including branching, retry, interruption recovery, stopping conditions, and expected outputs. Harness Conda reads only the package graph; the Agent interprets the method.
 
-The four packages above are real built-ins shipped with this repository and the npm package, so the Quick Start runs without a Registry. Until a Registry exists, other dependencies include an explicit local, built-in, GitHub, HTTPS Git, or SSH Git source. Published packages should use immutable Git tags or revisions.
+The four packages above are real built-ins shipped with the source distribution, so the Quick Start runs without a package Registry. Until a Registry exists, other dependencies include an explicit local, built-in, GitHub, HTTPS Git, or SSH Git source. Published packages should use immutable Git tags or revisions.
 
 ## Project bindings
 
