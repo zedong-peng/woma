@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { captureHarness } from "./capture.js";
@@ -33,11 +33,21 @@ function projectRoot(command: Command): string {
   if (configured) return path.resolve(configured);
   let current = path.resolve(process.cwd());
   while (true) {
-    if (existsSync(path.join(current, ".harness"))) return current;
+    try {
+      if (statSync(path.join(current, ".harness")).isDirectory()) return current;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    }
     const parent = path.dirname(current);
     if (parent === current) return path.resolve(process.cwd());
     current = parent;
   }
+}
+
+async function selectedEnvironment(project: string, requested?: string): Promise<string> {
+  if (requested) return requested;
+  return (await readState(project)).activeEnvironment?.name ?? DEFAULT_ENVIRONMENT;
 }
 
 function targets(input: string): Platform[] {
@@ -138,10 +148,12 @@ envCommand
 program
   .command("install <source>")
   .description("install a package or meta-skill and its dependencies into an environment")
-  .option("-n, --name <environment>", "destination environment", DEFAULT_ENVIRONMENT)
-  .action(async (source: string, options: { name: string }, command: Command) => {
-    const result = await installIntoEnvironment(projectRoot(command), options.name, source, process.cwd());
-    console.log(`Installed ${result.root.lock.name}@${result.root.lock.version} into ${options.name}`);
+  .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
+  .action(async (source: string, options: { name?: string }, command: Command) => {
+    const project = projectRoot(command);
+    const environmentName = await selectedEnvironment(project, options.name);
+    const result = await installIntoEnvironment(project, environmentName, source, process.cwd());
+    console.log(`Installed ${result.root.lock.name}@${result.root.lock.version} into ${environmentName}`);
     console.log(`  source        ${result.root.lock.source}`);
     if (result.packages.length > 1) {
       console.log(`  dependencies  ${result.packages.slice(0, -1).map((pkg) => `${pkg.lock.name}@${pkg.lock.version}`).join(", ")}`);
@@ -151,11 +163,13 @@ program
 program
   .command("bind <binding> <command...>")
   .description("bind a project command for Skills in an environment")
-  .option("-n, --name <environment>", "environment to configure", DEFAULT_ENVIRONMENT)
-  .action(async (binding: string, commandParts: string[], options: { name: string }, command: Command) => {
+  .option("-n, --name <environment>", "environment to configure; defaults to the active environment, then base")
+  .action(async (binding: string, commandParts: string[], options: { name?: string }, command: Command) => {
+    const project = projectRoot(command);
+    const environmentName = await selectedEnvironment(project, options.name);
     const value = commandParts.join(" ");
-    await bindEnvironment(projectRoot(command), options.name, binding, value);
-    console.log(`Bound ${binding} in ${options.name}: ${value}`);
+    await bindEnvironment(project, environmentName, binding, value);
+    console.log(`Bound ${binding} in ${environmentName}: ${value}`);
   });
 
 program

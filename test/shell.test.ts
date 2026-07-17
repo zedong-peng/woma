@@ -37,6 +37,10 @@ test("bash hook finds an active environment from a project subdirectory", async 
     const script = 'source "$1"\ncd "$2"\n__harness_prompt_update\nprintf \'%s\' "$HARNESS_PROMPT_PREFIX"';
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested]);
     assert.equal(stdout, "(harness:base) ");
+
+    await mkdir(path.join(nested, ".harness"));
+    const inner = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested]);
+    assert.equal(inner.stdout, "");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -44,6 +48,7 @@ test("bash hook finds an active environment from a project subdirectory", async 
 
 test("zsh hook installs an idempotent precmd prompt prefix", () => {
   const hook = renderShellHook("zsh");
+  assert.match(hook, /\[\[ -d "\$directory\/\.harness" \]\]/);
   assert.match(hook, /directory="\$\{directory:h\}"/);
   assert.match(hook, /add-zsh-hook precmd __harness_prompt_update/);
   assert.match(hook, /PROMPT='\$\{HARNESS_PROMPT_PREFIX\}'/);

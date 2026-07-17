@@ -102,6 +102,12 @@ test("CLI provides a Conda-style base environment default from project subdirect
     const current = await runCli(["current", "--name-only"], nested, home);
     assert.equal(current.code, 0, current.stderr);
     assert.equal(current.stdout.trim(), "base");
+
+    assert.equal((await runCli(["env", "create", "research", "--target", "codex"], nested, home)).code, 0);
+    assert.equal((await runCli(["activate", "research"], nested, home)).code, 0);
+    const activateDefault = await runCli(["activate"], nested, home);
+    assert.equal(activateDefault.code, 0, activateDefault.stderr);
+    assert.match(activateDefault.stdout, /Activated environment base/);
     const deactivate = await runCli(["deactivate"], nested, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
   } finally {
@@ -188,6 +194,14 @@ test("CLI atomically switches environments and enforces required bindings", { co
     assert.equal((await runCli(["--project", project, "install", "-n", "first", first], root, home)).code, 0);
     assert.equal((await runCli(["--project", project, "install", "-n", "second", second], root, home)).code, 0);
     assert.equal((await runCli(["--project", project, "activate", "first"], root, home)).code, 0);
+
+    const bindActive = await runCli(["--project", project, "bind", "selected", "npm", "test"], root, home);
+    assert.equal(bindActive.code, 0, bindActive.stderr);
+    assert.match(bindActive.stdout, /Bound selected in first/);
+    assert.match(await readFile(path.join(project, ".harness", "environments", "first.yaml"), "utf8"), /selected: npm test/);
+    const installActive = await runCli(["--project", project, "install", second], root, home);
+    assert.notEqual(installActive.code, 0);
+    assert.match(installActive.stderr, /Environment first is active.*--name first/);
 
     const blocked = await runCli(["--project", project, "activate", "second"], root, home);
     assert.notEqual(blocked.code, 0);

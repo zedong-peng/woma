@@ -279,7 +279,9 @@ export async function installIntoEnvironment(
     readState(projectRoot),
   ]);
   if (state.activeEnvironment?.name === environmentNameValue) {
-    throw new Error(`Environment ${environmentNameValue} is active; run harness deactivate before installing packages`);
+    throw new Error(
+      `Environment ${environmentNameValue} is active; run harness deactivate, then reinstall with --name ${environmentNameValue}`,
+    );
   }
   validateEnvironmentLockGraph(environment, currentLock);
   const installation = await installPackageTree(source, cwd);

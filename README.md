@@ -48,7 +48,7 @@ codex
 harness deactivate
 ```
 
-Commands that omit an Environment name use `base`, an empty project-local default that contains only the packages the user selects. Installing `auto-research` recursively installs and locks its component packages. Activating `base` makes the complete dependency closure available to the selected Agent in dependency-first order.
+`install` and `bind` use the active Environment when `--name` is omitted, then fall back to `base`, an empty project-local default that contains only the packages the user selects. `env create` without a name creates `base`, and `activate` without a name switches to `base`, matching Conda. Installing `auto-research` recursively installs and locks its component packages. Activating `base` makes the complete dependency closure available to the selected Agent in dependency-first order.
 
 Only one Environment is active in a project. Activating another Environment atomically removes packages unique to the old Environment, preserves identical shared packages, activates the new closure, and rolls back if the transition fails.
 
@@ -79,7 +79,7 @@ harness env show cpp-performance
 harness env remove cpp-performance
 ```
 
-The `base` defaults make the common case shorter while preserving named Environment isolation:
+The `base` fallback makes the common case shorter while preserving named Environment isolation:
 
 ```bash
 harness env create --target codex       # creates base
@@ -95,6 +95,16 @@ harness env create research --target codex
 harness env create performance --target codex
 harness activate research
 harness activate performance            # atomic switch
+```
+
+With a named Environment active, omitted `--name` values select that Environment. Bindings can be updated directly. Package installation still requires deactivation so Harness never leaves deployed resources out of sync with the Environment lock; after deactivating, pass the name explicitly:
+
+```bash
+# prompt: (harness:research)
+harness bind test "npm test"             # binds in research
+harness install builtin:paper-search     # asks you to deactivate research
+harness deactivate
+harness install -n research builtin:paper-search
 ```
 
 With the shell hook enabled, the prompt shows `(harness:base)`, `(harness:research)`, or `(harness:performance)`. The `harness:` namespace remains unambiguous when a Python Conda Environment is also active, for example `(py310) (harness:research)`. The hook searches parent directories for the nearest `.harness`, so the prefix and CLI continue to use the same project from nested directories. The prefix disappears after `harness deactivate` or after leaving the project tree.
@@ -215,8 +225,8 @@ harness activate research
 | `harness env list` | List Environments and mark the active one |
 | `harness env show <name>` | Show roots, resolved packages, targets, and bindings |
 | `harness env remove <name>` | Remove an inactive Environment |
-| `harness install [-n <env>] <source>` | Install a Package and recursive dependencies; defaults to `base` |
-| `harness bind [-n <env>] <name> <command...>` | Configure a project command for Skills; defaults to `base` |
+| `harness install [-n <env>] <source>` | Install a Package and recursive dependencies; defaults to active, then `base` |
+| `harness bind [-n <env>] <name> <command...>` | Configure a project command for Skills; defaults to active, then `base` |
 | `harness activate [env]` | Atomically activate or switch an Environment; defaults to `base` |
 | `harness deactivate` | Deactivate the complete active Environment |
 | `harness current` | Show the active Environment and package closure |
