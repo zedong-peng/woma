@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { statSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { captureHarness } from "./capture.js";
@@ -8,6 +9,7 @@ import {
   createEnvironment,
   deactivateEnvironment,
   doctorEnvironment,
+  DEFAULT_ENVIRONMENT,
   environmentLockPath,
   environmentPath,
   installIntoEnvironment,
@@ -20,13 +22,32 @@ import {
 } from "./environment.js";
 import { installPackageSource, loadCachedPackage } from "./package.js";
 import { scaffoldHarness } from "./scaffold.js";
+import { renderShellHook, resolveShell } from "./shell.js";
 import { readState } from "./store.js";
 import type { Action, Platform } from "./types.js";
 
 const program = new Command();
 
 function projectRoot(command: Command): string {
-  return path.resolve(command.optsWithGlobals<{ project: string }>().project);
+  const configured = command.optsWithGlobals<{ project?: string }>().project;
+  if (configured) return path.resolve(configured);
+  let current = path.resolve(process.cwd());
+  while (true) {
+    try {
+      if (statSync(path.join(current, ".harness")).isDirectory()) return current;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(process.cwd());
+    current = parent;
+  }
+}
+
+async function selectedEnvironment(project: string, requested?: string): Promise<string> {
+  if (requested) return requested;
+  return (await readState(project)).activeEnvironment?.name ?? DEFAULT_ENVIRONMENT;
 }
 
 function targets(input: string): Platform[] {
@@ -58,7 +79,7 @@ program
   .description("Create, reproduce, and switch isolated Agent environments")
   .version("0.6.0")
   .enablePositionalOptions()
-  .option("-p, --project <directory>", "project whose Agent environment is managed", process.cwd());
+  .option("-p, --project <directory>", "project whose Agent environment is managed; defaults to the nearest parent with .harness");
 
 program
   .command("init [directory]")
@@ -72,15 +93,16 @@ program
 const envCommand = program.command("env").description("manage isolated Agent environments");
 
 envCommand
-  .command("create <name>")
-  .description("create an empty named environment")
+  .command("create [name]")
+  .description("create an empty named environment; defaults to base")
   .option("-t, --target <target>", "codex, claude, both, or a comma-separated list", "both")
-  .action(async (name: string, options: { target: string }, command: Command) => {
+  .action(async (name: string | undefined, options: { target: string }, command: Command) => {
     const project = projectRoot(command);
-    const environment = await createEnvironment(project, name, targets(options.target));
-    console.log(`Created environment ${name}`);
-    console.log(`  recipe  ${environmentPath(project, name)}`);
-    console.log(`  lock    ${environmentLockPath(project, name)}`);
+    const environmentName = name ?? DEFAULT_ENVIRONMENT;
+    const environment = await createEnvironment(project, environmentName, targets(options.target));
+    console.log(`Created environment ${environmentName}`);
+    console.log(`  recipe  ${environmentPath(project, environmentName)}`);
+    console.log(`  lock    ${environmentLockPath(project, environmentName)}`);
     console.log(`  targets ${environment.spec.targets.join(", ")}`);
   });
 
@@ -126,10 +148,12 @@ envCommand
 program
   .command("install <source>")
   .description("install a package or meta-skill and its dependencies into an environment")
-  .requiredOption("-n, --name <environment>", "destination environment")
-  .action(async (source: string, options: { name: string }, command: Command) => {
-    const result = await installIntoEnvironment(projectRoot(command), options.name, source, process.cwd());
-    console.log(`Installed ${result.root.lock.name}@${result.root.lock.version} into ${options.name}`);
+  .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
+  .action(async (source: string, options: { name?: string }, command: Command) => {
+    const project = projectRoot(command);
+    const environmentName = await selectedEnvironment(project, options.name);
+    const result = await installIntoEnvironment(project, environmentName, source, process.cwd());
+    console.log(`Installed ${result.root.lock.name}@${result.root.lock.version} into ${environmentName}`);
     console.log(`  source        ${result.root.lock.source}`);
     if (result.packages.length > 1) {
       console.log(`  dependencies  ${result.packages.slice(0, -1).map((pkg) => `${pkg.lock.name}@${pkg.lock.version}`).join(", ")}`);
@@ -139,20 +163,23 @@ program
 program
   .command("bind <binding> <command...>")
   .description("bind a project command for Skills in an environment")
-  .requiredOption("-n, --name <environment>", "environment to configure")
-  .action(async (binding: string, commandParts: string[], options: { name: string }, command: Command) => {
+  .option("-n, --name <environment>", "environment to configure; defaults to the active environment, then base")
+  .action(async (binding: string, commandParts: string[], options: { name?: string }, command: Command) => {
+    const project = projectRoot(command);
+    const environmentName = await selectedEnvironment(project, options.name);
     const value = commandParts.join(" ");
-    await bindEnvironment(projectRoot(command), options.name, binding, value);
-    console.log(`Bound ${binding} in ${options.name}: ${value}`);
+    await bindEnvironment(project, environmentName, binding, value);
+    console.log(`Bound ${binding} in ${environmentName}: ${value}`);
   });
 
 program
-  .command("activate <environment>")
-  .description("atomically activate or switch one complete environment")
-  .action(async (name: string, _options: unknown, command: Command) => {
-    const result = await activateEnvironment(projectRoot(command), name);
+  .command("activate [environment]")
+  .description("atomically activate or switch one complete environment; defaults to base")
+  .action(async (name: string | undefined, _options: unknown, command: Command) => {
+    const environmentName = name ?? DEFAULT_ENVIRONMENT;
+    const result = await activateEnvironment(projectRoot(command), environmentName);
     printActions(result.actions);
-    console.log(`Activated environment ${name}`);
+    console.log(`Activated environment ${environmentName}`);
     console.log(`  targets   ${result.targets.join(", ")}`);
     console.log(`  packages  ${result.packages.join(", ") || "none"}`);
   });
@@ -172,11 +199,17 @@ program
 program
   .command("current")
   .description("show the active environment and its complete package closure")
-  .action(async (_options: unknown, command: Command) => {
+  .option("--name-only", "print only the active environment name for shell integrations", false)
+  .action(async (options: { nameOnly: boolean }, command: Command) => {
     const project = projectRoot(command);
     const active = (await readState(project)).activeEnvironment;
     if (!active) {
+      if (options.nameOnly) return;
       console.log("No active environment.");
+      return;
+    }
+    if (options.nameOnly) {
+      console.log(active.name);
       return;
     }
     const environment = await readEnvironment(project, active.name);
@@ -185,6 +218,15 @@ program
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
     console.log(`  packages  ${active.packages.join(", ") || "none"}`);
     for (const [binding, value] of Object.entries(environment.spec.bindings)) console.log(`  ${binding.padEnd(9)} ${value}`);
+  });
+
+const shellCommand = program.command("shell").description("print shell integration code for the active-environment prompt");
+
+shellCommand
+  .command("hook [shell]")
+  .description("print a bash or zsh hook for eval")
+  .action((shell: string | undefined) => {
+    process.stdout.write(renderShellHook(resolveShell(shell)));
   });
 
 program
