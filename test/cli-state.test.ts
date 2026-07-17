@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -63,6 +64,10 @@ ${dependencyYaml}${requirements}  skills:
   await write(path.join(packageRoot, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}.\n---\n\n${name}.\n`);
   return packageRoot;
 }
+
+test("built CLI entrypoint is executable", async () => {
+  await access(path.resolve("dist/src/cli.js"), constants.X_OK);
+});
 
 test("CLI exposes environment commands and removes workflow phase commands", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-help-"));
