@@ -127,6 +127,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
   try {
     await packageFixture(root, "paper-search");
     const meta = await packageFixture(root, "auto-research", [{ name: "paper-search", source: "../paper-search" }]);
+    const idea = await packageFixture(root, "idea-gen");
     const create = await runCli(["--project", project, "env", "create", "research", "--target", "codex"], root, home);
     assert.equal(create.code, 0, create.stderr);
     assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/state\.json/);
@@ -158,20 +159,23 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     const show = await runCli(["--project", project, "env", "show", "research"], root, home);
     assert.equal(show.code, 0, show.stderr);
     assert.match(show.stdout, /paper-search@1\.0\.0/);
-    const installWhileActive = await runCli(["--project", project, "install", "-n", "research", meta], root, home);
-    assert.notEqual(installWhileActive.code, 0);
-    assert.match(installWhileActive.stderr, /is active.*deactivate/);
+    const installWhileActive = await runCli(["--project", project, "install", idea], root, home);
+    assert.equal(installWhileActive.code, 0, installWhileActive.stderr);
+    assert.match(installWhileActive.stdout, /Installed idea-gen@1\.0\.0 into research/);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /idea-gen/);
     const removeWhileActive = await runCli(["--project", project, "env", "remove", "research"], root, home);
     assert.notEqual(removeWhileActive.code, 0);
     assert.match(removeWhileActive.stderr, /is active.*deactivate/);
     const doctor = await runCli(["--project", project, "doctor", "-n", "research"], root, home);
     assert.equal(doctor.code, 0, doctor.stderr || doctor.stdout);
     assert.match(doctor.stdout, /\[ok\] active:auto-research/);
+    assert.match(doctor.stdout, /\[ok\] active:idea-gen/);
 
     const deactivate = await runCli(["--project", project, "deactivate"], root, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
     await assert.rejects(readFile(path.join(project, ".agents", "skills", "paper-search", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(project, ".agents", "skills", "auto-research", "SKILL.md")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".agents", "skills", "idea-gen", "SKILL.md")), /ENOENT/);
     const removeEnvironment = await runCli(["--project", project, "env", "remove", "research"], root, home);
     assert.equal(removeEnvironment.code, 0, removeEnvironment.stderr);
     await assert.rejects(readFile(path.join(project, ".harness", "environments", "research.yaml")), /ENOENT/);
@@ -206,7 +210,8 @@ test("CLI atomically switches environments and enforces required bindings", { co
     assert.match(await readFile(path.join(project, ".harness", "environments", "first.yaml"), "utf8"), /selected: npm test/);
     const installActive = await runCli(["--project", project, "install", second], root, home);
     assert.notEqual(installActive.code, 0);
-    assert.match(installActive.stderr, /Environment first is active.*--name first/);
+    assert.match(installActive.stderr, /requires binding test/);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
 
     const blocked = await runCli(["--project", project, "activate", "second"], root, home);
     assert.notEqual(blocked.code, 0);

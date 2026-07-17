@@ -10,6 +10,7 @@
 - Atomically activate, switch, and deactivate full dependency closures with drift checks and rollback.
 - Added Environment-aware `current`, `sync`, `doctor`, and `bind` behavior.
 - Added active-first install/bind targeting, conventional `base` creation/activation defaults, and bash/zsh prompt hooks.
+- Added process-atomic package installation and upgrades for active Environments with project snapshot rollback.
 - Removed research-specific workflow commands from the core CLI: `onboard`, `project`, `profile`, `switch`, `leave`, `enter`, `handoff`, `outcome`, `stats`, `use`, and `eval`.
 - Reframed built-in packages as optional methods rather than mandatory workflow phases.
 

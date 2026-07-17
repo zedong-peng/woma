@@ -20,6 +20,39 @@ import { activatePackage } from "../src/activation.js";
 import { installPackageSource } from "../src/package.js";
 import { putLock, readState, statePath } from "../src/store.js";
 
+async function environmentPackageFixture(
+  root: string,
+  directory: string,
+  version: string,
+  content: string,
+  mcpCommand?: string,
+): Promise<string> {
+  const packageRoot = path.join(root, directory);
+  await mkdir(path.join(packageRoot, "skills", "upgrade-skill"), { recursive: true });
+  await writeFile(
+    path.join(packageRoot, "harness.yaml"),
+    `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: upgrade-package
+  version: ${version}
+  description: Active install transaction fixture.
+spec:
+  platforms: [codex]
+  skills:
+    - name: upgrade-skill
+      path: ./skills/upgrade-skill
+${mcpCommand ? `  mcpServers:\n    - name: occupied\n      transport: stdio\n      command: ${mcpCommand}\n` : ""}`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(packageRoot, "skills", "upgrade-skill", "SKILL.md"),
+    `---\nname: upgrade-skill\ndescription: Upgrade fixture.\n---\n\n${content}\n`,
+    "utf8",
+  );
+  return packageRoot;
+}
+
 test("environment paths reject traversal names", () => {
   assert.throws(() => environmentPath("/tmp/project", "../../outside"), /must use lowercase letters/);
   assert.throws(() => environmentLockPath("/tmp/project", "../outside"), /must use lowercase letters/);
@@ -192,6 +225,121 @@ spec:
 
     const checks = await doctorEnvironment(root, "tools");
     assert.equal(checks.some((check) => check.label === "command:harness-claude-command-that-does-not-exist"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("install atomically upgrades a package in the active environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-upgrade-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
+    const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
+    await createEnvironment(root, "tools", ["codex"]);
+    await installIntoEnvironment(root, "tools", v1);
+    await activateEnvironment(root, "tools");
+
+    await installIntoEnvironment(root, "tools", v2);
+
+    assert.match(await readFile(path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"), "utf8"), /Version two/);
+    assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
+    assert.equal((await readState(root)).activations["upgrade-package"]?.packageVersion, "2.0.0");
+    assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("active install restores project state when the new package conflicts after removal", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-rollback-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
+    const conflicting = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.", "node");
+    await createEnvironment(root, "tools", ["codex"]);
+    await installIntoEnvironment(root, "tools", v1);
+    await mkdir(path.join(root, ".codex"), { recursive: true });
+    await writeFile(path.join(root, ".codex", "config.toml"), '[mcp_servers.occupied]\ncommand = "other"\n', "utf8");
+    await activateEnvironment(root, "tools");
+    const trackedPaths = [
+      environmentPath(root, "tools"),
+      environmentLockPath(root, "tools"),
+      statePath(root),
+      path.join(root, ".codex", "config.toml"),
+      path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"),
+    ];
+    const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
+
+    await assert.rejects(installIntoEnvironment(root, "tools", conflicting), /Refusing to overwrite MCP server occupied/);
+
+    assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
+    assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("active install rolls back when interrupted after resources are applied", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-interruption-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
+    const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
+    await createEnvironment(root, "tools", ["codex"]);
+    await installIntoEnvironment(root, "tools", v1);
+    await activateEnvironment(root, "tools");
+    const trackedPaths = [
+      environmentPath(root, "tools"),
+      environmentLockPath(root, "tools"),
+      statePath(root),
+      path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"),
+    ];
+    const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
+    let interruptedAfterMutation = false;
+
+    await assert.rejects(
+      installIntoEnvironment(root, "tools", v2, process.cwd(), {
+        onResourcesApplied: async () => {
+          interruptedAfterMutation = true;
+          assert.match(await readFile(trackedPaths[3]!, "utf8"), /Version two/);
+          assert.equal((await readState(root)).activations["upgrade-package"]?.packageVersion, "2.0.0");
+          assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "1.0.0");
+          throw new Error("simulated interruption");
+        },
+      }),
+      /simulated interruption/,
+    );
+
+    assert.equal(interruptedAfterMutation, true);
+    assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
+    assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("active install rejects managed-file drift before changing the environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-preflight-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
+    const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
+    await createEnvironment(root, "tools", ["codex"]);
+    await installIntoEnvironment(root, "tools", v1);
+    await activateEnvironment(root, "tools");
+    const skillPath = path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md");
+    await writeFile(skillPath, `${await readFile(skillPath, "utf8")}User edit.\n`, "utf8");
+    const recipeBefore = await readFile(environmentPath(root, "tools"), "utf8");
+    const lockBefore = await readFile(environmentLockPath(root, "tools"), "utf8");
+    const stateBefore = await readFile(statePath(root), "utf8");
+
+    await assert.rejects(installIntoEnvironment(root, "tools", v2), /modified or missing managed files/);
+
+    assert.match(await readFile(skillPath, "utf8"), /User edit/);
+    assert.equal(await readFile(environmentPath(root, "tools"), "utf8"), recipeBefore);
+    assert.equal(await readFile(environmentLockPath(root, "tools"), "utf8"), lockBefore);
+    assert.equal(await readFile(statePath(root), "utf8"), stateBefore);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

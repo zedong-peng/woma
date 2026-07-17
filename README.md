@@ -97,15 +97,15 @@ harness activate research
 harness activate performance            # atomic switch
 ```
 
-With a named Environment active, omitted `--name` values select that Environment. Bindings can be updated directly. Package installation still requires deactivation so Harness never leaves deployed resources out of sync with the Environment lock; after deactivating, pass the name explicitly:
+With a named Environment active, omitted `--name` values select that Environment. Bindings and packages update it directly:
 
 ```bash
 # prompt: (harness:research)
 harness bind test "npm test"             # binds in research
-harness install builtin:paper-search     # asks you to deactivate research
-harness deactivate
-harness install -n research builtin:paper-search
+harness install builtin:paper-search     # installs and activates in research
 ```
+
+Active installation resolves and validates the complete next closure before updating the project. Harness snapshots the recipe, lock, activation state, Skills, MCP configuration, and hooks; it applies the package delta in dependency order and restores the snapshot if any ordinary error occurs. Installing into an inactive Environment continues to update only its recipe and lock.
 
 With the shell hook enabled, the prompt shows `(harness:base)`, `(harness:research)`, or `(harness:performance)`. The `harness:` namespace remains unambiguous when a Python Conda Environment is also active, for example `(py310) (harness:research)`. The hook searches parent directories for the nearest `.harness`, so the prefix and CLI continue to use the same project from nested directories. The prefix disappears after `harness deactivate` or after leaving the project tree.
 
@@ -261,6 +261,7 @@ If a project still has an active v0.5 profile or low-level package activation, r
 - Environment lock updates validate the entire dependency graph before writing.
 - Activation refuses conflicting Skills and MCP entries.
 - Environment switching checks managed-file drift before changing active state.
+- Active installation updates the lock, materialized resources, and activation state together and restores the previous snapshot on error.
 - Deactivation removes only unchanged resources owned by the Environment.
 - Git and built-in packages cannot use local dependency paths to read installation-machine files.
 - Captured MCP configuration contains environment-variable names, never literal secret values.
