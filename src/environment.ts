@@ -17,6 +17,8 @@ const environmentName = z
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
 const platform = z.enum(["codex", "claude"]);
 
+export const DEFAULT_ENVIRONMENT = "base";
+
 const lockedPackageSchema = z
   .object({
     name: environmentName,

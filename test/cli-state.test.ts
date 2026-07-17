@@ -69,12 +69,41 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
   try {
     const result = await runCli(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
-    for (const command of ["env", "install", "activate", "deactivate", "current", "sync", "doctor", "bind"]) {
+    for (const command of ["env", "install", "activate", "deactivate", "current", "sync", "doctor", "bind", "shell"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
     }
     for (const command of ["onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
       assert.doesNotMatch(result.stdout, new RegExp(`^  ${command}(?: |$)`, "m"));
     }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("CLI provides a Conda-style base environment default from project subdirectories", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-base-"));
+  const home = path.join(root, "home");
+  const project = path.join(root, "project");
+  const nested = path.join(project, "src", "nested");
+  try {
+    await mkdir(nested, { recursive: true });
+    const pkg = await packageFixture(root, "base-skill");
+    const create = await runCli(["env", "create", "--target", "codex"], project, home);
+    assert.equal(create.code, 0, create.stderr);
+    assert.match(create.stdout, /Created environment base/);
+
+    const install = await runCli(["install", pkg], project, home);
+    assert.equal(install.code, 0, install.stderr);
+    assert.match(install.stdout, /into base/);
+    const activate = await runCli(["activate"], nested, home);
+    assert.equal(activate.code, 0, activate.stderr);
+    assert.match(activate.stdout, /Activated environment base/);
+
+    const current = await runCli(["current", "--name-only"], nested, home);
+    assert.equal(current.code, 0, current.stderr);
+    assert.equal(current.stdout.trim(), "base");
+    const deactivate = await runCli(["deactivate"], nested, home);
+    assert.equal(deactivate.code, 0, deactivate.stderr);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

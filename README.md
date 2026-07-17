@@ -23,19 +23,32 @@ harness --version
 node /path/to/harness-conda/dist/src/cli.js
 ```
 
+Enable the Conda-style active Environment prefix for the current shell:
+
+```bash
+# zsh
+eval "$(harness shell hook zsh)"
+
+# bash
+eval "$(harness shell hook bash)"
+```
+
+Add the matching `eval` line to `~/.zshrc` or `~/.bashrc` to enable it in future shells. When no shell name is supplied, `harness shell hook` detects bash or zsh from `$SHELL`.
+
 ## Quick start
 
 ```bash
-harness env create research --target codex
-harness install -n research builtin:auto-research
-harness activate research
+harness env create --target codex
+harness install builtin:auto-research
+harness activate
 
+# The prompt now starts with (base).
 codex
 
 harness deactivate
 ```
 
-Installing `auto-research` recursively installs and locks its component packages. Activating `research` makes the complete dependency closure available to the selected Agent in dependency-first order.
+Commands that omit an Environment name use `base`, an empty project-local default that contains only the packages the user selects. Installing `auto-research` recursively installs and locks its component packages. Activating `base` makes the complete dependency closure available to the selected Agent in dependency-first order.
 
 Only one Environment is active in a project. Activating another Environment atomically removes packages unique to the old Environment, preserves identical shared packages, activates the new closure, and rolls back if the transition fails.
 
@@ -50,6 +63,9 @@ Meta-Skill
 
 Environment
   = root Packages + recursive dependency closure + targets + bindings + lock
+
+Base Environment
+  = conventional default Environment; empty until the user installs Packages
 ```
 
 Harness Conda does not decide what phase a task is in, advance workflow steps, require handoffs, or record outcomes. The user and Agent define and execute the method; Harness Conda installs, isolates, locks, activates, migrates, and shares it.
@@ -62,6 +78,26 @@ harness env list
 harness env show cpp-performance
 harness env remove cpp-performance
 ```
+
+The `base` defaults make the common case shorter while preserving named Environment isolation:
+
+```bash
+harness env create --target codex       # creates base
+harness install builtin:paper-search    # installs into base
+harness bind test "npm test"            # binds in base
+harness activate                        # activates base
+```
+
+Use explicit names whenever a project needs multiple combinations:
+
+```bash
+harness env create research --target codex
+harness env create performance --target codex
+harness activate research
+harness activate performance            # atomic switch
+```
+
+With the shell hook enabled, the prompt shows `(base)`, `(research)`, or `(performance)`. It searches parent directories for the nearest `.harness`, so the prefix and CLI continue to use the same project from nested directories. The prefix disappears after `harness deactivate` or after leaving the project tree.
 
 Environment state is project-local:
 
@@ -175,15 +211,16 @@ harness activate research
 
 | Command | Purpose |
 | --- | --- |
-| `harness env create <name>` | Create an empty named Environment |
+| `harness env create [name]` | Create an empty Environment; defaults to `base` |
 | `harness env list` | List Environments and mark the active one |
 | `harness env show <name>` | Show roots, resolved packages, targets, and bindings |
 | `harness env remove <name>` | Remove an inactive Environment |
-| `harness install -n <env> <source>` | Install a Package and recursive dependencies |
-| `harness bind -n <env> <name> <command...>` | Configure a project command for Skills |
-| `harness activate <env>` | Atomically activate or switch an Environment |
+| `harness install [-n <env>] <source>` | Install a Package and recursive dependencies; defaults to `base` |
+| `harness bind [-n <env>] <name> <command...>` | Configure a project command for Skills; defaults to `base` |
+| `harness activate [env]` | Atomically activate or switch an Environment; defaults to `base` |
 | `harness deactivate` | Deactivate the complete active Environment |
 | `harness current` | Show the active Environment and package closure |
+| `harness shell hook [bash\|zsh]` | Print shell integration for the active-Environment prompt |
 | `harness sync [-n <env>]` | Restore exact locked packages |
 | `harness doctor [-n <env>]` | Verify lock, requirements, bindings, and activation |
 | `harness init [directory]` | Scaffold a Package or meta-skill |

@@ -9,6 +9,7 @@
 - Install and lock complete meta-skill dependency closures into a selected Environment.
 - Atomically activate, switch, and deactivate full dependency closures with drift checks and rollback.
 - Added Environment-aware `current`, `sync`, `doctor`, and `bind` behavior.
+- Added a user-controlled `base` Environment default and bash/zsh shell hooks that display the active project Environment in the command prompt.
 - Removed research-specific workflow commands from the core CLI: `onboard`, `project`, `profile`, `switch`, `leave`, `enter`, `handoff`, `outcome`, `stats`, `use`, and `eval`.
 - Reframed built-in packages as optional methods rather than mandatory workflow phases.
 
