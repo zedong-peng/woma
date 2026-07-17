@@ -6,12 +6,6 @@ export interface EnvironmentRequirement {
   optional: boolean;
 }
 
-export interface BindingRequirement {
-  name: string;
-  description?: string | undefined;
-  optional: boolean;
-}
-
 export interface SkillSpec {
   name: string;
   path: string;
@@ -70,7 +64,6 @@ export interface HarnessManifest {
     requirements: {
       env: EnvironmentRequirement[];
       commands: string[];
-      bindings: BindingRequirement[];
     };
     dependencies: PackageDependency[];
     entrypoints: SkillEntrypoint[];
@@ -159,7 +152,6 @@ export interface HarnessEnvironment {
   spec: {
     targets: Platform[];
     roots: EnvironmentRoot[];
-    bindings: Record<string, string>;
   };
 }
 

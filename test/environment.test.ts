@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
-  bindEnvironment,
   createEnvironment,
   environmentLockPath,
   environmentPath,
@@ -14,11 +13,13 @@ import {
   doctorEnvironment,
   installIntoEnvironment,
   readEnvironmentLock,
+  removeEnvironment,
   syncEnvironment,
 } from "../src/environment.js";
 import { activatePackage } from "../src/activation.js";
 import { installPackageSource } from "../src/package.js";
 import { putLock, readState, statePath } from "../src/store.js";
+import { packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 
 async function environmentPackageFixture(
   root: string,
@@ -78,14 +79,35 @@ spec:
   );
 });
 
-test("invalid bindings do not corrupt an environment recipe", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-schema-"));
+test("environment recipes reject legacy command bindings", () => {
+  assert.throws(
+    () =>
+      parseEnvironment(`
+apiVersion: harness.conda/environment-v1
+kind: HarnessEnvironment
+metadata:
+  name: research
+spec:
+  targets: [codex]
+  bindings:
+    test: npm test
+`),
+    /spec.*Unrecognized key.*bindings/s,
+  );
+});
+
+test("removing an environment preserves user-owned Project Memory", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-memory-lifecycle-"));
   try {
     await createEnvironment(root, "research", ["codex"]);
-    const filePath = environmentPath(root, "research");
-    const before = await readFile(filePath, "utf8");
-    await assert.rejects(bindEnvironment(root, "research", "../test", "npm test"), /must use lowercase letters/);
-    assert.equal(await readFile(filePath, "utf8"), before);
+    await writeFile(projectMemoryPath(root), "# Shared knowledge\n", "utf8");
+    const scoped = packageMemoryPath(root, "auto-research");
+    await writeFile(scoped, "# Research adaptation\n", "utf8");
+
+    await removeEnvironment(root, "research");
+
+    assert.equal(await readFile(projectMemoryPath(root), "utf8"), "# Shared knowledge\n");
+    assert.equal(await readFile(scoped, "utf8"), "# Research adaptation\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

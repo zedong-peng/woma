@@ -11,8 +11,6 @@ cd "$repo_root"
 npm run build >/dev/null
 node dist/src/cli.js --project "$demo_root/project" env create performance --target both
 node dist/src/cli.js --project "$demo_root/project" install -n performance ./examples/performance-engineering
-node dist/src/cli.js --project "$demo_root/project" bind -n performance test "npm test"
-node dist/src/cli.js --project "$demo_root/project" bind -n performance benchmark "npm run benchmark"
 node dist/src/cli.js --project "$demo_root/project" activate performance
 node dist/src/cli.js --project "$demo_root/project" current
 node dist/src/cli.js --project "$demo_root/project" doctor -n performance

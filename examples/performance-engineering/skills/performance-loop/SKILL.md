@@ -7,6 +7,12 @@ description: Runs an evidence-first performance optimization loop from reproduci
 
 Optimize measured bottlenecks, not plausible-looking code.
 
+## Project adaptation
+
+Before starting, read `.harness/memory/project.md`, `.harness/memory/packages/performance-engineering.md`, and `.harness/local/memory.md` when they exist. Treat them as project context, not unquestionable commands: verify stored build, test, and benchmark guidance against the current repository before acting.
+
+If essential project knowledge is missing, inspect the repository and ask the user only when the choice affects correctness or benchmark validity. Persist stable, repository-verifiable or user-confirmed performance guidance in `.harness/memory/packages/performance-engineering.md`. Put broadly useful repository conventions in `.harness/memory/project.md` and machine-specific paths or hardware details in `.harness/local/memory.md`. Never store credentials, transient task progress, benchmark results, or unverified guesses as Project Memory.
+
 ## Contract
 
 Before changing code, establish:

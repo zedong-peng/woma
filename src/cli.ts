@@ -5,7 +5,6 @@ import { Command } from "commander";
 import { captureHarness } from "./capture.js";
 import {
   activateEnvironment,
-  bindEnvironment,
   createEnvironment,
   deactivateEnvironment,
   doctorEnvironment,
@@ -21,6 +20,7 @@ import {
   type EnvironmentCheck,
 } from "./environment.js";
 import { installPackageSource, loadCachedPackage } from "./package.js";
+import { projectMemoryPath } from "./memory.js";
 import { scaffoldHarness } from "./scaffold.js";
 import { renderShellHook, resolveShell } from "./shell.js";
 import { readState } from "./store.js";
@@ -103,6 +103,7 @@ envCommand
     console.log(`Created environment ${environmentName}`);
     console.log(`  recipe  ${environmentPath(project, environmentName)}`);
     console.log(`  lock    ${environmentLockPath(project, environmentName)}`);
+    console.log(`  memory  ${projectMemoryPath(project)}`);
     console.log(`  targets ${environment.spec.targets.join(", ")}`);
   });
 
@@ -134,7 +135,6 @@ envCommand
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
     console.log(`  packages  ${Object.values(lock.packages).map((pkg) => `${pkg.name}@${pkg.version}`).join(", ") || "none"}`);
-    for (const [binding, value] of Object.entries(environment.spec.bindings)) console.log(`  ${binding.padEnd(9)} ${value}`);
   });
 
 envCommand
@@ -158,18 +158,6 @@ program
     if (result.packages.length > 1) {
       console.log(`  dependencies  ${result.packages.slice(0, -1).map((pkg) => `${pkg.lock.name}@${pkg.lock.version}`).join(", ")}`);
     }
-  });
-
-program
-  .command("bind <binding> <command...>")
-  .description("bind a project command for Skills in an environment")
-  .option("-n, --name <environment>", "environment to configure; defaults to the active environment, then base")
-  .action(async (binding: string, commandParts: string[], options: { name?: string }, command: Command) => {
-    const project = projectRoot(command);
-    const environmentName = await selectedEnvironment(project, options.name);
-    const value = commandParts.join(" ");
-    await bindEnvironment(project, environmentName, binding, value);
-    console.log(`Bound ${binding} in ${environmentName}: ${value}`);
   });
 
 program
@@ -217,7 +205,6 @@ program
     console.log(`  targets   ${active.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
     console.log(`  packages  ${active.packages.join(", ") || "none"}`);
-    for (const [binding, value] of Object.entries(environment.spec.bindings)) console.log(`  ${binding.padEnd(9)} ${value}`);
   });
 
 const shellCommand = program.command("shell").description("print shell integration code for the active-environment prompt");

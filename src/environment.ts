@@ -8,6 +8,7 @@ import { z } from "zod";
 import { activatePackage, deactivatePackage } from "./activation.js";
 import { assertInside, hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import { installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
+import { initializeProjectMemory } from "./memory.js";
 import { deleteActiveEnvironment, deleteActiveProfile, putActiveEnvironment, readLock, readState, statePath } from "./store.js";
 import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform, StateFile } from "./types.js";
 
@@ -51,7 +52,6 @@ const environmentSchema = z
         roots: z
           .array(z.object({ name: environmentName, source: z.string().min(1) }).strict())
           .default([]),
-        bindings: z.record(environmentName, z.string().min(1)).default({}),
       })
       .strict(),
   })
@@ -183,13 +183,14 @@ export async function createEnvironment(projectRoot: string, name: string, targe
     apiVersion: "harness.conda/environment-v1",
     kind: "HarnessEnvironment",
     metadata: { name },
-    spec: { targets: [...new Set(targets)], roots: [], bindings: {} },
+    spec: { targets: [...new Set(targets)], roots: [] },
   };
   environmentSchema.parse(environment);
   await writeEnvironment(projectRoot, environment);
   try {
     await writeJsonAtomic(environmentLockPath(projectRoot, name), emptyLock());
     await ensureLocalGitExcludes(projectRoot);
+    await initializeProjectMemory(projectRoot);
   } catch (error) {
     await rm(environmentPath(projectRoot, name), { force: true });
     await rm(environmentLockPath(projectRoot, name), { force: true });
@@ -409,17 +410,6 @@ export async function installIntoEnvironment(
   return { environment: updated, root: installation.root, packages: installation.packages };
 }
 
-export async function bindEnvironment(projectRoot: string, name: string, binding: string, command: string): Promise<HarnessEnvironment> {
-  environmentName.parse(binding);
-  const environment = await readEnvironment(projectRoot, name);
-  const updated: HarnessEnvironment = {
-    ...environment,
-    spec: { ...environment.spec, bindings: { ...environment.spec.bindings, [binding]: command } },
-  };
-  await writeEnvironment(projectRoot, updated);
-  return updated;
-}
-
 async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: LockFile): Promise<LoadedEnvironment> {
   const names = await validateEnvironmentLock(environment, lock);
   const packages = new Map<string, InstalledPackage>();
@@ -428,13 +418,6 @@ async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: Lo
     for (const target of environment.spec.targets) {
       if (!pkg.manifest.spec.platforms.includes(target)) {
         throw new Error(`${pkg.manifest.metadata.name} does not support environment target ${target}`);
-      }
-    }
-    for (const requirement of pkg.manifest.spec.requirements.bindings) {
-      if (!requirement.optional && !environment.spec.bindings[requirement.name]) {
-        throw new Error(
-          `Package ${pkg.manifest.metadata.name} requires binding ${requirement.name}; run harness bind -n ${environment.metadata.name} ${requirement.name} <command>`,
-        );
       }
     }
   }
@@ -680,14 +663,6 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
         status: present ? "ok" : requirement.optional ? "warn" : "fail",
         label: `env:${requirement.name}`,
         detail: present ? "set" : requirement.optional ? "optional and not set" : "required and not set",
-      });
-    }
-    for (const requirement of pkg.manifest.spec.requirements.bindings) {
-      const configured = environment.spec.bindings[requirement.name];
-      checks.push({
-        status: configured ? "ok" : requirement.optional ? "warn" : "fail",
-        label: `binding:${requirement.name}`,
-        detail: configured ?? (requirement.optional ? "optional and not configured" : "required and not configured"),
       });
     }
   }

@@ -48,7 +48,7 @@ codex
 harness deactivate
 ```
 
-`install` and `bind` use the active Environment when `--name` is omitted, then fall back to `base`, an empty project-local default that contains only the packages the user selects. `env create` without a name creates `base`, and `activate` without a name switches to `base`, matching Conda. Installing `auto-research` recursively installs and locks its component packages. Activating `base` makes the complete dependency closure available to the selected Agent in dependency-first order.
+`install` uses the active Environment when `--name` is omitted, then falls back to `base`, an empty project-local default that contains only the packages the user selects. `env create` without a name creates `base`, and `activate` without a name switches to `base`, matching Conda. Installing `auto-research` recursively installs and locks its component packages. Activating `base` makes the complete dependency closure available to the selected Agent in dependency-first order.
 
 Only one Environment is active in a project. Activating another Environment atomically removes packages unique to the old Environment, preserves identical shared packages, activates the new closure, and rolls back if the transition fails.
 
@@ -62,7 +62,10 @@ Meta-Skill
   = ordinary Skill with a natural-language method and Package dependencies
 
 Environment
-  = root Packages + recursive dependency closure + targets + bindings + lock
+  = root Packages + recursive dependency closure + targets + lock
+
+Project Memory
+  = natural-language repository knowledge shared globally or isolated by Package
 
 Base Environment
   = conventional default Environment; empty until the user installs Packages
@@ -84,7 +87,6 @@ The `base` fallback makes the common case shorter while preserving named Environ
 ```bash
 harness env create --target codex       # creates base
 harness install builtin:paper-search    # installs into base
-harness bind test "npm test"            # binds in base
 harness activate                        # activates base
 ```
 
@@ -97,11 +99,10 @@ harness activate research
 harness activate performance            # atomic switch
 ```
 
-With a named Environment active, omitted `--name` values select that Environment. Bindings and packages update it directly:
+With a named Environment active, omitted `--name` values select that Environment. Packages update it directly:
 
 ```bash
 # prompt: (harness:research)
-harness bind test "npm test"             # binds in research
 harness install builtin:paper-search     # installs and activates in research
 ```
 
@@ -117,10 +118,13 @@ Environment state is project-local:
 │   └── cpp-performance.yaml
 ├── locks/
 │   └── cpp-performance.lock.json
+├── memory/
+│   ├── project.md
+│   └── packages/
 └── state.json
 ```
 
-The YAML recipe records user-selected root packages, Agent targets, and project bindings. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `state.json` is machine-local activation ownership state.
+The YAML recipe records user-selected root packages and Agent targets. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `memory/` contains portable natural-language project adaptation, while `state.json` and `local/` are machine-local and must not be committed.
 
 ## Packages and meta-skills
 
@@ -186,16 +190,17 @@ Describe the component Skill sources, intended outcome, normal ordering, feedbac
 
 The assistant authors the method; Harness Conda remains neutral about its execution. It does not turn the method into a DAG or add workflow phases to the core.
 
-## Project bindings
+## Project Memory
 
-Reusable Skills can require abstract project commands such as `test` or `benchmark`. Bind them per Environment:
+Portable Skills should not hard-code one repository's build, test, benchmark, or operational conventions. Users describe those details naturally to the Agent, which records stable, verified knowledge in isolated Project Memory:
 
-```bash
-harness bind -n cpp-performance test "npm test"
-harness bind -n cpp-performance benchmark "./scripts/benchmark.sh"
+```text
+.harness/memory/project.md                         shared repository knowledge
+.harness/memory/packages/performance-engineering.md  package-specific adaptation
+.harness/local/memory.md                           machine-specific, git-ignored context
 ```
 
-A missing required binding blocks activation before the current Environment changes. Harness Conda exposes the binding to the active method but does not decide when to execute it.
+Methods read the relevant files when present, verify them against the repository, and ask or inspect when essential context is missing. Harness initializes and isolates these paths but does not interpret the prose, execute commands from it, or manage workflow progress. Project Memory must not contain credentials, transient task state, handoffs, outcomes, or unverified guesses. See [the Project Memory specification](docs/project-memory.md).
 
 ## Reproduction
 
@@ -223,16 +228,15 @@ harness activate research
 | --- | --- |
 | `harness env create [name]` | Create an empty Environment; defaults to `base` |
 | `harness env list` | List Environments and mark the active one |
-| `harness env show <name>` | Show roots, resolved packages, targets, and bindings |
+| `harness env show <name>` | Show roots, resolved packages, and targets |
 | `harness env remove <name>` | Remove an inactive Environment |
 | `harness install [-n <env>] <source>` | Install a Package and recursive dependencies; defaults to active, then `base` |
-| `harness bind [-n <env>] <name> <command...>` | Configure a project command for Skills; defaults to active, then `base` |
 | `harness activate [env]` | Atomically activate or switch an Environment; defaults to `base` |
 | `harness deactivate` | Deactivate the complete active Environment |
 | `harness current` | Show the active Environment and package closure |
 | `harness shell hook [bash\|zsh]` | Print shell integration for the active-Environment prompt |
 | `harness sync [-n <env>]` | Restore exact locked packages |
-| `harness doctor [-n <env>]` | Verify lock, requirements, bindings, and activation |
+| `harness doctor [-n <env>]` | Verify lock, requirements, and activation |
 | `harness init [directory]` | Scaffold a Package or meta-skill |
 | `harness inspect <source>` | Inspect a Package manifest without installing it |
 | `harness capture <directory>` | Capture Agent resources as a Package |

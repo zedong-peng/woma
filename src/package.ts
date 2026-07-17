@@ -155,12 +155,6 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
     }
   }
 
-  const bindingNames = new Set<string>();
-  for (const requirement of manifest.spec.requirements.bindings) {
-    if (bindingNames.has(requirement.name)) throw new Error(`Duplicate binding requirement: ${requirement.name}`);
-    bindingNames.add(requirement.name);
-  }
-
   const dependencyNames = new Set<string>();
   for (const dependency of manifest.spec.dependencies) {
     if (dependencyNames.has(dependency.name)) throw new Error(`Duplicate package dependency: ${dependency.name}`);

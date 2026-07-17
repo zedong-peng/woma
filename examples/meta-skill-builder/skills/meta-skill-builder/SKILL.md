@@ -16,7 +16,7 @@ Use the user's available Harness CLI invocation for all commands below. Examples
 1. Inspect the destination before changing it. Refuse to overwrite an existing `harness.yaml` or unrelated files unless the user explicitly requests an update.
 2. Establish the package name, destination, desired outcome, Agent targets, and component package sources. Ask only for choices that cannot be discovered or safely inferred.
 3. Run `harness inspect <source>` for every component source. Record its resolved package name and version. Stop on an identity mismatch, invalid package, unavailable source, or incompatible version request.
-4. Extract the method's capabilities and control semantics:
+4. Extract the method's capabilities, project adaptation needs, and control semantics:
    - normal ordering without treating every step as mandatory;
    - conditions for branching, retrying, returning to an earlier capability, or skipping work;
    - evidence carried between iterations;
@@ -26,6 +26,8 @@ Use the user's available Harness CLI invocation for all commands below. Examples
 5. Create the package directory with `harness init <directory> --name <package-name>` when starting from scratch, then replace the generic scaffold with the format in the reference.
 6. Declare every component package in `spec.dependencies`. Expose exactly one coordinating Skill as the primary entrypoint unless the user explicitly needs multiple entrypoints.
 7. Write the coordinating `SKILL.md` as an adaptive method. Refer to dependencies by their declared Skill or capability names. Do not copy their implementation instructions or claim tools that their packages do not provide.
+   - Tell the method to read `.harness/memory/project.md`, `.harness/memory/packages/<package-name>.md`, and `.harness/local/memory.md` when present.
+   - Tell it to verify stored guidance, ask or inspect when essential context is missing, and persist only stable project knowledge in the correctly scoped file.
 8. Run `harness inspect <directory>` from the directory containing the generated package. This must validate the manifest, Skill paths, package identity, dependency identities, versions, sources, and complete dependency closure.
 9. Review the generated package for machine-specific paths, credentials, hard-coded project commands, hidden dependencies, and mandatory linear phases. Fix any issue and rerun validation.
 
@@ -33,7 +35,9 @@ Use the user's available Harness CLI invocation for all commands below. Examples
 
 - Keep orchestration policy in the generated `SKILL.md`, not in Harness Conda core state.
 - Use dependencies for installable component packages, not as an ordered step list.
-- Use project bindings for abstract commands such as `test` or `benchmark`; never embed one user's repository commands in a portable package.
+- Use Project Memory for repository-specific build, test, benchmark, and operational guidance; never embed one user's repository commands in a portable package.
+- Keep shared knowledge in `.harness/memory/project.md`, package-specific adaptation in `.harness/memory/packages/<package-name>.md`, and machine-specific knowledge in the git-ignored `.harness/local/memory.md`.
+- Never store credentials, transient task progress, handoffs, outcomes, or unverified guesses as Project Memory.
 - Use environment-variable requirements for secret names only. Never write credential values.
 - Prefer immutable Git tags or revisions for shared packages. Treat local dependency sources as development-only and call out that they are not portable.
 - Do not publish, push, install into the user's active Environment, or delete existing files without explicit authorization.

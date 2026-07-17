@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   activateEnvironment,
-  bindEnvironment,
   createEnvironment,
   deactivateEnvironment,
   installIntoEnvironment,
@@ -22,8 +21,6 @@ try {
   await createEnvironment(project, "performance", ["codex"]);
   await installIntoEnvironment(project, "research", "builtin:auto-research");
   await installIntoEnvironment(project, "performance", "builtin:performance-engineering");
-  await bindEnvironment(project, "performance", "test", "true");
-  await bindEnvironment(project, "performance", "benchmark", "true");
   await activateEnvironment(project, "research");
 
   const samples = [];

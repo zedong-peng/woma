@@ -38,7 +38,6 @@ async function packageFixture(
   root: string,
   name: string,
   dependencies: { name: string; source: string }[] = [],
-  requirements = "",
 ): Promise<string> {
   const packageRoot = path.join(root, name);
   const dependencyYaml = dependencies.length === 0
@@ -56,7 +55,7 @@ metadata:
   description: ${name} fixture.
 spec:
   platforms: [codex]
-${dependencyYaml}${requirements}  skills:
+${dependencyYaml}  skills:
     - name: ${name}
       path: ./skills/${name}
 `,
@@ -74,12 +73,15 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
   try {
     const result = await runCli(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
-    for (const command of ["env", "install", "activate", "deactivate", "current", "sync", "doctor", "bind", "shell"]) {
+    for (const command of ["env", "install", "activate", "deactivate", "current", "sync", "doctor", "shell"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
     }
-    for (const command of ["onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
+    for (const command of ["bind", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
       assert.doesNotMatch(result.stdout, new RegExp(`^  ${command}(?: |$)`, "m"));
     }
+    const removed = await runCli(["bind", "test", "npm", "test"], root, path.join(root, "home"));
+    assert.notEqual(removed.code, 0);
+    assert.match(removed.stderr, /unknown command ['"]bind['"]/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -96,6 +98,7 @@ test("CLI provides a Conda-style base environment default from project subdirect
     const create = await runCli(["env", "create", "--target", "codex"], project, home);
     assert.equal(create.code, 0, create.stderr);
     assert.match(create.stdout, /Created environment base/);
+    assert.match(create.stdout, /memory\s+.*\.harness\/memory\/project\.md/);
 
     const install = await runCli(["install", pkg], project, home);
     assert.equal(install.code, 0, install.stderr);
@@ -131,6 +134,9 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     const create = await runCli(["--project", project, "env", "create", "research", "--target", "codex"], root, home);
     assert.equal(create.code, 0, create.stderr);
     assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/state\.json/);
+    assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/local\//);
+    assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
+    await access(path.join(project, ".harness", "memory", "packages"));
     const install = await runCli(["--project", project, "install", "-n", "research", meta], root, home);
     assert.equal(install.code, 0, install.stderr);
     assert.match(install.stdout, /dependencies\s+paper-search@1\.0\.0/);
@@ -184,18 +190,13 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
   }
 });
 
-test("CLI atomically switches environments and enforces required bindings", { concurrency: false }, async () => {
+test("CLI atomically switches environments", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-switch-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   try {
     const first = await packageFixture(root, "first-skill");
-    const second = await packageFixture(
-      root,
-      "second-skill",
-      [],
-      "  requirements:\n    bindings:\n      - name: test\n        optional: false\n",
-    );
+    const second = await packageFixture(root, "second-skill");
     for (const name of ["first", "second"]) {
       const create = await runCli(["--project", project, "env", "create", name, "--target", "codex"], root, home);
       assert.equal(create.code, 0, create.stderr);
@@ -204,22 +205,9 @@ test("CLI atomically switches environments and enforces required bindings", { co
     assert.equal((await runCli(["--project", project, "install", "-n", "second", second], root, home)).code, 0);
     assert.equal((await runCli(["--project", project, "activate", "first"], root, home)).code, 0);
 
-    const bindActive = await runCli(["--project", project, "bind", "selected", "npm", "test"], root, home);
-    assert.equal(bindActive.code, 0, bindActive.stderr);
-    assert.match(bindActive.stdout, /Bound selected in first/);
-    assert.match(await readFile(path.join(project, ".harness", "environments", "first.yaml"), "utf8"), /selected: npm test/);
     const installActive = await runCli(["--project", project, "install", second], root, home);
-    assert.notEqual(installActive.code, 0);
-    assert.match(installActive.stderr, /requires binding test/);
+    assert.equal(installActive.code, 0, installActive.stderr);
     assert.match(await readFile(path.join(project, ".agents", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
-
-    const blocked = await runCli(["--project", project, "activate", "second"], root, home);
-    assert.notEqual(blocked.code, 0);
-    assert.match(blocked.stderr, /requires binding test/);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
-
-    const bind = await runCli(["--project", project, "bind", "-n", "second", "test", "npm", "test"], root, home);
-    assert.equal(bind.code, 0, bind.stderr);
     const switched = await runCli(["--project", project, "activate", "second"], root, home);
     assert.equal(switched.code, 0, switched.stderr);
     await assert.rejects(readFile(path.join(project, ".agents", "skills", "first-skill", "SKILL.md")), /ENOENT/);

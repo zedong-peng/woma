@@ -18,7 +18,7 @@ spec:
   assert.deepEqual(manifest.spec.platforms, ["codex", "claude"]);
   assert.deepEqual(manifest.spec.dependencies, []);
   assert.deepEqual(manifest.spec.entrypoints, []);
-  assert.deepEqual(manifest.spec.requirements, { env: [], commands: [], bindings: [] });
+  assert.deepEqual(manifest.spec.requirements, { env: [], commands: [] });
   assert.deepEqual(manifest.spec.mcpServers, []);
   assert.deepEqual(manifest.spec.hooks, []);
 });
@@ -68,6 +68,25 @@ spec:
   skills: []
 `),
     /spec\.dependencies\.0\.version: must be a valid semver range/,
+  );
+});
+
+test("manifest parser rejects legacy command bindings", () => {
+  assert.throws(
+    () =>
+      parseManifest(`
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: legacy-bindings
+  version: 1.0.0
+  description: Legacy binding fixture.
+spec:
+  requirements:
+    bindings:
+      - name: test
+`),
+    /spec\.requirements.*Unrecognized key.*bindings/s,
   );
 });
 

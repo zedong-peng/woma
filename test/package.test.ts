@@ -86,6 +86,10 @@ test("the built-in auto-research meta-skill installs its documented component Sk
       "auto-research",
     ]);
     assert.deepEqual(installation.root.lock.dependencies, ["paper-search", "idea-gen", "exp-design"]);
+    const instructions = await readFile(path.join(installation.root.root, "skills", "auto-research", "SKILL.md"), "utf8");
+    assert.match(instructions, /\.harness\/memory\/project\.md/);
+    assert.match(instructions, /\.harness\/memory\/packages\/auto-research\.md/);
+    assert.match(instructions, /\.harness\/local\/memory\.md/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -110,6 +114,22 @@ test("the built-in meta-skill builder is a valid installable authoring package",
     assert.match(instructions, /harness inspect <source>/);
     assert.match(instructions, /interruption checkpoints/);
     assert.match(instructions, /Do not introduce a DAG/);
+    assert.match(instructions, /\.harness\/memory\/packages\/<package-name>\.md/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the built-in performance method uses Project Memory instead of command bindings", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-performance-memory-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const installation = await installPackageTree("builtin:performance-engineering");
+    assert.deepEqual(installation.root.manifest.spec.requirements, { env: [], commands: ["git", "node"] });
+    const instructions = await readFile(path.join(installation.root.root, "skills", "performance-loop", "SKILL.md"), "utf8");
+    assert.match(instructions, /\.harness\/memory\/project\.md/);
+    assert.match(instructions, /\.harness\/memory\/packages\/performance-engineering\.md/);
+    assert.match(instructions, /verify stored build, test, and benchmark guidance/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

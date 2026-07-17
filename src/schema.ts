@@ -86,20 +86,9 @@ const manifestSchema = z
               )
               .default([]),
             commands: z.array(z.string().min(1)).default([]),
-            bindings: z
-              .array(
-                z
-                  .object({
-                    name: packageName,
-                    description: z.string().min(1).optional(),
-                    optional: z.boolean().default(false),
-                  })
-                  .strict(),
-              )
-              .default([]),
           })
           .strict()
-          .default({ env: [], commands: [], bindings: [] }),
+          .default({ env: [], commands: [] }),
         skills: z
           .array(
             z
