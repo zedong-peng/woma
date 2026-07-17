@@ -16,6 +16,7 @@
     "examples/idea-gen",
     "examples/exp-design",
     "examples/auto-research",
+    "examples/meta-skill-builder",
     "scripts/benchmark-switch.mjs",
     "CHANGELOG.md",
     "README.md",

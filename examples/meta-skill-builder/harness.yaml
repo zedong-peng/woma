@@ -1,0 +1,16 @@
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: meta-skill-builder
+  version: 1.0.0
+  description: Turn a natural-language multi-Skill method into a valid, installable Harness meta-skill package.
+  tags: [authoring, meta-skill]
+spec:
+  platforms: [codex, claude]
+  entrypoints:
+    - name: create-meta-skill
+      skill: meta-skill-builder
+      description: Create and validate an installable meta-skill from a user's method and component Skills.
+  skills:
+    - name: meta-skill-builder
+      path: ./skills/meta-skill-builder

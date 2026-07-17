@@ -91,6 +91,30 @@ test("the built-in auto-research meta-skill installs its documented component Sk
   }
 });
 
+test("the built-in meta-skill builder is a valid installable authoring package", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-meta-builder-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const installation = await installPackageTree("builtin:meta-skill-builder");
+    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["meta-skill-builder"]);
+    assert.deepEqual(installation.root.lock.dependencies, []);
+    assert.deepEqual(installation.root.manifest.spec.requirements.commands, []);
+    assert.deepEqual(installation.root.manifest.spec.entrypoints, [
+      {
+        name: "create-meta-skill",
+        skill: "meta-skill-builder",
+        description: "Create and validate an installable meta-skill from a user's method and component Skills.",
+      },
+    ]);
+    const instructions = await readFile(path.join(installation.root.root, "skills", "meta-skill-builder", "SKILL.md"), "utf8");
+    assert.match(instructions, /harness inspect <source>/);
+    assert.match(instructions, /interruption checkpoints/);
+    assert.match(instructions, /Do not introduce a DAG/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("installing a meta-skill resolves transitive dependencies in dependency-first order", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
   process.env.HARNESS_HOME = path.join(root, "home");

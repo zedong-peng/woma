@@ -5,6 +5,7 @@
 - Replaced workflow profiles with named, project-local Agent Environments.
 - Added per-Environment recipes, locks, root packages, targets, and project bindings.
 - Added recursive package dependencies and lightweight meta-skill entrypoints with SemVer conflict detection.
+- Added a built-in meta-skill creation assistant for turning natural-language multi-Skill methods into validated packages.
 - Install and lock complete meta-skill dependency closures into a selected Environment.
 - Atomically activate, switch, and deactivate full dependency closures with drift checks and rollback.
 - Added Environment-aware `current`, `sync`, `doctor`, and `bind` behavior.
