@@ -1,14 +1,15 @@
-import { access, readdir, readFile, rm } from "node:fs/promises";
+import { access, cp, lstat, mkdir, mkdtemp, readlink, readdir, readFile, rm, symlink } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { constants } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { satisfies } from "semver";
 import { z } from "zod";
 import { activatePackage, deactivatePackage } from "./activation.js";
-import { hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
+import { assertInside, hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import { installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
-import { deleteActiveEnvironment, deleteActiveProfile, putActiveEnvironment, readLock, readState } from "./store.js";
-import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
+import { deleteActiveEnvironment, deleteActiveProfile, putActiveEnvironment, readLock, readState, statePath } from "./store.js";
+import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform, StateFile } from "./types.js";
 
 const environmentName = z
   .string()
@@ -67,6 +68,17 @@ export interface EnvironmentCheck {
   status: "ok" | "warn" | "fail";
   label: string;
   detail: string;
+}
+
+interface LoadedEnvironment {
+  environment: HarnessEnvironment;
+  lock: LockFile;
+  names: string[];
+  packages: Map<string, InstalledPackage>;
+}
+
+interface EnvironmentInstallHooks {
+  onResourcesApplied?: () => Promise<void> | void;
 }
 
 export function environmentsRoot(projectRoot: string): string {
@@ -267,22 +279,110 @@ function reachableLock(lock: LockFile, roots: string[]): LockFile {
   return { lockfileVersion: 1, packages: Object.fromEntries(names.map((name) => [name, lock.packages[name]!])) };
 }
 
+type PathBackup =
+  | { target: string; kind: "missing" }
+  | { target: string; kind: "file" | "directory"; backup: string }
+  | { target: string; kind: "symlink"; link: string };
+
+function transitionPaths(projectRoot: string, environmentNameValue: string, state: StateFile, desired: LoadedEnvironment): string[] {
+  const project = path.resolve(projectRoot);
+  const paths = new Set<string>([
+    environmentPath(project, environmentNameValue),
+    environmentLockPath(project, environmentNameValue),
+    statePath(project),
+    path.join(project, ".codex", "config.toml"),
+    path.join(project, ".codex", "hooks.json"),
+    path.join(project, ".mcp.json"),
+    path.join(project, ".claude", "settings.json"),
+  ]);
+  for (const activation of Object.values(state.activations)) {
+    for (const artifact of activation.artifacts) {
+      const absolute = path.resolve(project, artifact.path);
+      assertInside(project, absolute, `Managed artifact ${artifact.path}`);
+      paths.add(absolute);
+    }
+  }
+  for (const pkg of desired.packages.values()) {
+    for (const target of desired.environment.spec.targets) {
+      const skillBase = path.join(project, target === "codex" ? ".agents/skills" : ".claude/skills");
+      for (const skill of pkg.manifest.spec.skills) paths.add(path.join(skillBase, skill.name));
+    }
+  }
+  return [...paths];
+}
+
+async function withPathSnapshot<T>(paths: string[], operation: () => Promise<T>): Promise<T> {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "harness-environment-transition-"));
+  const backups: PathBackup[] = [];
+  try {
+    for (const [index, target] of paths.entries()) {
+      const info = await lstat(target).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (!info) {
+        backups.push({ target, kind: "missing" });
+        continue;
+      }
+      if (info.isSymbolicLink()) {
+        backups.push({ target, kind: "symlink", link: await readlink(target) });
+        continue;
+      }
+      if (!info.isFile() && !info.isDirectory()) throw new Error(`Cannot snapshot unsupported path type: ${target}`);
+      const backup = path.join(temporary, String(index));
+      await cp(target, backup, { recursive: info.isDirectory(), preserveTimestamps: true });
+      backups.push({ target, kind: info.isDirectory() ? "directory" : "file", backup });
+    }
+    return await operation();
+  } catch (error) {
+    try {
+      for (const backup of backups) {
+        await rm(backup.target, { recursive: true, force: true });
+        if (backup.kind === "missing") continue;
+        await mkdir(path.dirname(backup.target), { recursive: true });
+        if (backup.kind === "symlink") {
+          await symlink(backup.link, backup.target);
+        } else {
+          await cp(backup.backup, backup.target, { recursive: backup.kind === "directory", preserveTimestamps: true });
+        }
+      }
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], `Environment transition failed and rollback could not restore the project`);
+    }
+    throw error;
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+}
+
+async function writeEnvironmentInstall(
+  projectRoot: string,
+  environmentNameValue: string,
+  environment: HarnessEnvironment,
+  lock: LockFile,
+  previousLock: LockFile,
+): Promise<void> {
+  await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), lock);
+  try {
+    await writeEnvironment(projectRoot, environment);
+  } catch (error) {
+    await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), previousLock);
+    throw error;
+  }
+}
+
 export async function installIntoEnvironment(
   projectRoot: string,
   environmentNameValue: string,
   source: string,
   cwd = process.cwd(),
+  hooks: EnvironmentInstallHooks = {},
 ): Promise<{ environment: HarnessEnvironment; root: InstalledPackage; packages: InstalledPackage[] }> {
   const [environment, currentLock, state] = await Promise.all([
     readEnvironment(projectRoot, environmentNameValue),
     readEnvironmentLock(projectRoot, environmentNameValue),
     readState(projectRoot),
   ]);
-  if (state.activeEnvironment?.name === environmentNameValue) {
-    throw new Error(
-      `Environment ${environmentNameValue} is active; run harness deactivate, then reinstall with --name ${environmentNameValue}`,
-    );
-  }
   validateEnvironmentLockGraph(environment, currentLock);
   const installation = await installPackageTree(source, cwd);
   const next: LockFile = { lockfileVersion: 1, packages: { ...currentLock.packages } };
@@ -294,13 +394,17 @@ export async function installIntoEnvironment(
     : [...environment.spec.roots, { name: installation.root.lock.name, source: installation.root.lock.source }];
   const pruned = reachableLock(next, roots.map((root) => root.name));
   const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
-  await validateEnvironmentLock(updated, pruned);
-  await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), pruned);
-  try {
-    await writeEnvironment(projectRoot, updated);
-  } catch (error) {
-    await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), currentLock);
-    throw error;
+  if (state.activeEnvironment?.name === environmentNameValue) {
+    const desired = await loadEnvironmentSnapshot(updated, pruned);
+    const previous = await loadEnvironmentSnapshot(environment, currentLock);
+    await withPathSnapshot(transitionPaths(projectRoot, environmentNameValue, state, desired), async () => {
+      await transitionEnvironment(projectRoot, environmentNameValue, desired, previous);
+      await hooks.onResourcesApplied?.();
+      await writeEnvironmentInstall(projectRoot, environmentNameValue, updated, pruned, currentLock);
+    });
+  } else {
+    await validateEnvironmentLock(updated, pruned);
+    await writeEnvironmentInstall(projectRoot, environmentNameValue, updated, pruned, currentLock);
   }
   return { environment: updated, root: installation.root, packages: installation.packages };
 }
@@ -316,14 +420,7 @@ export async function bindEnvironment(projectRoot: string, name: string, binding
   return updated;
 }
 
-async function loadOrderedPackages(projectRoot: string, name: string): Promise<{
-  environment: HarnessEnvironment;
-  lock: LockFile;
-  names: string[];
-  packages: Map<string, InstalledPackage>;
-}> {
-  const environment = await readEnvironment(projectRoot, name);
-  const lock = await readEnvironmentLock(projectRoot, name);
+async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: LockFile): Promise<LoadedEnvironment> {
   const names = await validateEnvironmentLock(environment, lock);
   const packages = new Map<string, InstalledPackage>();
   for (const packageName of names) packages.set(packageName, await loadCachedPackage(lock.packages[packageName]!));
@@ -336,12 +433,17 @@ async function loadOrderedPackages(projectRoot: string, name: string): Promise<{
     for (const requirement of pkg.manifest.spec.requirements.bindings) {
       if (!requirement.optional && !environment.spec.bindings[requirement.name]) {
         throw new Error(
-          `Package ${pkg.manifest.metadata.name} requires binding ${requirement.name}; run harness bind -n ${name} ${requirement.name} <command>`,
+          `Package ${pkg.manifest.metadata.name} requires binding ${requirement.name}; run harness bind -n ${environment.metadata.name} ${requirement.name} <command>`,
         );
       }
     }
   }
   return { environment, lock, names, packages };
+}
+
+async function loadOrderedPackages(projectRoot: string, name: string): Promise<LoadedEnvironment> {
+  const [environment, lock] = await Promise.all([readEnvironment(projectRoot, name), readEnvironmentLock(projectRoot, name)]);
+  return loadEnvironmentSnapshot(environment, lock);
 }
 
 function sameIdentity(pkg: InstalledPackage, active: Awaited<ReturnType<typeof readState>>["activations"][string], targets: Platform[]): boolean {
@@ -354,8 +456,12 @@ function sameIdentity(pkg: InstalledPackage, active: Awaited<ReturnType<typeof r
   );
 }
 
-export async function activateEnvironment(projectRoot: string, name: string): Promise<EnvironmentActivationResult> {
-  const desired = await loadOrderedPackages(projectRoot, name);
+async function transitionEnvironment(
+  projectRoot: string,
+  name: string,
+  desired: LoadedEnvironment,
+  previousEnvironment?: LoadedEnvironment,
+): Promise<EnvironmentActivationResult> {
   const state = await readState(projectRoot);
   if (state.profile) throw new Error("Legacy workflow profile state is active; deactivate it with the previous CLI before using environments");
   const previousNames = state.activeEnvironment?.packages ?? [];
@@ -390,9 +496,6 @@ export async function activateEnvironment(projectRoot: string, name: string): Pr
   const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
   const added: string[] = [];
   try {
-    const previousEnvironment = state.activeEnvironment
-      ? await loadOrderedPackages(projectRoot, state.activeEnvironment.name)
-      : undefined;
     for (const packageName of removals) {
       const active = state.activations[packageName]!;
       const pkg = previousEnvironment?.packages.get(packageName);
@@ -401,6 +504,9 @@ export async function activateEnvironment(projectRoot: string, name: string): Pr
       await deactivatePackage(packageName, projectRoot);
     }
     for (const packageName of additions) {
+      if (state.activations[packageName]) {
+        actions.push(...(await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets, true)));
+      }
       await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets);
       added.push(packageName);
     }
@@ -416,6 +522,13 @@ export async function activateEnvironment(projectRoot: string, name: string): Pr
     for (const item of [...removed].reverse()) await activatePackage(item.pkg, projectRoot, item.targets).catch(() => undefined);
     throw error;
   }
+}
+
+export async function activateEnvironment(projectRoot: string, name: string): Promise<EnvironmentActivationResult> {
+  const desired = await loadOrderedPackages(projectRoot, name);
+  const state = await readState(projectRoot);
+  const previous = state.activeEnvironment ? await loadOrderedPackages(projectRoot, state.activeEnvironment.name) : undefined;
+  return transitionEnvironment(projectRoot, name, desired, previous);
 }
 
 export async function deactivateEnvironment(projectRoot: string): Promise<EnvironmentActivationResult> {
