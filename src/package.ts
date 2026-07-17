@@ -28,6 +28,7 @@ const builtinNames = new Set([
   "idea-gen",
   "exp-design",
   "auto-research",
+  "meta-skill-builder",
 ]);
 
 function builtinPath(name: string): string {

@@ -124,6 +124,22 @@ The `auto-research/SKILL.md` file describes how and when to use the component Sk
 
 The four packages above are real built-ins shipped with the source distribution, so the Quick Start runs without a package Registry. Until a Registry exists, other dependencies include an explicit local, built-in, GitHub, HTTPS Git, or SSH Git source. Published packages should use immutable Git tags or revisions.
 
+### Create a meta-skill with the Agent
+
+Install the built-in authoring assistant when you want to turn your own multi-Skill method into a portable package:
+
+```bash
+harness env create authoring --target codex
+harness install -n authoring builtin:meta-skill-builder
+harness activate authoring
+
+codex
+```
+
+Describe the component Skill sources, intended outcome, normal ordering, feedback loops, branches, interruption recovery, stopping conditions, and output contract in natural language. The assistant generates an ordinary `harness.yaml` plus one coordinating `SKILL.md`, declares the component packages as dependencies, and validates the complete result with `harness inspect`.
+
+The assistant authors the method; Harness Conda remains neutral about its execution. It does not turn the method into a DAG or add workflow phases to the core.
+
 ## Project bindings
 
 Reusable Skills can require abstract project commands such as `test` or `benchmark`. Bind them per Environment:
