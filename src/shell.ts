@@ -49,7 +49,7 @@ const updatePrompt = [
   "  fi",
   '  case "$active" in',
   '    ""|*[!a-z0-9._-]*) HARNESS_PROMPT_PREFIX="" ;;',
-  '    *) HARNESS_PROMPT_PREFIX="($active) " ;;',
+  '    *) HARNESS_PROMPT_PREFIX="(harness:$active) " ;;',
   "  esac",
   "}",
 ];

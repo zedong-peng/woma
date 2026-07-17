@@ -42,7 +42,7 @@ harness env create --target codex
 harness install builtin:auto-research
 harness activate
 
-# The prompt now starts with (base).
+# The prompt now starts with (harness:base).
 codex
 
 harness deactivate
@@ -97,7 +97,7 @@ harness activate research
 harness activate performance            # atomic switch
 ```
 
-With the shell hook enabled, the prompt shows `(base)`, `(research)`, or `(performance)`. It searches parent directories for the nearest `.harness`, so the prefix and CLI continue to use the same project from nested directories. The prefix disappears after `harness deactivate` or after leaving the project tree.
+With the shell hook enabled, the prompt shows `(harness:base)`, `(harness:research)`, or `(harness:performance)`. The `harness:` namespace remains unambiguous when a Python Conda Environment is also active, for example `(py310) (harness:research)`. The hook searches parent directories for the nearest `.harness`, so the prefix and CLI continue to use the same project from nested directories. The prefix disappears after `harness deactivate` or after leaving the project tree.
 
 Environment state is project-local:
 

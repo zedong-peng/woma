@@ -36,7 +36,7 @@ test("bash hook finds an active environment from a project subdirectory", async 
     await run("bash", ["-n", hookPath]);
     const script = 'source "$1"\ncd "$2"\n__harness_prompt_update\nprintf \'%s\' "$HARNESS_PROMPT_PREFIX"';
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested]);
-    assert.equal(stdout, "(base) ");
+    assert.equal(stdout, "(harness:base) ");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
