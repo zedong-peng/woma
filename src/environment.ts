@@ -6,7 +6,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { satisfies } from "semver";
 import { z } from "zod";
 import { activatePackage, deactivatePackage } from "./activation.js";
-import { assertInside, hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
+import { assertInside, harnessHome, hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import { installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
 import {
   initializeProjectMemory,
@@ -27,6 +27,8 @@ const environmentName = z
 const platform = z.enum(["codex", "claude"]);
 
 export const DEFAULT_ENVIRONMENT = "base";
+export const FOUNDATIONAL_PACKAGES = ["harness-project-memory", "meta-skill-builder"] as const;
+const baseInitializations = new Map<string, Promise<HarnessEnvironment>>();
 
 const lockedPackageSchema = z
   .object({
@@ -102,18 +104,18 @@ interface EnvironmentInstallHooks {
   onResourcesApplied?: () => Promise<void> | void;
 }
 
-export function environmentsRoot(projectRoot: string): string {
-  return path.join(projectRoot, ".harness", "environments");
+export function environmentsRoot(_projectRoot?: string): string {
+  return path.join(harnessHome(), "environments");
 }
 
-export function environmentPath(projectRoot: string, name: string): string {
+export function environmentPath(_projectRoot: string, name: string): string {
   environmentName.parse(name);
-  return path.join(environmentsRoot(projectRoot), `${name}.yaml`);
+  return path.join(environmentsRoot(), name, "environment.yaml");
 }
 
-export function environmentLockPath(projectRoot: string, name: string): string {
+export function environmentLockPath(_projectRoot: string, name: string): string {
   environmentName.parse(name);
-  return path.join(projectRoot, ".harness", "locks", `${name}.lock.json`);
+  return path.join(environmentsRoot(), name, "lock.json");
 }
 
 function formatIssues(error: z.ZodError): string {
@@ -138,14 +140,28 @@ export function parseEnvironment(input: string, source = "environment.yaml"): Ha
 }
 
 export async function readEnvironment(projectRoot: string, name: string): Promise<HarnessEnvironment> {
+  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
   const filePath = environmentPath(projectRoot, name);
-  const input = await readFile(filePath, "utf8").catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") throw new Error(`Unknown environment: ${name}; run harness env create ${name}`);
+  const input = await readFile(filePath, "utf8").catch(async (error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      const legacyPath = path.join(projectRoot, ".harness", "environments", `${name}.yaml`);
+      if (await pathExists(legacyPath)) {
+        throw new Error(
+          `Project-local environment detected at ${legacyPath}; recreate ${name} as a global Environment. The legacy files were not modified`,
+        );
+      }
+      throw new Error(`Unknown environment: ${name}; run harness env create ${name}`);
+    }
     throw error;
   });
   const environment = parseEnvironment(input, filePath);
   if (environment.metadata.name !== name) {
     throw new Error(`${filePath}: metadata.name must match filename ${name}`);
+  }
+  for (const foundational of FOUNDATIONAL_PACKAGES) {
+    if (!environment.spec.roots.some((root) => root.name === foundational)) {
+      throw new Error(`${filePath}: missing foundational root package ${foundational}`);
+    }
   }
   return environment;
 }
@@ -177,6 +193,7 @@ function emptyLock(): LockFile {
 }
 
 export async function readEnvironmentLock(projectRoot: string, name: string): Promise<LockFile> {
+  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
   const filePath = environmentLockPath(projectRoot, name);
   if (!(await pathExists(filePath))) return emptyLock();
   let document: unknown;
@@ -197,43 +214,77 @@ export async function readEnvironmentLock(projectRoot: string, name: string): Pr
   return parsed.data;
 }
 
-export async function createEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<HarnessEnvironment> {
+async function initializeEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<HarnessEnvironment> {
   environmentName.parse(name);
   if (await pathExists(environmentPath(projectRoot, name))) throw new Error(`Environment already exists: ${name}`);
+  const installations = [];
+  for (const packageName of FOUNDATIONAL_PACKAGES) {
+    installations.push(await installPackageTree(`builtin:${packageName}`));
+  }
+  const roots = installations.map((installation) => ({
+    name: installation.root.lock.name,
+    source: installation.root.lock.source,
+  }));
+  const packages = Object.fromEntries(
+    installations.flatMap((installation) => installation.packages).map((pkg) => [pkg.lock.name, pkg.lock]),
+  );
   const environment: HarnessEnvironment = {
     apiVersion: "harness.conda/environment-v1",
     kind: "HarnessEnvironment",
     metadata: { name },
-    spec: { targets: [...new Set(targets)], roots: [] },
+    spec: { targets: [...new Set(targets)], roots },
   };
   environmentSchema.parse(environment);
-  await writeEnvironment(projectRoot, environment);
   try {
-    await writeJsonAtomic(environmentLockPath(projectRoot, name), emptyLock());
-    await ensureLocalGitExcludes(projectRoot);
-    await initializeProjectMemory(projectRoot);
+    await writeJsonAtomic(environmentLockPath(projectRoot, name), { lockfileVersion: 1, packages });
+    await writeEnvironment(projectRoot, environment);
   } catch (error) {
-    await rm(environmentPath(projectRoot, name), { force: true });
-    await rm(environmentLockPath(projectRoot, name), { force: true });
+    await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
     throw error;
   }
   return environment;
 }
 
+export function ensureBaseEnvironment(projectRoot = process.cwd()): Promise<HarnessEnvironment> {
+  const filePath = environmentPath(projectRoot, DEFAULT_ENVIRONMENT);
+  const existing = baseInitializations.get(filePath);
+  if (existing) return existing;
+  const initialization = (async () => {
+    if (await pathExists(filePath)) {
+      const input = await readFile(filePath, "utf8");
+      return parseEnvironment(input, filePath);
+    }
+    return initializeEnvironment(projectRoot, DEFAULT_ENVIRONMENT, ["codex", "claude"]);
+  })();
+  baseInitializations.set(filePath, initialization);
+  void initialization.finally(() => {
+    if (baseInitializations.get(filePath) === initialization) baseInitializations.delete(filePath);
+  }).catch(() => undefined);
+  return initialization;
+}
+
+export async function createEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<HarnessEnvironment> {
+  if (name === DEFAULT_ENVIRONMENT) {
+    await ensureBaseEnvironment(projectRoot);
+    throw new Error("The base environment exists implicitly and cannot be created");
+  }
+  return initializeEnvironment(projectRoot, name, targets);
+}
+
 export async function listEnvironments(projectRoot: string): Promise<string[]> {
-  if (!(await pathExists(environmentsRoot(projectRoot)))) return [];
-  return (await readdir(environmentsRoot(projectRoot)))
-    .filter((name) => name.endsWith(".yaml"))
-    .map((name) => name.slice(0, -5))
+  await ensureBaseEnvironment(projectRoot);
+  return (await readdir(environmentsRoot(projectRoot), { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
     .sort();
 }
 
 export async function removeEnvironment(projectRoot: string, name: string): Promise<void> {
+  if (name === DEFAULT_ENVIRONMENT) throw new Error("The base environment cannot be removed");
   const state = await readState(projectRoot);
   if (state.activeEnvironment?.name === name) throw new Error(`Environment ${name} is active; run harness deactivate first`);
   await readEnvironment(projectRoot, name);
-  await rm(environmentPath(projectRoot, name), { force: true });
-  await rm(environmentLockPath(projectRoot, name), { force: true });
+  await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
 }
 
 async function validateLock(lock: LockFile): Promise<void> {
@@ -410,7 +461,17 @@ export async function installIntoEnvironment(
   validateEnvironmentLockGraph(environment, currentLock);
   const installation = await installPackageTree(source, cwd);
   const next: LockFile = { lockfileVersion: 1, packages: { ...currentLock.packages } };
-  for (const pkg of installation.packages) next.packages[pkg.lock.name] = pkg.lock;
+  for (const pkg of installation.packages) {
+    const existing = currentLock.packages[pkg.lock.name];
+    const unchanged =
+      existing &&
+      existing.version === pkg.lock.version &&
+      existing.source === pkg.lock.source &&
+      existing.resolved === pkg.lock.resolved &&
+      existing.integrity === pkg.lock.integrity &&
+      existing.cacheKey === pkg.lock.cacheKey;
+    next.packages[pkg.lock.name] = unchanged ? existing : pkg.lock;
+  }
   const roots = environment.spec.roots.some((root) => root.name === installation.root.lock.name)
     ? environment.spec.roots.map((root) =>
         root.name === installation.root.lock.name ? { name: root.name, source: installation.root.lock.source } : root,
@@ -456,9 +517,8 @@ export async function currentEnvironmentContext(projectRoot: string): Promise<Cu
   const project = path.resolve(projectRoot);
   const state = await readState(project);
   const memory = { project: projectMemoryPath(project), local: localMemoryPath(project) };
-  if (!state.activeEnvironment) return { projectRoot: project, environment: null, memory, packages: [] };
-
-  const loaded = await loadOrderedPackages(project, state.activeEnvironment.name);
+  const selected = process.env.HARNESS_ENV || state.activeEnvironment?.name || DEFAULT_ENVIRONMENT;
+  const loaded = await loadOrderedPackages(project, selected);
   return {
     projectRoot: project,
     environment: { name: loaded.environment.metadata.name, targets: loaded.environment.spec.targets },
@@ -581,6 +641,8 @@ async function transitionEnvironment(
 }
 
 export async function activateEnvironment(projectRoot: string, name: string): Promise<EnvironmentActivationResult> {
+  await ensureLocalGitExcludes(projectRoot);
+  await initializeProjectMemory(projectRoot);
   const desired = await loadOrderedPackages(projectRoot, name);
   const state = await readState(projectRoot);
   const previous = state.activeEnvironment ? await loadOrderedPackages(projectRoot, state.activeEnvironment.name) : undefined;

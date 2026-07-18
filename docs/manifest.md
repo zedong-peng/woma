@@ -48,7 +48,7 @@ spec:
 
 ## Dependencies and meta-skills
 
-`dependencies` declares other Harness packages required by this package. Installation recursively resolves dependencies before their parent, validates package identity and SemVer constraints, rejects cycles and conflicting resolutions, and writes the complete dependency closure to the project lock atomically.
+`dependencies` declares other Harness packages required by this package. Installation recursively resolves dependencies before their parent, validates package identity and SemVer constraints, rejects cycles and conflicting resolutions, and writes the complete dependency closure to the global Environment lock atomically.
 
 Until a registry provides package-name resolution, every dependency includes a `source`. It accepts the same sources as `harness install`: built-ins, local paths, GitHub shorthand, HTTPS Git, and SSH Git. A relative local source is resolved from the directory containing the parent package:
 
@@ -90,7 +90,7 @@ mcpServers:
 | MCP server | managed block in `.codex/config.toml` | entry in `.mcp.json` |
 | Hook | entry in `.codex/hooks.json` | entry in `.claude/settings.json` |
 
-`.harness/locks/<environment>.lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in an Environment's resolved closure. `.harness/state.json` is machine-local ownership state and must not be committed.
+`~/.harness-conda/environments/<environment>/lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. `<project>/.harness/state.json` records only machine-local Adapter ownership for the active project projection and must not be committed.
 
 ## Requirements
 

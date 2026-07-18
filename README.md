@@ -38,17 +38,18 @@ Add the matching `eval` line to `~/.zshrc` or `~/.bashrc` to enable it in future
 ## Quick start
 
 ```bash
-harness env create --target codex
+# base is available immediately; no create command is required.
+harness current
 harness install builtin:auto-research
 harness activate
 
 # The prompt now starts with (harness:base).
 codex
 
-harness deactivate
+harness deactivate                 # returns to base
 ```
 
-`install` uses the active Environment when `--name` is omitted, then falls back to `base`. `env create` without a name creates `base`, and `activate` without a name switches to it, matching Conda. New Environments contain the ordinary `harness-project-memory` package by default; pass `--without-memory` to opt out. Installing `auto-research` recursively installs and locks its component packages. Activation makes the complete dependency closure available to the selected Agent in dependency-first order.
+`base` is a global, implicit Environment initialized on first use; users never create or remove it. `install` uses the selected Environment when `--name` is omitted and otherwise falls back to `base`. Every Environment always contains the foundational `harness-project-memory` and `meta-skill-builder` packages. Installing `auto-research` recursively installs and locks its component packages. Activation makes the complete dependency closure available to the selected Agent in dependency-first order.
 
 Only one Environment is active in a project. Activating another Environment atomically removes packages unique to the old Environment, preserves identical shared packages, activates the new closure, and rolls back if the transition fails.
 
@@ -68,7 +69,7 @@ Project Memory
   = natural-language repository knowledge shared globally or isolated by Package
 
 Base Environment
-  = conventional default Environment with Project Memory enabled
+  = implicit global default with the foundational packages
 ```
 
 Harness Conda does not decide what phase a task is in, advance workflow steps, require handoffs, or record outcomes. The user and Agent define and execute the method; Harness Conda installs, isolates, locks, activates, migrates, and shares it.
@@ -85,12 +86,13 @@ harness env remove cpp-performance
 The `base` fallback makes the common case shorter while preserving named Environment isolation:
 
 ```bash
-harness env create --target codex       # creates base
 harness install builtin:paper-search    # installs into base
 harness activate                        # activates base
 ```
 
-Use explicit names whenever a project needs multiple combinations:
+`harness current` reports `base` on a fresh installation and lazily initializes it if necessary. `harness env create base` and `harness env remove base` are rejected.
+
+Use explicit names whenever you need multiple reusable combinations:
 
 ```bash
 harness env create research --target codex
@@ -108,23 +110,36 @@ harness install builtin:paper-search     # installs and activates in research
 
 Active installation resolves and validates the complete next closure before updating the project. Harness snapshots the recipe, lock, activation state, Skills, MCP configuration, and hooks; it applies the package delta in dependency order and restores the snapshot if any ordinary error occurs. Installing into an inactive Environment continues to update only its recipe and lock.
 
-With the shell hook enabled, the prompt shows `(harness:base)`, `(harness:research)`, or `(harness:performance)`. The `harness:` namespace remains unambiguous when a Python Conda Environment is also active, for example `(py310) (harness:research)`. The hook searches parent directories for the nearest `.harness`, so the prefix and CLI continue to use the same project from nested directories. The prefix disappears after `harness deactivate` or after leaving the project tree.
+With the shell hook enabled, the prompt shows `(harness:base)`, `(harness:research)`, or `(harness:performance)`. The `harness:` namespace remains unambiguous when a Python Conda Environment is also active, for example `(py310) (harness:research)`. After activation, launch `codex` or `claude` directly; no Harness-specific Agent launcher is required. Harness does not currently bind third-party Agent session IDs to Environment versions, so users are responsible for activating the intended Environment before resuming an old session.
 
-Environment state is project-local:
+Environment definitions and immutable Package contents are user-global:
 
 ```text
-.harness/
-├── environments/
-│   └── cpp-performance.yaml
-├── locks/
-│   └── cpp-performance.lock.json
+~/.harness-conda/
+├── packages/
+│   └── <package>/<content-key>/
+└── environments/
+    ├── base/
+    │   ├── environment.yaml
+    │   └── lock.json
+    └── cpp-performance/
+        ├── environment.yaml
+        └── lock.json
+```
+
+Agent Adapter state and project knowledge remain project-local:
+
+```text
+<project>/.harness/
 ├── memory/
 │   ├── project.md
 │   └── packages/
+├── local/
+│   └── memory.md
 └── state.json
 ```
 
-The YAML recipe records root packages and Agent targets. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `memory/` contains portable natural-language project adaptation, while `state.json` and `local/` are machine-local and must not be committed.
+The YAML recipe records root packages and Agent targets. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. Multiple projects reuse the same Environment and content-addressed Package store. Activation projects the selected closure into the current project's native Codex/Claude locations, while `memory/` remains isolated per project. `state.json` and `local/` are machine-local and must not be committed.
 
 ## Packages and meta-skills
 
@@ -176,11 +191,10 @@ The four packages above are real built-ins shipped with the source distribution,
 
 ### Create a meta-skill with the Agent
 
-Install the built-in authoring assistant when you want to turn your own multi-Skill method into a portable package:
+The built-in authoring assistant is foundational and therefore available in every Environment. Activate the Environment in which you want to author a portable package:
 
 ```bash
 harness env create authoring --target codex
-harness install -n authoring builtin:meta-skill-builder
 harness activate authoring
 
 codex
@@ -206,35 +220,21 @@ When the user states a durable project fact, the Agent records it automatically 
 
 ## Reproduction
 
-Commit Environment recipes and locks:
+Environment recipes and locks live under `~/.harness-conda/environments/`, independently of any project. `sync` restores exact locked Package snapshots into the global content-addressed cache and rejects source drift. Project Memory can be versioned with its repository when appropriate; machine-local Memory remains excluded. Environment bundle import/export is planned but is not yet exposed by the CLI.
 
-```bash
-git add .harness/environments .harness/locks
-git commit -m "Define Agent environments"
-```
-
-On another machine:
-
-```bash
-git pull
-harness sync -n research
-harness doctor -n research
-harness activate research
-```
-
-`sync` restores exact locked package snapshots into the content-addressed cache and rejects source drift. Manifests declare environment-variable names but never credential values.
+Project-local Environment recipes from earlier versions are not silently moved or deleted. If Harness finds `<project>/.harness/environments/<name>.yaml` without a corresponding global Environment, it stops with a migration message. Recreate the named global Environment and reinstall its roots after reviewing the legacy recipe; existing Project Memory is preserved.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `harness env create [name] [--without-memory]` | Create an Environment; defaults to `base` with Project Memory |
+| `harness env create <name>` | Create a global Environment with the foundational packages |
 | `harness env list` | List Environments and mark the active one |
 | `harness env show <name>` | Show roots, resolved packages, and targets |
-| `harness env remove <name>` | Remove an inactive Environment |
+| `harness env remove <name>` | Remove an inactive Environment; `base` cannot be removed |
 | `harness install [-n <env>] <source>` | Install a Package and recursive dependencies; defaults to active, then `base` |
 | `harness activate [env]` | Atomically activate or switch an Environment; defaults to `base` |
-| `harness deactivate` | Deactivate the complete active Environment |
+| `harness deactivate` | Leave the selected Environment and return to `base` |
 | `harness current [--json]` | Show the active Environment; JSON includes package, Skill, and Memory mappings |
 | `harness shell hook [bash\|zsh]` | Print shell integration for the active-Environment prompt |
 | `harness sync [-n <env>]` | Restore exact locked packages |

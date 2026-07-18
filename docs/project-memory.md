@@ -25,7 +25,7 @@ Project Memory is user-owned context, not an activation artifact. Activating, de
 
 ## Startup discovery
 
-`harness-project-memory` is an ordinary Harness package with the same manifest, cache, lock, activation, and target projection as every other Skill package. New CLI-created Environments install it as a visible root by default; `harness env create --without-memory` opts out, and existing Environments can install it explicitly with `harness install -n <environment> builtin:harness-project-memory`.
+`harness-project-memory` is an ordinary Harness package with the same manifest, cache, lock, activation, and target projection as every other Skill package. It and `meta-skill-builder` are foundational roots in every Environment, including the implicit global `base`, so Project Memory behavior is consistently available and cannot be omitted at Environment creation time.
 
 When the package is active, the Codex Adapter adds an exact marker-delimited pointer to `.agents/skills/harness-project-memory/SKILL.md` in the project-root `AGENTS.md`; the Claude Adapter points to the equivalent `.claude/skills/` path in `CLAUDE.md`. Existing user instructions outside the block are preserved. Switching or deactivating updates the pointers atomically, and modified managed blocks are treated as drift.
 

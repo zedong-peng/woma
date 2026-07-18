@@ -40,7 +40,7 @@ test("bash hook finds an active environment from a project subdirectory", async 
 
     await mkdir(path.join(nested, ".harness"));
     const inner = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested]);
-    assert.equal(inner.stdout, "");
+    assert.equal(inner.stdout, "(harness:base) ");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

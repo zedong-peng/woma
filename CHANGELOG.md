@@ -2,7 +2,9 @@
 
 ## 0.6.0
 
-- Replaced workflow profiles with named, project-local Agent Environments.
+- Replaced workflow profiles with named, user-global Agent Environments and project-local Memory.
+- Added an implicit, non-removable `base` Environment that is initialized on first use.
+- Added `harness-project-memory` and `meta-skill-builder` as foundational roots in every Environment and removed `--without-memory`.
 - Added per-Environment recipes, locks, root packages, and targets.
 - Added recursive package dependencies and lightweight meta-skill entrypoints with SemVer conflict detection.
 - Added a built-in meta-skill creation assistant for turning natural-language multi-Skill methods into validated packages.

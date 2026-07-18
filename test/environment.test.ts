@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   createEnvironment,
+  ensureBaseEnvironment,
   environmentLockPath,
   environmentPath,
   parseEnvironment,
@@ -12,6 +13,7 @@ import {
   activateEnvironment,
   doctorEnvironment,
   installIntoEnvironment,
+  readEnvironment,
   readEnvironmentLock,
   removeEnvironment,
   syncEnvironment,
@@ -19,7 +21,7 @@ import {
 import { activatePackage } from "../src/activation.js";
 import { installPackageSource } from "../src/package.js";
 import { putLock, readState, statePath } from "../src/store.js";
-import { packageMemoryPath, projectMemoryPath } from "../src/memory.js";
+import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 
 async function environmentPackageFixture(
   root: string,
@@ -98,8 +100,10 @@ spec:
 
 test("removing an environment preserves user-owned Project Memory", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-memory-lifecycle-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
+    await initializeProjectMemory(root);
     await writeFile(projectMemoryPath(root), "# Shared knowledge\n", "utf8");
     const scoped = packageMemoryPath(root, "auto-research");
     await writeFile(scoped, "# Research adaptation\n", "utf8");
@@ -108,6 +112,75 @@ test("removing an environment preserves user-owned Project Memory", { concurrenc
 
     assert.equal(await readFile(projectMemoryPath(root), "utf8"), "# Shared knowledge\n");
     assert.equal(await readFile(scoped, "utf8"), "# Research adaptation\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("global environments are shared across projects while Project Memory remains isolated", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-global-environment-"));
+  const home = path.join(root, "home");
+  const firstProject = path.join(root, "first-project");
+  const secondProject = path.join(root, "second-project");
+  process.env.HARNESS_HOME = home;
+  try {
+    await Promise.all([mkdir(firstProject, { recursive: true }), mkdir(secondProject, { recursive: true })]);
+    const base = await ensureBaseEnvironment(firstProject);
+    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
+    assert.equal(environmentPath(secondProject, "base"), path.join(home, "environments", "base", "environment.yaml"));
+    await assert.rejects(createEnvironment(firstProject, "base", ["codex"]), /exists implicitly/);
+    await assert.rejects(removeEnvironment(firstProject, "base"), /cannot be removed/);
+
+    await createEnvironment(firstProject, "research", ["codex"]);
+    await installIntoEnvironment(firstProject, "research", "builtin:paper-search");
+    assert.deepEqual(await readEnvironmentLock(secondProject, "research"), await readEnvironmentLock(firstProject, "research"));
+    await activateEnvironment(firstProject, "research");
+    await activateEnvironment(secondProject, "research");
+    await writeFile(projectMemoryPath(firstProject), "# First project\n", "utf8");
+
+    assert.equal(await readFile(projectMemoryPath(firstProject), "utf8"), "# First project\n");
+    assert.match(await readFile(projectMemoryPath(secondProject), "utf8"), /Project Memory/);
+    assert.notEqual(packageMemoryPath(firstProject, "paper-search"), packageMemoryPath(secondProject, "paper-search"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("global Environment reads reject missing foundations and preserve legacy project recipes", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-global-environment-contract-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    const recipePath = environmentPath(root, "tools");
+    const recipe = await readFile(recipePath, "utf8");
+    await writeFile(
+      recipePath,
+      recipe.replace(/    - name: meta-skill-builder\n      source: builtin:meta-skill-builder\n/, ""),
+      "utf8",
+    );
+    await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package meta-skill-builder/);
+
+    const legacyPath = path.join(root, ".harness", "environments", "legacy.yaml");
+    await mkdir(path.dirname(legacyPath), { recursive: true });
+    await writeFile(legacyPath, recipe.replace("name: tools", "name: legacy"), "utf8");
+    await assert.rejects(readEnvironment(root, "legacy"), /Project-local environment detected.*legacy files were not modified/);
+    assert.match(await readFile(legacyPath, "utf8"), /name: legacy/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("concurrent first reads initialize the implicit base Environment once", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-concurrent-init-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const [environment, lock] = await Promise.all([
+      readEnvironment(root, "base"),
+      readEnvironmentLock(root, "base"),
+    ]);
+    assert.equal(environment.metadata.name, "base");
+    assert.deepEqual(environment.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
+    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "meta-skill-builder"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -365,33 +438,23 @@ test("active install rolls back when interrupted after resources are applied", {
   }
 });
 
-test("active Memory package install rolls back its Skill and startup pointer when interrupted", { concurrency: false }, async () => {
+test("reinstalling a foundational package preserves its recipe, lock, Skill, and startup pointer", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-memory-install-rollback-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "minimal", ["codex"]);
     await activateEnvironment(root, "minimal");
-    const trackedPaths = [environmentPath(root, "minimal"), environmentLockPath(root, "minimal"), statePath(root)];
+    const trackedPaths = [environmentPath(root, "minimal"), environmentLockPath(root, "minimal")];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
 
-    await assert.rejects(
-      installIntoEnvironment(root, "minimal", "builtin:harness-project-memory", process.cwd(), {
-        onResourcesApplied: async () => {
-          assert.match(
-            await readFile(path.join(root, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
-            /Persist stable knowledge automatically/,
-          );
-          assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /harness-project-memory\/SKILL\.md/);
-          assert.equal((await readState(root)).activeEnvironment?.memoryBootstrapVersion, 1);
-          throw new Error("simulated Memory bootstrap interruption");
-        },
-      }),
-      /simulated Memory bootstrap interruption/,
-    );
+    await installIntoEnvironment(root, "minimal", "builtin:harness-project-memory");
 
     assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
-    await assert.rejects(readFile(path.join(root, "AGENTS.md"), "utf8"), /ENOENT/);
-    await assert.rejects(readFile(path.join(root, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /ENOENT/);
+    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /harness-project-memory\/SKILL\.md/);
+    assert.match(
+      await readFile(path.join(root, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
+      /Persist stable knowledge automatically/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
