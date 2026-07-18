@@ -29,11 +29,6 @@ spec:
         description: GitHub API access for private repositories.
         optional: false
     commands: [git, node]
-    bindings:
-      - name: test
-        description: Project correctness command used by this method.
-      - name: benchmark
-        description: Repeatable project benchmark command.
   skills:
     - name: repository-research
       path: ./skills/repository-research
@@ -95,10 +90,10 @@ mcpServers:
 | MCP server | managed block in `.codex/config.toml` | entry in `.mcp.json` |
 | Hook | entry in `.codex/hooks.json` | entry in `.claude/settings.json` |
 
-`.harness/lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in the resolved closure. `.harness/state.json` is machine-local ownership state and must not be committed.
+`.harness/locks/<environment>.lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in an Environment's resolved closure. `.harness/state.json` is machine-local ownership state and must not be committed.
 
 ## Requirements
 
-`commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values. `bindings` declares project-level commands that the reusable method needs without hard-coding one repository's build system.
+`commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values.
 
-A required binding blocks environment activation before any files change. Configure it with `harness bind -n <environment> <name> <command...>`. Set `optional: true` only when the Skill has a valid degraded path. `harness doctor -n <environment>` reports missing required bindings as failures.
+Repository-specific build, test, benchmark, and operational knowledge does not belong in a portable package manifest. Harness Agent Adapters expose natural-language [Project Memory](project-memory.md) before a Skill is selected, so third-party package contents do not need Harness-specific discovery instructions. Harness manages the storage boundary but does not interpret or execute that context.

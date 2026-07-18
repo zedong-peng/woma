@@ -10,11 +10,6 @@ spec:
   requirements:
     env: []
     commands: [git, node]
-    bindings:
-      - name: test
-        description: Correctness command that must remain green before and after optimization.
-      - name: benchmark
-        description: Repeatable command that emits the primary performance metric.
   skills:
     - name: performance-loop
       path: ./skills/performance-loop

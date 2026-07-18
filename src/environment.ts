@@ -8,6 +8,14 @@ import { z } from "zod";
 import { activatePackage, deactivatePackage } from "./activation.js";
 import { assertInside, hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import { installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
+import {
+  initializeProjectMemory,
+  localMemoryPath,
+  packageMemoryPath,
+  PROJECT_MEMORY_PACKAGE,
+  projectMemoryPath,
+} from "./memory.js";
+import { prepareMemoryBootstrapTransition } from "./memory-bootstrap.js";
 import { deleteActiveEnvironment, deleteActiveProfile, putActiveEnvironment, readLock, readState, statePath } from "./store.js";
 import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform, StateFile } from "./types.js";
 
@@ -51,7 +59,6 @@ const environmentSchema = z
         roots: z
           .array(z.object({ name: environmentName, source: z.string().min(1) }).strict())
           .default([]),
-        bindings: z.record(environmentName, z.string().min(1)).default({}),
       })
       .strict(),
   })
@@ -68,6 +75,20 @@ export interface EnvironmentCheck {
   status: "ok" | "warn" | "fail";
   label: string;
   detail: string;
+}
+
+export interface CurrentEnvironmentContext {
+  projectRoot: string;
+  environment: { name: string; targets: Platform[] } | null;
+  memory: { project: string; local: string };
+  packages: {
+    name: string;
+    version: string;
+    source: string;
+    memory: string;
+    skills: string[];
+    entrypoints: { name: string; skill: string; description: string }[];
+  }[];
 }
 
 interface LoadedEnvironment {
@@ -183,13 +204,14 @@ export async function createEnvironment(projectRoot: string, name: string, targe
     apiVersion: "harness.conda/environment-v1",
     kind: "HarnessEnvironment",
     metadata: { name },
-    spec: { targets: [...new Set(targets)], roots: [], bindings: {} },
+    spec: { targets: [...new Set(targets)], roots: [] },
   };
   environmentSchema.parse(environment);
   await writeEnvironment(projectRoot, environment);
   try {
     await writeJsonAtomic(environmentLockPath(projectRoot, name), emptyLock());
     await ensureLocalGitExcludes(projectRoot);
+    await initializeProjectMemory(projectRoot);
   } catch (error) {
     await rm(environmentPath(projectRoot, name), { force: true });
     await rm(environmentLockPath(projectRoot, name), { force: true });
@@ -294,6 +316,8 @@ function transitionPaths(projectRoot: string, environmentNameValue: string, stat
     path.join(project, ".codex", "hooks.json"),
     path.join(project, ".mcp.json"),
     path.join(project, ".claude", "settings.json"),
+    path.join(project, "AGENTS.md"),
+    path.join(project, "CLAUDE.md"),
   ]);
   for (const activation of Object.values(state.activations)) {
     for (const artifact of activation.artifacts) {
@@ -409,17 +433,6 @@ export async function installIntoEnvironment(
   return { environment: updated, root: installation.root, packages: installation.packages };
 }
 
-export async function bindEnvironment(projectRoot: string, name: string, binding: string, command: string): Promise<HarnessEnvironment> {
-  environmentName.parse(binding);
-  const environment = await readEnvironment(projectRoot, name);
-  const updated: HarnessEnvironment = {
-    ...environment,
-    spec: { ...environment.spec, bindings: { ...environment.spec.bindings, [binding]: command } },
-  };
-  await writeEnvironment(projectRoot, updated);
-  return updated;
-}
-
 async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: LockFile): Promise<LoadedEnvironment> {
   const names = await validateEnvironmentLock(environment, lock);
   const packages = new Map<string, InstalledPackage>();
@@ -430,13 +443,6 @@ async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: Lo
         throw new Error(`${pkg.manifest.metadata.name} does not support environment target ${target}`);
       }
     }
-    for (const requirement of pkg.manifest.spec.requirements.bindings) {
-      if (!requirement.optional && !environment.spec.bindings[requirement.name]) {
-        throw new Error(
-          `Package ${pkg.manifest.metadata.name} requires binding ${requirement.name}; run harness bind -n ${environment.metadata.name} ${requirement.name} <command>`,
-        );
-      }
-    }
   }
   return { environment, lock, names, packages };
 }
@@ -444,6 +450,31 @@ async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: Lo
 async function loadOrderedPackages(projectRoot: string, name: string): Promise<LoadedEnvironment> {
   const [environment, lock] = await Promise.all([readEnvironment(projectRoot, name), readEnvironmentLock(projectRoot, name)]);
   return loadEnvironmentSnapshot(environment, lock);
+}
+
+export async function currentEnvironmentContext(projectRoot: string): Promise<CurrentEnvironmentContext> {
+  const project = path.resolve(projectRoot);
+  const state = await readState(project);
+  const memory = { project: projectMemoryPath(project), local: localMemoryPath(project) };
+  if (!state.activeEnvironment) return { projectRoot: project, environment: null, memory, packages: [] };
+
+  const loaded = await loadOrderedPackages(project, state.activeEnvironment.name);
+  return {
+    projectRoot: project,
+    environment: { name: loaded.environment.metadata.name, targets: loaded.environment.spec.targets },
+    memory,
+    packages: loaded.names.map((name) => {
+      const pkg = loaded.packages.get(name)!;
+      return {
+        name,
+        version: pkg.manifest.metadata.version,
+        source: pkg.lock.source,
+        memory: packageMemoryPath(project, name),
+        skills: pkg.manifest.spec.skills.map((skill) => skill.name),
+        entrypoints: pkg.manifest.spec.entrypoints,
+      };
+    }),
+  };
 }
 
 function sameIdentity(pkg: InstalledPackage, active: Awaited<ReturnType<typeof readState>>["activations"][string], targets: Platform[]): boolean {
@@ -492,9 +523,21 @@ async function transitionEnvironment(
       actions.push(...(await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets, true)));
     }
   }
+  const contextTransition = await prepareMemoryBootstrapTransition(
+    projectRoot,
+    previousEnvironment
+      ? { targets: previousEnvironment.environment.spec.targets, hasMemoryPackage: previousEnvironment.names.includes(PROJECT_MEMORY_PACKAGE) }
+      : undefined,
+    { targets: desired.environment.spec.targets, hasMemoryPackage: desired.names.includes(PROJECT_MEMORY_PACKAGE) },
+    {
+      requirePrevious: state.activeEnvironment?.memoryBootstrapVersion === 1,
+    },
+  );
+  actions.push(...contextTransition.actions);
 
   const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
   const added: string[] = [];
+  let rollbackContext: (() => Promise<void>) | undefined;
   try {
     for (const packageName of removals) {
       const active = state.activations[packageName]!;
@@ -510,16 +553,29 @@ async function transitionEnvironment(
       await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets);
       added.push(packageName);
     }
+    rollbackContext = await contextTransition.apply();
     await putActiveEnvironment(projectRoot, {
       name,
       packages: desired.names,
       targets: desired.environment.spec.targets,
       activatedAt: new Date().toISOString(),
+      memoryBootstrapVersion: desired.names.includes(PROJECT_MEMORY_PACKAGE) ? 1 : undefined,
     });
     return { name, packages: desired.names, targets: desired.environment.spec.targets, actions };
   } catch (error) {
+    let contextRollbackError: unknown;
+    if (rollbackContext) {
+      try {
+        await rollbackContext();
+      } catch (rollbackError) {
+        contextRollbackError = rollbackError;
+      }
+    }
     for (const packageName of [...added].reverse()) await deactivatePackage(packageName, projectRoot).catch(() => undefined);
     for (const item of [...removed].reverse()) await activatePackage(item.pkg, projectRoot, item.targets).catch(() => undefined);
+    if (contextRollbackError) {
+      throw new AggregateError([error, contextRollbackError], "Environment transition failed and Agent context rollback could not restore the project");
+    }
     throw error;
   }
 }
@@ -596,16 +652,36 @@ export async function deactivateEnvironment(projectRoot: string): Promise<Enviro
     }
     actions.push(...plan);
   }
+  const contextTransition = await prepareMemoryBootstrapTransition(
+    projectRoot,
+    { targets: current.environment.spec.targets, hasMemoryPackage: current.names.includes(PROJECT_MEMORY_PACKAGE) },
+    undefined,
+    { requirePrevious: active.memoryBootstrapVersion === 1 },
+  );
+  actions.push(...contextTransition.actions);
   const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
+  let rollbackContext: (() => Promise<void>) | undefined;
   try {
     for (const packageName of names) {
       removed.push({ pkg: current.packages.get(packageName)!, targets: state.activations[packageName]!.targets });
       await deactivatePackage(packageName, projectRoot);
     }
+    rollbackContext = await contextTransition.apply();
     await deleteActiveEnvironment(projectRoot);
     return { packages: [], targets: [], actions };
   } catch (error) {
+    let contextRollbackError: unknown;
+    if (rollbackContext) {
+      try {
+        await rollbackContext();
+      } catch (rollbackError) {
+        contextRollbackError = rollbackError;
+      }
+    }
     for (const item of [...removed].reverse()) await activatePackage(item.pkg, projectRoot, item.targets).catch(() => undefined);
+    if (contextRollbackError) {
+      throw new AggregateError([error, contextRollbackError], "Environment deactivation failed and Agent context rollback could not restore the project");
+    }
     throw error;
   }
 }
@@ -682,14 +758,6 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
         detail: present ? "set" : requirement.optional ? "optional and not set" : "required and not set",
       });
     }
-    for (const requirement of pkg.manifest.spec.requirements.bindings) {
-      const configured = environment.spec.bindings[requirement.name];
-      checks.push({
-        status: configured ? "ok" : requirement.optional ? "warn" : "fail",
-        label: `binding:${requirement.name}`,
-        detail: configured ?? (requirement.optional ? "optional and not configured" : "required and not configured"),
-      });
-    }
   }
   const active = state.activeEnvironment?.name === name;
   checks.push({ status: active ? "ok" : "warn", label: "activation", detail: active ? environment.spec.targets.join(", ") : "inactive" });
@@ -711,6 +779,26 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
         ? environment.spec.targets.join(", ")
         : `recorded targets ${activeEnvironment.targets.join(", ")} do not match recipe ${environment.spec.targets.join(", ")}`,
     });
+    try {
+      const hasMemoryPackage = names.includes(PROJECT_MEMORY_PACKAGE);
+      const contextCheck = await prepareMemoryBootstrapTransition(
+        projectRoot,
+        { targets: environment.spec.targets, hasMemoryPackage },
+        { targets: environment.spec.targets, hasMemoryPackage },
+        { requirePrevious: activeEnvironment.memoryBootstrapVersion === 1 },
+      );
+      checks.push({
+        status: contextCheck.actions.length === 0 ? "ok" : "fail",
+        label: "memory-bootstrap",
+        detail: contextCheck.actions.length === 0
+          ? hasMemoryPackage
+            ? "Agent discovery pointers match the active Memory package"
+            : "Project Memory package is not active"
+          : `unexpected changes required: ${contextCheck.actions.map((action) => action.path).join(", ")}`,
+      });
+    } catch (error) {
+      checks.push({ status: "fail", label: "memory-bootstrap", detail: (error as Error).message });
+    }
     for (const packageName of names) {
       const activation = state.activations[packageName];
       const locked = lock.packages[packageName]!;

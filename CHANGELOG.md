@@ -3,14 +3,17 @@
 ## 0.6.0
 
 - Replaced workflow profiles with named, project-local Agent Environments.
-- Added per-Environment recipes, locks, root packages, targets, and project bindings.
+- Added per-Environment recipes, locks, root packages, and targets.
 - Added recursive package dependencies and lightweight meta-skill entrypoints with SemVer conflict detection.
 - Added a built-in meta-skill creation assistant for turning natural-language multi-Skill methods into validated packages.
 - Install and lock complete meta-skill dependency closures into a selected Environment.
 - Atomically activate, switch, and deactivate full dependency closures with drift checks and rollback.
-- Added Environment-aware `current`, `sync`, `doctor`, and `bind` behavior.
-- Added active-first install/bind targeting, conventional `base` creation/activation defaults, and bash/zsh prompt hooks.
+- Added Environment-aware `current`, `sync`, and `doctor` behavior.
+- Added active-first install targeting, conventional `base` creation/activation defaults, and bash/zsh prompt hooks.
 - Added process-atomic package installation and upgrades for active Environments with project snapshot rollback.
+- Replaced command bindings with isolated natural-language Project Memory: shared repository knowledge, package-scoped adaptation, and git-ignored machine-local context.
+- Added the ordinary `harness-project-memory` built-in package, default Environment installation, dynamic `current --json` discovery, and target-specific startup pointers so third-party Skills remain Memory-agnostic.
+- Removed the `bind` command, manifest `requirements.bindings`, and Environment `spec.bindings`.
 - Removed research-specific workflow commands from the core CLI: `onboard`, `project`, `profile`, `switch`, `leave`, `enter`, `handoff`, `outcome`, `stats`, `use`, and `eval`.
 - Reframed built-in packages as optional methods rather than mandatory workflow phases.
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness Project Memory"
+  short_description: "Maintain durable Harness project knowledge"
+  default_prompt: "Use $harness-project-memory to load and maintain durable project knowledge."

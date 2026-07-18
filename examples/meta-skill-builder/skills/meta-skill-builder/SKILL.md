@@ -33,7 +33,7 @@ Use the user's available Harness CLI invocation for all commands below. Examples
 
 - Keep orchestration policy in the generated `SKILL.md`, not in Harness Conda core state.
 - Use dependencies for installable component packages, not as an ordered step list.
-- Use project bindings for abstract commands such as `test` or `benchmark`; never embed one user's repository commands in a portable package.
+- Never embed one user's repository-specific build, test, benchmark, or operational commands in a portable package. Harness Agent Adapters provide project-specific context independently of Skill contents.
 - Use environment-variable requirements for secret names only. Never write credential values.
 - Prefer immutable Git tags or revisions for shared packages. Treat local dependency sources as development-only and call out that they are not portable.
 - Do not publish, push, install into the user's active Environment, or delete existing files without explicit authorization.

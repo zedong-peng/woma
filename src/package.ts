@@ -22,6 +22,7 @@ export interface PackageInstallPlan {
 }
 
 const builtinNames = new Set([
+  "harness-project-memory",
   "reproducibility-core",
   "performance-engineering",
   "paper-search",
@@ -153,12 +154,6 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
         if (info.isDirectory()) pending.push(candidate);
       }
     }
-  }
-
-  const bindingNames = new Set<string>();
-  for (const requirement of manifest.spec.requirements.bindings) {
-    if (bindingNames.has(requirement.name)) throw new Error(`Duplicate binding requirement: ${requirement.name}`);
-    bindingNames.add(requirement.name);
   }
 
   const dependencyNames = new Set<string>();

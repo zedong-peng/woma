@@ -28,12 +28,6 @@ spec:
     - name: optimize
       skill: performance-loop
       description: Run an evidence-driven performance optimization loop.
-  requirements:
-    bindings:
-      - name: benchmark
-        description: Repeatable project benchmark command.
-      - name: test
-        description: Project correctness command.
   skills:
     - name: performance-loop
       path: ./skills/performance-loop
@@ -41,14 +35,14 @@ spec:
 
 Required invariants:
 
-- Use lowercase package, Skill, entrypoint, dependency, and binding names containing only letters, digits, `.`, `_`, or `-`.
+- Use lowercase package, Skill, entrypoint, and dependency names containing only letters, digits, `.`, `_`, or `-`.
 - Use semantic versions for `metadata.version` and valid SemVer ranges for dependency versions.
 - Make every dependency `name` match the package returned by `harness inspect <source>`.
 - Use `builtin:name`, a local path, `gh:owner/repository#tag-or-revision`, HTTPS Git, or SSH Git as a source.
 - Use immutable Git tags or revisions for portability. A relative local source is resolved from the parent package and is valid only while developing a local package tree.
 - Ensure every entrypoint references a Skill declared in `spec.skills`, and every Skill path contains `SKILL.md`.
 - Put package dependencies in `spec.dependencies`; do not encode method ordering in the dependency array.
-- Declare abstract project commands as bindings. Declare required executables under `requirements.commands` and secret names under `requirements.env`, never secret values.
+- Keep repository-specific commands and conventions in Project Memory instead of the portable manifest. Declare required executables under `requirements.commands` and secret names under `requirements.env`, never secret values.
 
 ## Coordinating Skill contract
 
@@ -66,7 +60,7 @@ State the outcome and the evidence required to claim success.
 
 ## Inputs
 
-Collect the target, constraints, available artifacts, budget, and required project bindings.
+Collect the target, constraints, available artifacts, budget, and required project knowledge. Keep the portable method independent of one repository's commands; Harness Agent Adapters provide project-specific context before the Skill is used.
 
 ## Method
 
