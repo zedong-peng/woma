@@ -9,6 +9,8 @@ const packageName = z
   .max(80)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
 
+export const PROJECT_MEMORY_PACKAGE = "harness-project-memory";
+
 const projectMemoryTemplate = `# Project Memory
 
 Record stable, project-wide knowledge that helps Agents work in this repository, such as build and test conventions, repository constraints, and verification expectations.

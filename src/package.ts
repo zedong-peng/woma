@@ -22,6 +22,7 @@ export interface PackageInstallPlan {
 }
 
 const builtinNames = new Set([
+  "harness-project-memory",
   "reproducibility-core",
   "performance-engineering",
   "paper-search",

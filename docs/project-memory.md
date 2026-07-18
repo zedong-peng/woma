@@ -6,7 +6,6 @@ Project Memory adapts portable Skills and meta-skills to one repository using na
 
 ```text
 .harness/
-├── active-context.md
 ├── memory/
 │   ├── project.md
 │   └── packages/
@@ -26,11 +25,11 @@ Project Memory is user-owned context, not an activation artifact. Activating, de
 
 ## Startup discovery
 
-Third-party Skills are not responsible for finding Project Memory. When an Environment is active, Harness generates the git-ignored `.harness/active-context.md` with the active Environment, package-to-Skill mapping, relevant package Memory paths, and the read/update policy. It contains paths and policy only, never Memory contents.
+`harness-project-memory` is an ordinary Harness package with the same manifest, cache, lock, activation, and target projection as every other Skill package. New CLI-created Environments install it as a visible root by default; `harness env create --without-memory` opts out, and existing Environments can install it explicitly with `harness install -n <environment> builtin:harness-project-memory`.
 
-The Codex Adapter adds an exact marker-delimited discovery pointer to the project-root `AGENTS.md`; the Claude Adapter does the same in `CLAUDE.md`. Agent startup therefore discovers `active-context.md` before any Harness-installed Skill is selected. Existing user instructions outside the managed block are preserved. Switching Environments updates the context and target-specific pointers atomically; deactivation removes them. Modified or missing managed files are treated as drift after the new context protocol has been activated.
+When the package is active, the Codex Adapter adds an exact marker-delimited pointer to `.agents/skills/harness-project-memory/SKILL.md` in the project-root `AGENTS.md`; the Claude Adapter points to the equivalent `.claude/skills/` path in `CLAUDE.md`. Existing user instructions outside the block are preserved. Switching or deactivating updates the pointers atomically, and modified managed blocks are treated as drift.
 
-An Agent following the generated context reads shared and local Memory at session start, then reads the scoped Memory for each active package it uses. A third-party Skill does not need to mention Harness or modify its own files.
+At session start the Memory Skill runs `harness current --json`. This dynamically returns the nearest project root, active Environment, shared/local Memory paths, and each active package's version, Skills, entrypoints, and isolated Memory path. No derived context file is maintained. The Skill reads shared and local Memory, then reads package Memory before the Agent uses a mapped Skill. Third-party Skills do not need to mention Harness or modify their contents.
 
 ## Authoring contract
 

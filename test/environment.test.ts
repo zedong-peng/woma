@@ -20,7 +20,6 @@ import { activatePackage } from "../src/activation.js";
 import { installPackageSource } from "../src/package.js";
 import { putLock, readState, statePath } from "../src/store.js";
 import { packageMemoryPath, projectMemoryPath } from "../src/memory.js";
-import { activeContextPath } from "../src/context.js";
 
 async function environmentPackageFixture(
   root: string,
@@ -187,6 +186,7 @@ test("doctor reports modified Agent Memory discovery instructions", { concurrenc
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
+    await installIntoEnvironment(root, "research", "builtin:harness-project-memory");
     await installIntoEnvironment(root, "research", "builtin:paper-search");
     await activateEnvironment(root, "research");
     const agentsPath = path.join(root, "AGENTS.md");
@@ -194,7 +194,7 @@ test("doctor reports modified Agent Memory discovery instructions", { concurrenc
 
     const checks = await doctorEnvironment(root, "research");
 
-    assert.equal(checks.find((check) => check.label === "agent-context")?.status, "fail");
+    assert.equal(checks.find((check) => check.label === "memory-bootstrap")?.status, "fail");
     await assert.rejects(deactivateEnvironment(root), /discovery block was modified/);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -287,8 +287,6 @@ test("install atomically upgrades a package in the active environment", { concur
     assert.match(await readFile(path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"), "utf8"), /Version two/);
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
     assert.equal((await readState(root)).activations["upgrade-package"]?.packageVersion, "2.0.0");
-    assert.equal((await readState(root)).activeEnvironment?.contextVersion, 1);
-    assert.match(await readFile(activeContextPath(root), "utf8"), /upgrade-package@2\.0\.0/);
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -303,6 +301,7 @@ test("active install restores project state when the new package conflicts after
     const conflicting = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.", "node");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
     await mkdir(path.join(root, ".codex"), { recursive: true });
     await writeFile(path.join(root, ".codex", "config.toml"), '[mcp_servers.occupied]\ncommand = "other"\n', "utf8");
     await activateEnvironment(root, "tools");
@@ -312,7 +311,6 @@ test("active install restores project state when the new package conflicts after
       statePath(root),
       path.join(root, ".codex", "config.toml"),
       path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"),
-      activeContextPath(root),
       path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
@@ -334,13 +332,13 @@ test("active install rolls back when interrupted after resources are applied", {
     const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
     await activateEnvironment(root, "tools");
     const trackedPaths = [
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
       statePath(root),
       path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"),
-      activeContextPath(root),
       path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
@@ -353,7 +351,6 @@ test("active install rolls back when interrupted after resources are applied", {
           assert.match(await readFile(trackedPaths[3]!, "utf8"), /Version two/);
           assert.equal((await readState(root)).activations["upgrade-package"]?.packageVersion, "2.0.0");
           assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "1.0.0");
-          assert.match(await readFile(activeContextPath(root), "utf8"), /upgrade-package@2\.0\.0/);
           throw new Error("simulated interruption");
         },
       }),
@@ -363,6 +360,38 @@ test("active install rolls back when interrupted after resources are applied", {
     assert.equal(interruptedAfterMutation, true);
     assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("active Memory package install rolls back its Skill and startup pointer when interrupted", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-memory-install-rollback-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await createEnvironment(root, "minimal", ["codex"]);
+    await activateEnvironment(root, "minimal");
+    const trackedPaths = [environmentPath(root, "minimal"), environmentLockPath(root, "minimal"), statePath(root)];
+    const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
+
+    await assert.rejects(
+      installIntoEnvironment(root, "minimal", "builtin:harness-project-memory", process.cwd(), {
+        onResourcesApplied: async () => {
+          assert.match(
+            await readFile(path.join(root, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
+            /Persist stable knowledge automatically/,
+          );
+          assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /harness-project-memory\/SKILL\.md/);
+          assert.equal((await readState(root)).activeEnvironment?.memoryBootstrapVersion, 1);
+          throw new Error("simulated Memory bootstrap interruption");
+        },
+      }),
+      /simulated Memory bootstrap interruption/,
+    );
+
+    assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
+    await assert.rejects(readFile(path.join(root, "AGENTS.md"), "utf8"), /ENOENT/);
+    await assert.rejects(readFile(path.join(root, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /ENOENT/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

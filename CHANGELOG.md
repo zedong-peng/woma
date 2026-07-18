@@ -12,7 +12,7 @@
 - Added active-first install targeting, conventional `base` creation/activation defaults, and bash/zsh prompt hooks.
 - Added process-atomic package installation and upgrades for active Environments with project snapshot rollback.
 - Replaced command bindings with isolated natural-language Project Memory: shared repository knowledge, package-scoped adaptation, and git-ignored machine-local context.
-- Added generated active context and target-specific `AGENTS.md`/`CLAUDE.md` discovery pointers so Agents load and maintain Project Memory independently of third-party Skill contents.
+- Added the ordinary `harness-project-memory` built-in package, default Environment installation, dynamic `current --json` discovery, and target-specific startup pointers so third-party Skills remain Memory-agnostic.
 - Removed the `bind` command, manifest `requirements.bindings`, and Environment `spec.bindings`.
 - Removed research-specific workflow commands from the core CLI: `onboard`, `project`, `profile`, `switch`, `leave`, `enter`, `handoff`, `outcome`, `stats`, `use`, and `eval`.
 - Reframed built-in packages as optional methods rather than mandatory workflow phases.

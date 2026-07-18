@@ -115,6 +115,26 @@ test("the built-in meta-skill builder is a valid installable authoring package",
   }
 });
 
+test("the built-in Project Memory manager is a normal installable Skill package", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-project-memory-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const installation = await installPackageTree("builtin:harness-project-memory");
+    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["harness-project-memory"]);
+    assert.deepEqual(installation.root.lock.dependencies, []);
+    assert.deepEqual(installation.root.manifest.spec.skills.map((skill) => skill.name), ["harness-project-memory"]);
+    const instructions = await readFile(
+      path.join(installation.root.root, "skills", "harness-project-memory", "SKILL.md"),
+      "utf8",
+    );
+    assert.match(instructions, /harness current --json/);
+    assert.match(instructions, /even if the user does not explicitly ask to remember it/);
+    assert.match(instructions, /before using another active Skill/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("the built-in performance method does not require command bindings", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-performance-memory-"));
   process.env.HARNESS_HOME = path.join(root, "home");

@@ -6,6 +6,7 @@ import { captureHarness } from "./capture.js";
 import {
   activateEnvironment,
   createEnvironment,
+  currentEnvironmentContext,
   deactivateEnvironment,
   doctorEnvironment,
   DEFAULT_ENVIRONMENT,
@@ -20,7 +21,7 @@ import {
   type EnvironmentCheck,
 } from "./environment.js";
 import { installPackageSource, loadCachedPackage } from "./package.js";
-import { projectMemoryPath } from "./memory.js";
+import { PROJECT_MEMORY_PACKAGE, projectMemoryPath } from "./memory.js";
 import { scaffoldHarness } from "./scaffold.js";
 import { renderShellHook, resolveShell } from "./shell.js";
 import { readState } from "./store.js";
@@ -94,16 +95,28 @@ const envCommand = program.command("env").description("manage isolated Agent env
 
 envCommand
   .command("create [name]")
-  .description("create an empty named environment; defaults to base")
+  .description("create a named environment with Project Memory; defaults to base")
   .option("-t, --target <target>", "codex, claude, both, or a comma-separated list", "both")
-  .action(async (name: string | undefined, options: { target: string }, command: Command) => {
+  .option("--without-memory", "do not install the default Project Memory package")
+  .action(async (name: string | undefined, options: { target: string; withoutMemory: boolean }, command: Command) => {
     const project = projectRoot(command);
     const environmentName = name ?? DEFAULT_ENVIRONMENT;
     const environment = await createEnvironment(project, environmentName, targets(options.target));
+    let memoryVersion: string | undefined;
+    if (!options.withoutMemory) {
+      try {
+        const installed = await installIntoEnvironment(project, environmentName, `builtin:${PROJECT_MEMORY_PACKAGE}`);
+        memoryVersion = installed.root.lock.version;
+      } catch (error) {
+        await removeEnvironment(project, environmentName).catch(() => undefined);
+        throw error;
+      }
+    }
     console.log(`Created environment ${environmentName}`);
     console.log(`  recipe  ${environmentPath(project, environmentName)}`);
     console.log(`  lock    ${environmentLockPath(project, environmentName)}`);
     console.log(`  memory  ${projectMemoryPath(project)}`);
+    if (memoryVersion) console.log(`  package ${PROJECT_MEMORY_PACKAGE}@${memoryVersion}`);
     console.log(`  targets ${environment.spec.targets.join(", ")}`);
   });
 
@@ -188,8 +201,14 @@ program
   .command("current")
   .description("show the active environment and its complete package closure")
   .option("--name-only", "print only the active environment name for shell integrations", false)
-  .action(async (options: { nameOnly: boolean }, command: Command) => {
+  .option("--json", "print structured Environment, package, Skill, and Memory context", false)
+  .action(async (options: { nameOnly: boolean; json: boolean }, command: Command) => {
     const project = projectRoot(command);
+    if (options.nameOnly && options.json) throw new Error("--name-only and --json cannot be used together");
+    if (options.json) {
+      console.log(JSON.stringify(await currentEnvironmentContext(project), null, 2));
+      return;
+    }
     const active = (await readState(project)).activeEnvironment;
     if (!active) {
       if (options.nameOnly) return;

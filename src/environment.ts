@@ -6,10 +6,16 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { satisfies } from "semver";
 import { z } from "zod";
 import { activatePackage, deactivatePackage } from "./activation.js";
-import { activeContextPath, prepareAgentContextTransition } from "./context.js";
 import { assertInside, hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import { installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
-import { initializeProjectMemory } from "./memory.js";
+import {
+  initializeProjectMemory,
+  localMemoryPath,
+  packageMemoryPath,
+  PROJECT_MEMORY_PACKAGE,
+  projectMemoryPath,
+} from "./memory.js";
+import { prepareMemoryBootstrapTransition } from "./memory-bootstrap.js";
 import { deleteActiveEnvironment, deleteActiveProfile, putActiveEnvironment, readLock, readState, statePath } from "./store.js";
 import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform, StateFile } from "./types.js";
 
@@ -69,6 +75,20 @@ export interface EnvironmentCheck {
   status: "ok" | "warn" | "fail";
   label: string;
   detail: string;
+}
+
+export interface CurrentEnvironmentContext {
+  projectRoot: string;
+  environment: { name: string; targets: Platform[] } | null;
+  memory: { project: string; local: string };
+  packages: {
+    name: string;
+    version: string;
+    source: string;
+    memory: string;
+    skills: string[];
+    entrypoints: { name: string; skill: string; description: string }[];
+  }[];
 }
 
 interface LoadedEnvironment {
@@ -143,7 +163,7 @@ async function ensureLocalGitExcludes(projectRoot: string): Promise<void> {
   });
   const lines = existing.split(/\r?\n/).filter(Boolean);
   let changed = false;
-  for (const required of ["/.harness/state.json", "/.harness/active-context.md", "/.harness/local/"]) {
+  for (const required of ["/.harness/state.json", "/.harness/local/"]) {
     if (!lines.includes(required)) {
       lines.push(required);
       changed = true;
@@ -296,7 +316,6 @@ function transitionPaths(projectRoot: string, environmentNameValue: string, stat
     path.join(project, ".codex", "hooks.json"),
     path.join(project, ".mcp.json"),
     path.join(project, ".claude", "settings.json"),
-    activeContextPath(project),
     path.join(project, "AGENTS.md"),
     path.join(project, "CLAUDE.md"),
   ]);
@@ -433,6 +452,31 @@ async function loadOrderedPackages(projectRoot: string, name: string): Promise<L
   return loadEnvironmentSnapshot(environment, lock);
 }
 
+export async function currentEnvironmentContext(projectRoot: string): Promise<CurrentEnvironmentContext> {
+  const project = path.resolve(projectRoot);
+  const state = await readState(project);
+  const memory = { project: projectMemoryPath(project), local: localMemoryPath(project) };
+  if (!state.activeEnvironment) return { projectRoot: project, environment: null, memory, packages: [] };
+
+  const loaded = await loadOrderedPackages(project, state.activeEnvironment.name);
+  return {
+    projectRoot: project,
+    environment: { name: loaded.environment.metadata.name, targets: loaded.environment.spec.targets },
+    memory,
+    packages: loaded.names.map((name) => {
+      const pkg = loaded.packages.get(name)!;
+      return {
+        name,
+        version: pkg.manifest.metadata.version,
+        source: pkg.lock.source,
+        memory: packageMemoryPath(project, name),
+        skills: pkg.manifest.spec.skills.map((skill) => skill.name),
+        entrypoints: pkg.manifest.spec.entrypoints,
+      };
+    }),
+  };
+}
+
 function sameIdentity(pkg: InstalledPackage, active: Awaited<ReturnType<typeof readState>>["activations"][string], targets: Platform[]): boolean {
   return (
     active !== undefined &&
@@ -479,9 +523,16 @@ async function transitionEnvironment(
       actions.push(...(await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets, true)));
     }
   }
-  const contextTransition = await prepareAgentContextTransition(projectRoot, previousEnvironment, desired, {
-    requirePrevious: state.activeEnvironment?.contextVersion === 1,
-  });
+  const contextTransition = await prepareMemoryBootstrapTransition(
+    projectRoot,
+    previousEnvironment
+      ? { targets: previousEnvironment.environment.spec.targets, hasMemoryPackage: previousEnvironment.names.includes(PROJECT_MEMORY_PACKAGE) }
+      : undefined,
+    { targets: desired.environment.spec.targets, hasMemoryPackage: desired.names.includes(PROJECT_MEMORY_PACKAGE) },
+    {
+      requirePrevious: state.activeEnvironment?.memoryBootstrapVersion === 1,
+    },
+  );
   actions.push(...contextTransition.actions);
 
   const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
@@ -508,7 +559,7 @@ async function transitionEnvironment(
       packages: desired.names,
       targets: desired.environment.spec.targets,
       activatedAt: new Date().toISOString(),
-      contextVersion: 1,
+      memoryBootstrapVersion: desired.names.includes(PROJECT_MEMORY_PACKAGE) ? 1 : undefined,
     });
     return { name, packages: desired.names, targets: desired.environment.spec.targets, actions };
   } catch (error) {
@@ -601,9 +652,12 @@ export async function deactivateEnvironment(projectRoot: string): Promise<Enviro
     }
     actions.push(...plan);
   }
-  const contextTransition = await prepareAgentContextTransition(projectRoot, current, undefined, {
-    requirePrevious: active.contextVersion === 1,
-  });
+  const contextTransition = await prepareMemoryBootstrapTransition(
+    projectRoot,
+    { targets: current.environment.spec.targets, hasMemoryPackage: current.names.includes(PROJECT_MEMORY_PACKAGE) },
+    undefined,
+    { requirePrevious: active.memoryBootstrapVersion === 1 },
+  );
   actions.push(...contextTransition.actions);
   const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
   let rollbackContext: (() => Promise<void>) | undefined;
@@ -726,17 +780,24 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
         : `recorded targets ${activeEnvironment.targets.join(", ")} do not match recipe ${environment.spec.targets.join(", ")}`,
     });
     try {
-      const activeSnapshot = await loadEnvironmentSnapshot(environment, lock);
-      const contextCheck = await prepareAgentContextTransition(projectRoot, activeSnapshot, activeSnapshot, { requirePrevious: true });
+      const hasMemoryPackage = names.includes(PROJECT_MEMORY_PACKAGE);
+      const contextCheck = await prepareMemoryBootstrapTransition(
+        projectRoot,
+        { targets: environment.spec.targets, hasMemoryPackage },
+        { targets: environment.spec.targets, hasMemoryPackage },
+        { requirePrevious: activeEnvironment.memoryBootstrapVersion === 1 },
+      );
       checks.push({
         status: contextCheck.actions.length === 0 ? "ok" : "fail",
-        label: "agent-context",
+        label: "memory-bootstrap",
         detail: contextCheck.actions.length === 0
-          ? "active context and Agent discovery pointers match"
+          ? hasMemoryPackage
+            ? "Agent discovery pointers match the active Memory package"
+            : "Project Memory package is not active"
           : `unexpected changes required: ${contextCheck.actions.map((action) => action.path).join(", ")}`,
       });
     } catch (error) {
-      checks.push({ status: "fail", label: "agent-context", detail: (error as Error).message });
+      checks.push({ status: "fail", label: "memory-bootstrap", detail: (error as Error).message });
     }
     for (const packageName of names) {
       const activation = state.activations[packageName];

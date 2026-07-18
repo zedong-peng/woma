@@ -48,7 +48,7 @@ codex
 harness deactivate
 ```
 
-`install` uses the active Environment when `--name` is omitted, then falls back to `base`, an empty project-local default that contains only the packages the user selects. `env create` without a name creates `base`, and `activate` without a name switches to `base`, matching Conda. Installing `auto-research` recursively installs and locks its component packages. Activating `base` makes the complete dependency closure available to the selected Agent in dependency-first order.
+`install` uses the active Environment when `--name` is omitted, then falls back to `base`. `env create` without a name creates `base`, and `activate` without a name switches to it, matching Conda. New Environments contain the ordinary `harness-project-memory` package by default; pass `--without-memory` to opt out. Installing `auto-research` recursively installs and locks its component packages. Activation makes the complete dependency closure available to the selected Agent in dependency-first order.
 
 Only one Environment is active in a project. Activating another Environment atomically removes packages unique to the old Environment, preserves identical shared packages, activates the new closure, and rolls back if the transition fails.
 
@@ -68,7 +68,7 @@ Project Memory
   = natural-language repository knowledge shared globally or isolated by Package
 
 Base Environment
-  = conventional default Environment; empty until the user installs Packages
+  = conventional default Environment with Project Memory enabled
 ```
 
 Harness Conda does not decide what phase a task is in, advance workflow steps, require handoffs, or record outcomes. The user and Agent define and execute the method; Harness Conda installs, isolates, locks, activates, migrates, and shares it.
@@ -114,7 +114,6 @@ Environment state is project-local:
 
 ```text
 .harness/
-├── active-context.md
 ├── environments/
 │   └── cpp-performance.yaml
 ├── locks/
@@ -125,7 +124,7 @@ Environment state is project-local:
 └── state.json
 ```
 
-The YAML recipe records user-selected root packages and Agent targets. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `active-context.md` is generated only while an Environment is active. `memory/` contains portable natural-language project adaptation, while `state.json` and `local/` are machine-local and must not be committed.
+The YAML recipe records root packages and Agent targets. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `memory/` contains portable natural-language project adaptation, while `state.json` and `local/` are machine-local and must not be committed.
 
 ## Packages and meta-skills
 
@@ -196,13 +195,12 @@ The assistant authors the method; Harness Conda remains neutral about its execut
 Portable Skills should not hard-code one repository's build, test, benchmark, or operational conventions. Users describe those details naturally to the Agent, which records stable, verified knowledge in isolated Project Memory:
 
 ```text
-.harness/active-context.md                            generated active package/Memory index
 .harness/memory/project.md                         shared repository knowledge
 .harness/memory/packages/performance-engineering.md  package-specific adaptation
 .harness/local/memory.md                           machine-specific, git-ignored context
 ```
 
-On activation, Harness generates `active-context.md` and installs a small managed discovery pointer in `AGENTS.md` for Codex or `CLAUDE.md` for Claude. The Agent therefore reads the relevant Memory before using any Skill; third-party Skills do not need Harness-specific instructions. Harness injects only the discovery pointer, never Memory contents.
+`harness-project-memory` is a normal built-in package, versioned and locked like `meta-skill-builder` or any third-party package. It is projected to `.agents/skills/` or `.claude/skills/` with the other active Skills. When it is active, Harness installs a small managed pointer in `AGENTS.md` or `CLAUDE.md` that tells the Agent to read its `SKILL.md` at session start. The Skill runs `harness current --json` to discover the current package-to-Skill and package-to-Memory mapping dynamically. Third-party Skills require no Harness-specific changes.
 
 When the user states a durable project fact, the Agent records it automatically in shared, package-scoped, or local Memory even if the user does not explicitly say “remember this.” Temporary, speculative, current-task-only, or secret information is not persisted. Harness does not interpret the prose, execute commands from it, or manage workflow progress. See [the Project Memory specification](docs/project-memory.md).
 
@@ -230,14 +228,14 @@ harness activate research
 
 | Command | Purpose |
 | --- | --- |
-| `harness env create [name]` | Create an empty Environment; defaults to `base` |
+| `harness env create [name] [--without-memory]` | Create an Environment; defaults to `base` with Project Memory |
 | `harness env list` | List Environments and mark the active one |
 | `harness env show <name>` | Show roots, resolved packages, and targets |
 | `harness env remove <name>` | Remove an inactive Environment |
 | `harness install [-n <env>] <source>` | Install a Package and recursive dependencies; defaults to active, then `base` |
 | `harness activate [env]` | Atomically activate or switch an Environment; defaults to `base` |
 | `harness deactivate` | Deactivate the complete active Environment |
-| `harness current` | Show the active Environment and package closure |
+| `harness current [--json]` | Show the active Environment; JSON includes package, Skill, and Memory mappings |
 | `harness shell hook [bash\|zsh]` | Print shell integration for the active-Environment prompt |
 | `harness sync [-n <env>]` | Restore exact locked packages |
 | `harness doctor [-n <env>]` | Verify lock, requirements, and activation |
