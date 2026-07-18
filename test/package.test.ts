@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { installPackageSource, installPackageTree, loadCachedPackage, syncLockedPackage } from "../src/package.js";
-import { putLocks, readLock } from "../src/store.js";
+import { createEnvironment, installIntoEnvironment, readEnvironmentLock } from "../src/environment.js";
 
 const run = promisify(execFile);
 
@@ -127,7 +127,7 @@ test("the built-in Project Memory manager is a normal installable Skill package"
       path.join(installation.root.root, "skills", "harness-project-memory", "SKILL.md"),
       "utf8",
     );
-    assert.match(instructions, /harness current --json/);
+    assert.match(instructions, /harness info --json/);
     assert.match(instructions, /even if the user does not explicitly ask to remember it/);
     assert.match(instructions, /before using another active Skill/);
   } finally {
@@ -163,9 +163,6 @@ test("installing a meta-skill resolves transitive dependencies in dependency-fir
     assert.deepEqual(installation.root.lock.dependencies, ["idea-gen"]);
     assert.deepEqual(installation.packages[1]?.lock.dependencies, ["paper-search"]);
 
-    const project = path.join(root, "project");
-    await putLocks(project, installation.packages.map((pkg) => pkg.lock));
-    assert.deepEqual(Object.keys((await readLock(project)).packages), ["paper-search", "idea-gen", "auto-research"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -224,15 +221,15 @@ test("failed dependency resolution leaves the previous lock unchanged", { concur
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     const project = path.join(root, "project");
-    const stable = await installPackageTree(await dependencyFixture(root, "stable", "1.0.0"));
-    await putLocks(project, stable.packages.map((pkg) => pkg.lock));
-    const before = await readLock(project);
+    await createEnvironment(project, "stable", ["codex"]);
+    await installIntoEnvironment(project, "stable", await dependencyFixture(root, "stable", "1.0.0"));
+    const before = await readEnvironmentLock(project, "stable");
     const broken = await dependencyFixture(root, "broken", "1.0.0", [
       { name: "missing", version: "1.0.0", source: "../missing" },
     ]);
 
-    await assert.rejects(installPackageTree(broken), /Local source does not exist/);
-    assert.deepEqual(await readLock(project), before);
+    await assert.rejects(installIntoEnvironment(project, "stable", broken), /Local source does not exist/);
+    assert.deepEqual(await readEnvironmentLock(project, "stable"), before);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -255,16 +252,15 @@ test("an install cannot invalidate dependencies already present in the lock", { 
     const secondRoot = await dependencyFixture(root, "second-root", "1.0.0", [
       { name: "shared", version: "^2.0.0", source: "../shared-v2" },
     ]);
-    const first = await installPackageTree(firstRoot);
-    await putLocks(project, first.packages.map((pkg) => pkg.lock));
-    const before = await readLock(project);
-    const second = await installPackageTree(secondRoot);
+    await createEnvironment(project, "tools", ["codex"]);
+    await installIntoEnvironment(project, "tools", firstRoot);
+    const before = await readEnvironmentLock(project, "tools");
 
     await assert.rejects(
-      putLocks(project, second.packages.map((pkg) => pkg.lock)),
+      installIntoEnvironment(project, "tools", secondRoot),
       /first-root requires shared@\^1\.0\.0, but the lock resolves 2\.0\.0/,
     );
-    assert.deepEqual(await readLock(project), before);
+    assert.deepEqual(await readEnvironmentLock(project, "tools"), before);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -18,9 +18,7 @@ import {
   removeEnvironment,
   syncEnvironment,
 } from "../src/environment.js";
-import { activatePackage } from "../src/activation.js";
-import { installPackageSource } from "../src/package.js";
-import { putLock, readState, statePath } from "../src/store.js";
+import { readState, statePath } from "../src/store.js";
 import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 
 async function environmentPackageFixture(
@@ -146,7 +144,7 @@ test("global environments are shared across projects while Project Memory remain
   }
 });
 
-test("global Environment reads reject missing foundations and preserve legacy project recipes", { concurrency: false }, async () => {
+test("global Environment reads reject missing foundational packages", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-global-environment-contract-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
@@ -159,12 +157,6 @@ test("global Environment reads reject missing foundations and preserve legacy pr
       "utf8",
     );
     await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package meta-skill-builder/);
-
-    const legacyPath = path.join(root, ".harness", "environments", "legacy.yaml");
-    await mkdir(path.dirname(legacyPath), { recursive: true });
-    await writeFile(legacyPath, recipe.replace("name: tools", "name: legacy"), "utf8");
-    await assert.rejects(readEnvironment(root, "legacy"), /Project-local environment detected.*legacy files were not modified/);
-    assert.match(await readFile(legacyPath, "utf8"), /name: legacy/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -481,35 +473,6 @@ test("active install rejects managed-file drift before changing the environment"
     assert.equal(await readFile(environmentPath(root, "tools"), "utf8"), recipeBefore);
     assert.equal(await readFile(environmentLockPath(root, "tools"), "utf8"), lockBefore);
     assert.equal(await readFile(statePath(root), "utf8"), stateBefore);
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("deactivate cleans legacy profile packages and routing blocks without the old workflow engine", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-migration-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
-  try {
-    const pkg = await installPackageSource("builtin:paper-search");
-    await putLock(root, pkg.lock);
-    await activatePackage(pkg, root, ["codex"]);
-    const block = "<!-- >>> harness-conda:active-profile -->\nlegacy\n<!-- <<< harness-conda:active-profile -->";
-    await writeFile(path.join(root, "AGENTS.md"), `${block}\n`, "utf8");
-    const state = await readState(root);
-    state.profile = {
-      name: "research",
-      packages: ["paper-search"],
-      targets: ["codex"],
-      activatedAt: new Date().toISOString(),
-      instructions: [{ path: "AGENTS.md", block }],
-    };
-    await writeFile(statePath(root), `${JSON.stringify(state, null, 2)}\n`, "utf8");
-
-    await deactivateEnvironment(root);
-    assert.deepEqual((await readState(root)).activations, {});
-    assert.equal((await readState(root)).profile, undefined);
-    await assert.rejects(readFile(path.join(root, ".agents", "skills", "paper-search", "SKILL.md")), /ENOENT/);
-    await assert.rejects(readFile(path.join(root, "AGENTS.md")), /ENOENT/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

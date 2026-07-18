@@ -6,7 +6,7 @@ import { captureHarness } from "./capture.js";
 import {
   activateEnvironment,
   createEnvironment,
-  currentEnvironmentContext,
+  environmentInfo,
   deactivateEnvironment,
   doctorEnvironment,
   DEFAULT_ENVIRONMENT,
@@ -186,31 +186,24 @@ program
   .action(async (_options: unknown, command: Command) => {
     const project = projectRoot(command);
     const state = await readState(project);
-    const previous = state.activeEnvironment?.name ?? (state.profile ? `legacy profile ${state.profile.name}` : undefined);
-    if (state.profile) await deactivateEnvironment(project);
+    const previous = state.activeEnvironment?.name;
     const result = await activateEnvironment(project, DEFAULT_ENVIRONMENT);
     printActions(result.actions);
     console.log(`Deactivated environment ${previous ?? DEFAULT_ENVIRONMENT}; using ${DEFAULT_ENVIRONMENT}`);
   });
 
 program
-  .command("current")
-  .description("show the active environment and its complete package closure")
-  .option("--name-only", "print only the active environment name for shell integrations", false)
+  .command("info")
+  .description("show Environment information and machine-readable Agent context")
   .option("--json", "print structured Environment, package, Skill, and Memory context", false)
-  .action(async (options: { nameOnly: boolean; json: boolean }, command: Command) => {
+  .action(async (options: { json: boolean }, command: Command) => {
     const project = projectRoot(command);
-    if (options.nameOnly && options.json) throw new Error("--name-only and --json cannot be used together");
     if (options.json) {
-      console.log(JSON.stringify(await currentEnvironmentContext(project), null, 2));
+      console.log(JSON.stringify(await environmentInfo(project), null, 2));
       return;
     }
     const activeName = await selectedEnvironment(project);
     const environment = await readEnvironment(project, activeName);
-    if (options.nameOnly) {
-      console.log(activeName);
-      return;
-    }
     const lock = await readEnvironmentLock(project, activeName);
     console.log(`Environment: ${activeName}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);

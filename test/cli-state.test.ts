@@ -73,10 +73,10 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
   try {
     const result = await runCli(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
-    for (const command of ["env", "install", "activate", "deactivate", "current", "sync", "doctor", "shell"]) {
+    for (const command of ["env", "install", "activate", "deactivate", "info", "sync", "doctor", "shell"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
     }
-    for (const command of ["bind", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
+    for (const command of ["bind", "current", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
       assert.doesNotMatch(result.stdout, new RegExp(`^  ${command}(?: |$)`, "m"));
     }
     const removed = await runCli(["bind", "test", "npm", "test"], root, path.join(root, "home"));
@@ -95,9 +95,9 @@ test("CLI provides a Conda-style base environment default from project subdirect
   try {
     await Promise.all([mkdir(nested, { recursive: true }), mkdir(path.join(project, ".git"), { recursive: true })]);
     const pkg = await packageFixture(root, "base-skill");
-    const initial = await runCli(["current", "--name-only"], project, home);
+    const initial = await runCli(["info", "--json"], project, home);
     assert.equal(initial.code, 0, initial.stderr);
-    assert.equal(initial.stdout.trim(), "base");
+    assert.equal((JSON.parse(initial.stdout) as { environment: { name: string } }).environment.name, "base");
     const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
@@ -112,10 +112,10 @@ test("CLI provides a Conda-style base environment default from project subdirect
     assert.match(await readFile(path.join(project, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Persist stable knowledge automatically/);
     assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /\.agents\/skills\/harness-project-memory\/SKILL\.md/);
 
-    const current = await runCli(["current", "--name-only"], nested, home);
+    const current = await runCli(["info", "--json"], nested, home);
     assert.equal(current.code, 0, current.stderr);
-    assert.equal(current.stdout.trim(), "base");
-    const structured = await runCli(["current", "--json"], nested, home);
+    assert.equal((JSON.parse(current.stdout) as { environment: { name: string } }).environment.name, "base");
+    const structured = await runCli(["info", "--json"], nested, home);
     assert.equal(structured.code, 0, structured.stderr);
     const context = JSON.parse(structured.stdout) as {
       projectRoot: string;
@@ -161,7 +161,7 @@ test("CLI always includes foundational packages and rejects the removed without-
     const activate = await runCli(["--project", project, "activate", "minimal"], root, path.join(root, "home"));
     assert.equal(activate.code, 0, activate.stderr);
     assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /harness-project-memory\/SKILL\.md/);
-    const current = JSON.parse((await runCli(["--project", project, "current", "--json"], root, path.join(root, "home"))).stdout) as {
+    const current = JSON.parse((await runCli(["--project", project, "info", "--json"], root, path.join(root, "home"))).stdout) as {
       packages: { name: string }[];
     };
     assert.deepEqual(current.packages.map((pkg) => pkg.name), ["harness-project-memory", "meta-skill-builder"]);
@@ -207,12 +207,12 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/local\//);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
     await access(path.join(project, ".harness", "memory", "packages"));
-    assert.match(await readFile(path.join(project, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /harness current --json/);
+    assert.match(await readFile(path.join(project, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /harness info --json/);
     assert.match(await readFile(path.join(project, ".agents", "skills", "paper-search", "SKILL.md"), "utf8"), /paper-search/);
     assert.match(await readFile(path.join(project, ".agents", "skills", "auto-research", "SKILL.md"), "utf8"), /auto-research/);
     assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /\.agents\/skills\/harness-project-memory\/SKILL\.md/);
 
-    const current = await runCli(["--project", project, "current"], root, home);
+    const current = await runCli(["--project", project, "info"], root, home);
     assert.equal(current.code, 0, current.stderr);
     assert.match(current.stdout, /Environment: research/);
     assert.match(current.stdout, /roots\s+harness-project-memory, meta-skill-builder, auto-research/);
@@ -226,7 +226,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.equal(installWhileActive.code, 0, installWhileActive.stderr);
     assert.match(installWhileActive.stdout, /Installed idea-gen@1\.0\.0 into research/);
     assert.match(await readFile(path.join(project, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /idea-gen/);
-    const activeContext = JSON.parse((await runCli(["--project", project, "current", "--json"], root, home)).stdout) as {
+    const activeContext = JSON.parse((await runCli(["--project", project, "info", "--json"], root, home)).stdout) as {
       packages: { name: string; skills: string[] }[];
     };
     assert.deepEqual(activeContext.packages.find((pkg) => pkg.name === "idea-gen")?.skills, ["idea-gen"]);

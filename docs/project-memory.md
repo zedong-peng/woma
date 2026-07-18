@@ -29,7 +29,7 @@ Project Memory is user-owned context, not an activation artifact. Activating, de
 
 When the package is active, the Codex Adapter adds an exact marker-delimited pointer to `.agents/skills/harness-project-memory/SKILL.md` in the project-root `AGENTS.md`; the Claude Adapter points to the equivalent `.claude/skills/` path in `CLAUDE.md`. Existing user instructions outside the block are preserved. Switching or deactivating updates the pointers atomically, and modified managed blocks are treated as drift.
 
-At session start the Memory Skill runs `harness current --json`. This dynamically returns the nearest project root, active Environment, shared/local Memory paths, and each active package's version, Skills, entrypoints, and isolated Memory path. No derived context file is maintained. The Skill reads shared and local Memory, then reads package Memory before the Agent uses a mapped Skill. Third-party Skills do not need to mention Harness or modify their contents.
+At session start the Memory Skill runs `harness info --json`. This dynamically returns the nearest project root, active Environment, shared/local Memory paths, and each active package's version, Skills, entrypoints, and isolated Memory path. No derived context file is maintained. The Skill reads shared and local Memory, then reads package Memory before the Agent uses a mapped Skill. Third-party Skills do not need to mention Harness or modify their contents.
 
 ## Authoring contract
 

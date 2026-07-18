@@ -16,7 +16,7 @@ import {
   projectMemoryPath,
 } from "./memory.js";
 import { prepareMemoryBootstrapTransition } from "./memory-bootstrap.js";
-import { deleteActiveEnvironment, deleteActiveProfile, putActiveEnvironment, readLock, readState, statePath } from "./store.js";
+import { deleteActiveEnvironment, putActiveEnvironment, readState, statePath } from "./store.js";
 import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform, StateFile } from "./types.js";
 
 const environmentName = z
@@ -142,14 +142,8 @@ export function parseEnvironment(input: string, source = "environment.yaml"): Ha
 export async function readEnvironment(projectRoot: string, name: string): Promise<HarnessEnvironment> {
   if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
   const filePath = environmentPath(projectRoot, name);
-  const input = await readFile(filePath, "utf8").catch(async (error: NodeJS.ErrnoException) => {
+  const input = await readFile(filePath, "utf8").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") {
-      const legacyPath = path.join(projectRoot, ".harness", "environments", `${name}.yaml`);
-      if (await pathExists(legacyPath)) {
-        throw new Error(
-          `Project-local environment detected at ${legacyPath}; recreate ${name} as a global Environment. The legacy files were not modified`,
-        );
-      }
       throw new Error(`Unknown environment: ${name}; run harness env create ${name}`);
     }
     throw error;
@@ -513,7 +507,7 @@ async function loadOrderedPackages(projectRoot: string, name: string): Promise<L
   return loadEnvironmentSnapshot(environment, lock);
 }
 
-export async function currentEnvironmentContext(projectRoot: string): Promise<CurrentEnvironmentContext> {
+export async function environmentInfo(projectRoot: string): Promise<CurrentEnvironmentContext> {
   const project = path.resolve(projectRoot);
   const state = await readState(project);
   const memory = { project: projectMemoryPath(project), local: localMemoryPath(project) };
@@ -554,11 +548,10 @@ async function transitionEnvironment(
   previousEnvironment?: LoadedEnvironment,
 ): Promise<EnvironmentActivationResult> {
   const state = await readState(projectRoot);
-  if (state.profile) throw new Error("Legacy workflow profile state is active; deactivate it with the previous CLI before using environments");
   const previousNames = state.activeEnvironment?.packages ?? [];
   for (const activeName of Object.keys(state.activations)) {
     if (!previousNames.includes(activeName)) {
-      throw new Error(`Package ${activeName} is active outside an environment; deactivate it with the previous CLI first`);
+      throw new Error(`Project activation state contains ${activeName} outside the selected Environment`);
     }
   }
 
@@ -652,57 +645,6 @@ export async function activateEnvironment(projectRoot: string, name: string): Pr
 export async function deactivateEnvironment(projectRoot: string): Promise<EnvironmentActivationResult> {
   const state = await readState(projectRoot);
   const active = state.activeEnvironment;
-  if (!active && (state.profile || Object.keys(state.activations).length > 0)) {
-    const lock = await readLock(projectRoot);
-    const names = Object.keys(state.activations).reverse();
-    const packages = new Map<string, InstalledPackage>();
-    const actions: Action[] = [];
-    for (const packageName of names) {
-      const locked = lock.packages[packageName];
-      if (!locked) throw new Error(`Cannot clean legacy activation ${packageName}: package is missing from .harness/lock.json`);
-      packages.set(packageName, await loadCachedPackage(locked));
-      const plan = await deactivatePackage(packageName, projectRoot, true);
-      if (plan.some((action) => action.verb === "keep" && !action.detail.startsWith("still used by "))) {
-        throw new Error(`${packageName} has modified or missing managed files; resolve drift before deactivating`);
-      }
-      actions.push(...plan);
-    }
-    const instructions = await Promise.all(
-      (state.profile?.instructions ?? []).map(async (instruction) => {
-        const absolute = path.join(projectRoot, instruction.path);
-        const original = await readFile(absolute, "utf8").catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return null;
-          throw error;
-        });
-        if (original === null || !original.includes(instruction.block)) {
-          throw new Error(`${instruction.path} legacy profile block was modified or removed; resolve it before deactivating`);
-        }
-        let content = original.replace(instruction.block, "").replace(/^\n+|\n+$/g, "");
-        if (content) content += "\n";
-        actions.push({ verb: "remove", path: instruction.path, detail: "legacy profile routing signal" });
-        return { absolute, original, content };
-      }),
-    );
-    const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
-    const written: typeof instructions = [];
-    try {
-      for (const packageName of names) {
-        removed.push({ pkg: packages.get(packageName)!, targets: state.activations[packageName]!.targets });
-        await deactivatePackage(packageName, projectRoot);
-      }
-      for (const instruction of instructions) {
-        if (instruction.content) await writeTextAtomic(instruction.absolute, instruction.content);
-        else await rm(instruction.absolute, { force: true });
-        written.push(instruction);
-      }
-      if (state.profile) await deleteActiveProfile(projectRoot);
-      return { packages: [], targets: [], actions };
-    } catch (error) {
-      for (const instruction of [...written].reverse()) await writeTextAtomic(instruction.absolute, instruction.original).catch(() => undefined);
-      for (const item of [...removed].reverse()) await activatePackage(item.pkg, projectRoot, item.targets).catch(() => undefined);
-      throw error;
-    }
-  }
   if (!active) throw new Error("No active environment");
   const current = await loadOrderedPackages(projectRoot, active.name);
   const names = [...active.packages].reverse();

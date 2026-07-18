@@ -135,7 +135,6 @@ export interface StateFile {
   stateVersion: 1;
   activations: Record<string, ActivationRecord>;
   activeEnvironment?: ActiveEnvironmentState | undefined;
-  profile?: ActiveProfileState | undefined;
 }
 
 export interface EnvironmentRoot {
@@ -161,20 +160,6 @@ export interface ActiveEnvironmentState {
   targets: Platform[];
   activatedAt: string;
   memoryBootstrapVersion?: 1 | undefined;
-}
-
-export interface ActiveInstruction {
-  path: string;
-  block: string;
-}
-
-export interface ActiveProfileState {
-  name: string;
-  packages: string[];
-  targets: Platform[];
-  activatedAt: string;
-  instructions: ActiveInstruction[];
-  handoff?: string | undefined;
 }
 
 export interface InstalledPackage {

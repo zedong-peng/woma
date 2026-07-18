@@ -12,7 +12,7 @@ npm run build >/dev/null
 node dist/src/cli.js --project "$demo_root/project" env create performance --target both
 node dist/src/cli.js --project "$demo_root/project" install -n performance ./examples/performance-engineering
 node dist/src/cli.js --project "$demo_root/project" activate performance
-node dist/src/cli.js --project "$demo_root/project" current
+node dist/src/cli.js --project "$demo_root/project" info
 node dist/src/cli.js --project "$demo_root/project" doctor -n performance
 node dist/src/cli.js --project "$demo_root/project" deactivate
 
