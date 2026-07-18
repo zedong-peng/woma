@@ -114,6 +114,7 @@ Environment state is project-local:
 
 ```text
 .harness/
+├── active-context.md
 ├── environments/
 │   └── cpp-performance.yaml
 ├── locks/
@@ -124,7 +125,7 @@ Environment state is project-local:
 └── state.json
 ```
 
-The YAML recipe records user-selected root packages and Agent targets. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `memory/` contains portable natural-language project adaptation, while `state.json` and `local/` are machine-local and must not be committed.
+The YAML recipe records user-selected root packages and Agent targets. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `active-context.md` is generated only while an Environment is active. `memory/` contains portable natural-language project adaptation, while `state.json` and `local/` are machine-local and must not be committed.
 
 ## Packages and meta-skills
 
@@ -195,12 +196,15 @@ The assistant authors the method; Harness Conda remains neutral about its execut
 Portable Skills should not hard-code one repository's build, test, benchmark, or operational conventions. Users describe those details naturally to the Agent, which records stable, verified knowledge in isolated Project Memory:
 
 ```text
+.harness/active-context.md                            generated active package/Memory index
 .harness/memory/project.md                         shared repository knowledge
 .harness/memory/packages/performance-engineering.md  package-specific adaptation
 .harness/local/memory.md                           machine-specific, git-ignored context
 ```
 
-Methods read the relevant files when present, verify them against the repository, and ask or inspect when essential context is missing. Harness initializes and isolates these paths but does not interpret the prose, execute commands from it, or manage workflow progress. Project Memory must not contain credentials, transient task state, handoffs, outcomes, or unverified guesses. See [the Project Memory specification](docs/project-memory.md).
+On activation, Harness generates `active-context.md` and installs a small managed discovery pointer in `AGENTS.md` for Codex or `CLAUDE.md` for Claude. The Agent therefore reads the relevant Memory before using any Skill; third-party Skills do not need Harness-specific instructions. Harness injects only the discovery pointer, never Memory contents.
+
+When the user states a durable project fact, the Agent records it automatically in shared, package-scoped, or local Memory even if the user does not explicitly say “remember this.” Temporary, speculative, current-task-only, or secret information is not persisted. Harness does not interpret the prose, execute commands from it, or manage workflow progress. See [the Project Memory specification](docs/project-memory.md).
 
 ## Reproduction
 

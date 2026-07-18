@@ -160,6 +160,7 @@ export interface ActiveEnvironmentState {
   packages: string[];
   targets: Platform[];
   activatedAt: string;
+  contextVersion?: 1 | undefined;
 }
 
 export interface ActiveInstruction {

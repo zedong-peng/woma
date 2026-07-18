@@ -5,10 +5,6 @@ description: Runs an evidence-to-experiment research loop using paper-search, id
 
 # Auto research
 
-## Project adaptation
-
-Before starting, read `.harness/memory/project.md`, `.harness/memory/packages/auto-research.md`, and `.harness/local/memory.md` when they exist. Verify stored guidance against the current repository and task. Persist only stable, repository-verifiable or user-confirmed research conventions in the package-scoped memory; keep machine-specific paths in local memory. Do not store credentials, transient task progress, handoffs, outcomes, or unverified guesses as Project Memory.
-
 Produce an evidence-backed, falsifiable experiment plan. The component Skills are capabilities, not mandatory exposed phases; adapt the method to the task while preserving its evidence and falsification contract.
 
 ## Method

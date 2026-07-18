@@ -60,7 +60,7 @@ State the outcome and the evidence required to claim success.
 
 ## Inputs
 
-Collect the target, constraints, available artifacts, budget, and required project knowledge. Read `.harness/memory/project.md`, `.harness/memory/packages/<package-name>.md`, and `.harness/local/memory.md` when present. Verify stored guidance before acting. Persist only stable, repository-verifiable or user-confirmed knowledge, using shared, package-specific, and machine-local scope appropriately. Never store credentials or transient workflow state.
+Collect the target, constraints, available artifacts, budget, and required project knowledge. Keep the portable method independent of one repository's commands; Harness Agent Adapters provide project-specific context before the Skill is used.
 
 ## Method
 

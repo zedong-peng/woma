@@ -20,6 +20,7 @@ import { activatePackage } from "../src/activation.js";
 import { installPackageSource } from "../src/package.js";
 import { putLock, readState, statePath } from "../src/store.js";
 import { packageMemoryPath, projectMemoryPath } from "../src/memory.js";
+import { activeContextPath } from "../src/context.js";
 
 async function environmentPackageFixture(
   root: string,
@@ -181,6 +182,25 @@ test("doctor reports active environment state that diverges from its recipe and 
   }
 });
 
+test("doctor reports modified Agent Memory discovery instructions", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-context-doctor-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await createEnvironment(root, "research", ["codex"]);
+    await installIntoEnvironment(root, "research", "builtin:paper-search");
+    await activateEnvironment(root, "research");
+    const agentsPath = path.join(root, "AGENTS.md");
+    await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("At the beginning", "Later"), "utf8");
+
+    const checks = await doctorEnvironment(root, "research");
+
+    assert.equal(checks.find((check) => check.label === "agent-context")?.status, "fail");
+    await assert.rejects(deactivateEnvironment(root), /discovery block was modified/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("doctor checks commands required by stdio MCP servers", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-mcp-command-"));
   process.env.HARNESS_HOME = path.join(root, "home");
@@ -267,6 +287,8 @@ test("install atomically upgrades a package in the active environment", { concur
     assert.match(await readFile(path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"), "utf8"), /Version two/);
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
     assert.equal((await readState(root)).activations["upgrade-package"]?.packageVersion, "2.0.0");
+    assert.equal((await readState(root)).activeEnvironment?.contextVersion, 1);
+    assert.match(await readFile(activeContextPath(root), "utf8"), /upgrade-package@2\.0\.0/);
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -290,6 +312,8 @@ test("active install restores project state when the new package conflicts after
       statePath(root),
       path.join(root, ".codex", "config.toml"),
       path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"),
+      activeContextPath(root),
+      path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
 
@@ -316,6 +340,8 @@ test("active install rolls back when interrupted after resources are applied", {
       environmentLockPath(root, "tools"),
       statePath(root),
       path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"),
+      activeContextPath(root),
+      path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
     let interruptedAfterMutation = false;
@@ -327,6 +353,7 @@ test("active install rolls back when interrupted after resources are applied", {
           assert.match(await readFile(trackedPaths[3]!, "utf8"), /Version two/);
           assert.equal((await readState(root)).activations["upgrade-package"]?.packageVersion, "2.0.0");
           assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "1.0.0");
+          assert.match(await readFile(activeContextPath(root), "utf8"), /upgrade-package@2\.0\.0/);
           throw new Error("simulated interruption");
         },
       }),

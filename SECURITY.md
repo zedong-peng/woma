@@ -9,9 +9,7 @@ Harness packages can install agent instructions, MCP process definitions, and Ag
 - Skill directories containing symbolic links are rejected so package content cannot escape its root during installation.
 - Project-scoped MCP servers still require the trust and approval flow of the target agent.
 - Activation refuses conflicting skills and MCP entries. Deactivation leaves user-modified artifacts in place.
-- Profile switching writes a clearly marked managed block to `AGENTS.md` and/or `CLAUDE.md`; content outside that block is preserved.
-- `harness enter` launches the selected local `codex` or `claude` executable with inherited terminal access and environment.
-- Handoffs remain local project files and are never uploaded by the CLI. Review them before committing because they may contain private research context.
+- Environment activation writes only a clearly marked Project Memory discovery pointer to `AGENTS.md` and/or `CLAUDE.md`; content outside that block is preserved and Memory contents remain in their own reviewable files.
 - Environment recipes and locks contain package metadata, sources, and integrity values, but never environment-variable values or Agent prompts.
 - Portable Project Memory is reviewable Agent context and must never contain credentials; machine-specific memory belongs under the git-ignored `.harness/local/` directory.
 - Machine-local activation ownership is stored in Git-excluded `.harness/state.json` and is never uploaded by Harness Conda.

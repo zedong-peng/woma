@@ -1,11 +1,12 @@
 # Project Memory
 
-Project Memory adapts portable Skills and meta-skills to one repository using natural-language context. Harness Conda defines and initializes the storage boundary; users and Agents author the content. Harness does not parse the prose, inject it into Agent configuration, execute commands from it, or treat it as workflow state.
+Project Memory adapts portable Skills and meta-skills to one repository using natural-language context. Harness Conda defines and initializes the storage boundary; users and Agents author the content. Harness does not parse the prose, inject Memory contents into Agent configuration, execute commands from it, or treat it as workflow state.
 
 ## Layout and isolation
 
 ```text
 .harness/
+├── active-context.md
 ├── memory/
 │   ├── project.md
 │   └── packages/
@@ -23,6 +24,14 @@ Project Memory adapts portable Skills and meta-skills to one repository using na
 
 Project Memory is user-owned context, not an activation artifact. Activating, deactivating, switching, or removing an Environment must not delete or rewrite it. Removing a package from an Environment must also preserve its package-scoped memory for review or later reuse; users and Agents delete obsolete memory explicitly. Memory contents do not affect package integrity or Environment lock identities.
 
+## Startup discovery
+
+Third-party Skills are not responsible for finding Project Memory. When an Environment is active, Harness generates the git-ignored `.harness/active-context.md` with the active Environment, package-to-Skill mapping, relevant package Memory paths, and the read/update policy. It contains paths and policy only, never Memory contents.
+
+The Codex Adapter adds an exact marker-delimited discovery pointer to the project-root `AGENTS.md`; the Claude Adapter does the same in `CLAUDE.md`. Agent startup therefore discovers `active-context.md` before any Harness-installed Skill is selected. Existing user instructions outside the managed block are preserved. Switching Environments updates the context and target-specific pointers atomically; deactivation removes them. Modified or missing managed files are treated as drift after the new context protocol has been activated.
+
+An Agent following the generated context reads shared and local Memory at session start, then reads the scoped Memory for each active package it uses. A third-party Skill does not need to mention Harness or modify its own files.
+
 ## Authoring contract
 
 Before using project-specific guidance, an Agent should:
@@ -31,7 +40,10 @@ Before using project-specific guidance, an Agent should:
 2. Treat memory as context rather than unquestionable instructions.
 3. Verify stored commands and constraints against the current repository before acting.
 4. Inspect the repository or ask the user when essential knowledge is missing.
-5. Persist only stable, repository-verifiable or user-confirmed knowledge in the narrowest correct scope.
+5. When the user states a durable project-specific fact, persist it automatically in the narrowest correct scope even without an explicit request to remember it.
+6. Do not persist temporary, one-off, speculative, or current-task-only statements.
+7. Resolve conflicts or ambiguous durability with the user instead of silently overwriting Memory.
+8. Briefly report which Memory file changed.
 
 Good Project Memory includes build and test conventions, slow-test warnings, benchmark protocols, generated-file rules, compatibility constraints, and repository-specific acceptance criteria.
 

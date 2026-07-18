@@ -13,7 +13,7 @@ const projectMemoryTemplate = `# Project Memory
 
 Record stable, project-wide knowledge that helps Agents work in this repository, such as build and test conventions, repository constraints, and verification expectations.
 
-Keep this file human-readable and reviewable. Verify instructions against the repository before acting. Do not store credentials, transient task progress, handoffs, outcomes, or unverified guesses here.
+Keep this file human-readable and reviewable. Verify instructions against the repository before acting. When the user states a durable project-wide fact, update this file even if they do not explicitly ask you to remember it. Do not store credentials, transient task progress, handoffs, outcomes, temporary statements, or unverified guesses here.
 `;
 
 export function projectMemoryRoot(projectRoot: string): string {

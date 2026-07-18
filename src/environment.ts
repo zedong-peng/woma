@@ -6,6 +6,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { satisfies } from "semver";
 import { z } from "zod";
 import { activatePackage, deactivatePackage } from "./activation.js";
+import { activeContextPath, prepareAgentContextTransition } from "./context.js";
 import { assertInside, hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import { installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
 import { initializeProjectMemory } from "./memory.js";
@@ -142,7 +143,7 @@ async function ensureLocalGitExcludes(projectRoot: string): Promise<void> {
   });
   const lines = existing.split(/\r?\n/).filter(Boolean);
   let changed = false;
-  for (const required of ["/.harness/state.json", "/.harness/local/"]) {
+  for (const required of ["/.harness/state.json", "/.harness/active-context.md", "/.harness/local/"]) {
     if (!lines.includes(required)) {
       lines.push(required);
       changed = true;
@@ -295,6 +296,9 @@ function transitionPaths(projectRoot: string, environmentNameValue: string, stat
     path.join(project, ".codex", "hooks.json"),
     path.join(project, ".mcp.json"),
     path.join(project, ".claude", "settings.json"),
+    activeContextPath(project),
+    path.join(project, "AGENTS.md"),
+    path.join(project, "CLAUDE.md"),
   ]);
   for (const activation of Object.values(state.activations)) {
     for (const artifact of activation.artifacts) {
@@ -475,9 +479,14 @@ async function transitionEnvironment(
       actions.push(...(await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets, true)));
     }
   }
+  const contextTransition = await prepareAgentContextTransition(projectRoot, previousEnvironment, desired, {
+    requirePrevious: state.activeEnvironment?.contextVersion === 1,
+  });
+  actions.push(...contextTransition.actions);
 
   const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
   const added: string[] = [];
+  let rollbackContext: (() => Promise<void>) | undefined;
   try {
     for (const packageName of removals) {
       const active = state.activations[packageName]!;
@@ -493,16 +502,29 @@ async function transitionEnvironment(
       await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets);
       added.push(packageName);
     }
+    rollbackContext = await contextTransition.apply();
     await putActiveEnvironment(projectRoot, {
       name,
       packages: desired.names,
       targets: desired.environment.spec.targets,
       activatedAt: new Date().toISOString(),
+      contextVersion: 1,
     });
     return { name, packages: desired.names, targets: desired.environment.spec.targets, actions };
   } catch (error) {
+    let contextRollbackError: unknown;
+    if (rollbackContext) {
+      try {
+        await rollbackContext();
+      } catch (rollbackError) {
+        contextRollbackError = rollbackError;
+      }
+    }
     for (const packageName of [...added].reverse()) await deactivatePackage(packageName, projectRoot).catch(() => undefined);
     for (const item of [...removed].reverse()) await activatePackage(item.pkg, projectRoot, item.targets).catch(() => undefined);
+    if (contextRollbackError) {
+      throw new AggregateError([error, contextRollbackError], "Environment transition failed and Agent context rollback could not restore the project");
+    }
     throw error;
   }
 }
@@ -579,16 +601,33 @@ export async function deactivateEnvironment(projectRoot: string): Promise<Enviro
     }
     actions.push(...plan);
   }
+  const contextTransition = await prepareAgentContextTransition(projectRoot, current, undefined, {
+    requirePrevious: active.contextVersion === 1,
+  });
+  actions.push(...contextTransition.actions);
   const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
+  let rollbackContext: (() => Promise<void>) | undefined;
   try {
     for (const packageName of names) {
       removed.push({ pkg: current.packages.get(packageName)!, targets: state.activations[packageName]!.targets });
       await deactivatePackage(packageName, projectRoot);
     }
+    rollbackContext = await contextTransition.apply();
     await deleteActiveEnvironment(projectRoot);
     return { packages: [], targets: [], actions };
   } catch (error) {
+    let contextRollbackError: unknown;
+    if (rollbackContext) {
+      try {
+        await rollbackContext();
+      } catch (rollbackError) {
+        contextRollbackError = rollbackError;
+      }
+    }
     for (const item of [...removed].reverse()) await activatePackage(item.pkg, projectRoot, item.targets).catch(() => undefined);
+    if (contextRollbackError) {
+      throw new AggregateError([error, contextRollbackError], "Environment deactivation failed and Agent context rollback could not restore the project");
+    }
     throw error;
   }
 }
@@ -686,6 +725,19 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
         ? environment.spec.targets.join(", ")
         : `recorded targets ${activeEnvironment.targets.join(", ")} do not match recipe ${environment.spec.targets.join(", ")}`,
     });
+    try {
+      const activeSnapshot = await loadEnvironmentSnapshot(environment, lock);
+      const contextCheck = await prepareAgentContextTransition(projectRoot, activeSnapshot, activeSnapshot, { requirePrevious: true });
+      checks.push({
+        status: contextCheck.actions.length === 0 ? "ok" : "fail",
+        label: "agent-context",
+        detail: contextCheck.actions.length === 0
+          ? "active context and Agent discovery pointers match"
+          : `unexpected changes required: ${contextCheck.actions.map((action) => action.path).join(", ")}`,
+      });
+    } catch (error) {
+      checks.push({ status: "fail", label: "agent-context", detail: (error as Error).message });
+    }
     for (const packageName of names) {
       const activation = state.activations[packageName];
       const locked = lock.packages[packageName]!;

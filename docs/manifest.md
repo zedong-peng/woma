@@ -96,4 +96,4 @@ mcpServers:
 
 `commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values.
 
-Repository-specific build, test, benchmark, and operational knowledge does not belong in a portable package manifest. Methods consume natural-language [Project Memory](project-memory.md), verify it against the current repository, and persist stable discoveries in shared or package-scoped memory. Harness manages the storage boundary but does not interpret or execute that context.
+Repository-specific build, test, benchmark, and operational knowledge does not belong in a portable package manifest. Harness Agent Adapters expose natural-language [Project Memory](project-memory.md) before a Skill is selected, so third-party package contents do not need Harness-specific discovery instructions. Harness manages the storage boundary but does not interpret or execute that context.

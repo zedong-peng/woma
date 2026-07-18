@@ -134,6 +134,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     const create = await runCli(["--project", project, "env", "create", "research", "--target", "codex"], root, home);
     assert.equal(create.code, 0, create.stderr);
     assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/state\.json/);
+    assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/active-context\.md/);
     assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/local\//);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
     await access(path.join(project, ".harness", "memory", "packages"));
@@ -154,6 +155,9 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.match(activate.stdout, /packages\s+paper-search, auto-research/);
     assert.match(await readFile(path.join(project, ".agents", "skills", "paper-search", "SKILL.md"), "utf8"), /paper-search/);
     assert.match(await readFile(path.join(project, ".agents", "skills", "auto-research", "SKILL.md"), "utf8"), /auto-research/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /\.harness\/active-context\.md/);
+    assert.match(await readFile(path.join(project, ".harness", "active-context.md"), "utf8"), /paper-search@1\.0\.0/);
+    assert.match(await readFile(path.join(project, ".harness", "active-context.md"), "utf8"), /auto-research@1\.0\.0/);
 
     const current = await runCli(["--project", project, "current"], root, home);
     assert.equal(current.code, 0, current.stderr);
@@ -169,6 +173,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.equal(installWhileActive.code, 0, installWhileActive.stderr);
     assert.match(installWhileActive.stdout, /Installed idea-gen@1\.0\.0 into research/);
     assert.match(await readFile(path.join(project, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /idea-gen/);
+    assert.match(await readFile(path.join(project, ".harness", "active-context.md"), "utf8"), /idea-gen@1\.0\.0/);
     const removeWhileActive = await runCli(["--project", project, "env", "remove", "research"], root, home);
     assert.notEqual(removeWhileActive.code, 0);
     assert.match(removeWhileActive.stderr, /is active.*deactivate/);
@@ -182,6 +187,9 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     await assert.rejects(readFile(path.join(project, ".agents", "skills", "paper-search", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(project, ".agents", "skills", "auto-research", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(project, ".agents", "skills", "idea-gen", "SKILL.md")), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, ".harness", "active-context.md"), "utf8"), /ENOENT/);
+    await assert.rejects(readFile(path.join(project, "AGENTS.md"), "utf8"), /ENOENT/);
+    assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
     const removeEnvironment = await runCli(["--project", project, "env", "remove", "research"], root, home);
     assert.equal(removeEnvironment.code, 0, removeEnvironment.stderr);
     await assert.rejects(readFile(path.join(project, ".harness", "environments", "research.yaml")), /ENOENT/);
