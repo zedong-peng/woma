@@ -82,4 +82,10 @@ harness capture <directory> --from codex|claude [--name <name>]
 harness shell hook [bash|zsh]
 ```
 
-Evaluate the output from the shell startup file to show `(harness:<environment>)` in the prompt. The hook does not proxy `codex` or `claude`.
+Add the following line to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+eval "$(harness shell hook)"
+```
+
+The prompt then shows the current project Environment as `(harness:<environment>)`. The hook does not proxy `codex` or `claude`.

@@ -27,13 +27,13 @@ npm link
 harness --version
 ```
 
-Optional bash/zsh prompt integration:
+Recommended: add the shell hook to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
 eval "$(harness shell hook)"
 ```
 
-Add the line to `~/.bashrc` or `~/.zshrc` to enable it in future shells.
+Open a new shell or reload the startup file. The prompt then shows the current Harness Environment directly, for example `(harness:base)` or `(harness:performance)`.
 
 ## Quick Start
 
