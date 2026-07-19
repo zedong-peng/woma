@@ -19,7 +19,7 @@ test("Memory bootstrap points to the normally activated Skill and preserves user
     const rollback = await prepared.apply();
 
     const activated = await readFile(agentsPath, "utf8");
-    assert.match(activated, /\.agents\/skills\/harness-project-memory\/SKILL\.md/);
+    assert.match(activated, /installed `harness-project-memory` Skill/);
     assert.match(activated, /Keep this content/);
     await assert.rejects(readFile(path.join(root, "CLAUDE.md"), "utf8"), /ENOENT/);
 
@@ -41,7 +41,7 @@ test("Memory bootstrap switches target adapters and rejects managed-block drift"
     await (await prepareMemoryBootstrapTransition(root, codex, claude, { requirePrevious: true })).apply();
 
     await assert.rejects(readFile(agentsPath, "utf8"), /ENOENT/);
-    assert.match(await readFile(claudePath, "utf8"), /\.claude\/skills\/harness-project-memory\/SKILL\.md/);
+    assert.match(await readFile(claudePath, "utf8"), /installed `harness-project-memory` Skill/);
 
     await writeFile(claudePath, (await readFile(claudePath, "utf8")).replace("At the beginning", "Later"), "utf8");
     await assert.rejects(

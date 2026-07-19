@@ -25,9 +25,9 @@ Project Memory is user-owned context, not an activation artifact. Activating, de
 
 ## Startup discovery
 
-`harness-project-memory` is an ordinary Harness package with the same manifest, cache, lock, activation, and target projection as every other Skill package. It and `meta-skill-builder` are foundational roots in every Environment, including the implicit global `base`, so Project Memory behavior is consistently available and cannot be omitted at Environment creation time.
+`harness-project-memory` is an ordinary Harness package with the same manifest, cache, lock, and global target view as every other Skill package. It and `meta-skill-builder` are foundational roots in every Environment, including the implicit global `base`, so Project Memory behavior is consistently available and cannot be omitted at Environment creation time.
 
-When the package is active, the Codex Adapter adds an exact marker-delimited pointer to `.agents/skills/harness-project-memory/SKILL.md` in the project-root `AGENTS.md`; the Claude Adapter points to the equivalent `.claude/skills/` path in `CLAUDE.md`. Existing user instructions outside the block are preserved. Switching or deactivating updates the pointers atomically, and modified managed blocks are treated as drift.
+When the package is active, the Codex and Claude Adapters add an exact marker-delimited instruction to use the installed `harness-project-memory` Skill in the project-root `AGENTS.md` or `CLAUDE.md`. The Skill itself comes from the selected global Environment view. Existing user instructions outside the block are preserved. Switching updates the pointers atomically, and modified managed blocks are treated as drift.
 
 At session start the Memory Skill runs `harness info --json`. This dynamically returns the nearest project root, active Environment, shared/local Memory paths, and each active package's version, Skills, entrypoints, and isolated Memory path. No derived context file is maintained. The Skill reads shared and local Memory, then reads package Memory before the Agent uses a mapped Skill. Third-party Skills do not need to mention Harness or modify their contents.
 

@@ -24,14 +24,11 @@ export interface PreparedMemoryBootstrapTransition {
   apply: () => Promise<() => Promise<void>>;
 }
 
-function discoveryBlock(platform: Platform): string {
-  const skillPath = platform === "codex"
-    ? ".agents/skills/harness-project-memory/SKILL.md"
-    : ".claude/skills/harness-project-memory/SKILL.md";
+function discoveryBlock(_platform: Platform): string {
   return `${markerStart}
 ## Harness Project Memory
 
-At the beginning of the session, read and follow \`${skillPath}\`. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.
+At the beginning of the session, use the installed \`harness-project-memory\` Skill. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.
 ${markerEnd}`;
 }
 

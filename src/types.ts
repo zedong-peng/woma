@@ -89,51 +89,8 @@ export interface LockFile {
   packages: Record<string, LockedPackage>;
 }
 
-export type ManagedArtifact =
-  | {
-      kind: "directory";
-      path: string;
-      integrity: string;
-      managed: boolean;
-    }
-  | {
-      kind: "json-entry";
-      path: string;
-      jsonPath: string[];
-      value: unknown;
-      managed: boolean;
-      fileCreated?: boolean | undefined;
-    }
-  | {
-      kind: "json-array-entry";
-      path: string;
-      jsonPath: string[];
-      value: unknown;
-      managed: boolean;
-      fileCreated?: boolean | undefined;
-    }
-  | {
-      kind: "toml-block";
-      path: string;
-      marker: string;
-      block: string;
-      managed: boolean;
-      fileCreated?: boolean | undefined;
-    };
-
-export interface ActivationRecord {
-  packageName: string;
-  packageVersion: string;
-  packageIntegrity: string;
-  packageCacheKey: string;
-  activatedAt: string;
-  targets: Platform[];
-  artifacts: ManagedArtifact[];
-}
-
 export interface StateFile {
   stateVersion: 1;
-  activations: Record<string, ActivationRecord>;
   activeEnvironment?: ActiveEnvironmentState | undefined;
 }
 
@@ -156,7 +113,6 @@ export interface HarnessEnvironment {
 
 export interface ActiveEnvironmentState {
   name: string;
-  packages: string[];
   targets: Platform[];
   activatedAt: string;
   memoryBootstrapVersion?: 1 | undefined;

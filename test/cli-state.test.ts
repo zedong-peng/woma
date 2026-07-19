@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 interface CommandResult {
   code: number;
@@ -17,21 +17,44 @@ async function write(filePath: string, content: string): Promise<void> {
   await writeFile(filePath, content, "utf8");
 }
 
-function runCli(args: string[], cwd: string, home: string): Promise<CommandResult> {
-  return new Promise((resolve, reject) => {
-    const cli = path.resolve("dist/src/cli.js");
-    const child = spawn(process.execPath, [cli, ...args], {
-      cwd,
-      env: { ...process.env, HARNESS_HOME: home },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
+let cliRun = 0;
+
+async function runCli(args: string[], cwd: string, home: string): Promise<CommandResult> {
+  const cli = path.resolve("dist/src/cli.js");
+  const previous = {
+    argv: process.argv,
+    cwd: process.cwd(),
+    harnessHome: process.env.HARNESS_HOME,
+    exitCode: process.exitCode,
+    stdoutWrite: process.stdout.write,
+    stderrWrite: process.stderr.write,
+  };
+  let stdout = "";
+  let stderr = "";
+  process.argv = [process.execPath, cli, ...args];
+  process.chdir(cwd);
+  process.env.HARNESS_HOME = home;
+  process.exitCode = undefined;
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdout += chunk.toString();
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr += chunk.toString();
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    await import(`${pathToFileURL(cli).href}?test-run=${cliRun++}`);
+    return { code: typeof process.exitCode === "number" ? process.exitCode : 0, stdout, stderr };
+  } finally {
+    process.argv = previous.argv;
+    process.chdir(previous.cwd);
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    process.exitCode = previous.exitCode;
+    process.stdout.write = previous.stdoutWrite;
+    process.stderr.write = previous.stderrWrite;
+  }
 }
 
 async function packageFixture(
@@ -95,6 +118,10 @@ test("CLI provides a Conda-style base environment default from project subdirect
   try {
     await Promise.all([mkdir(nested, { recursive: true }), mkdir(path.join(project, ".git"), { recursive: true })]);
     const pkg = await packageFixture(root, "base-skill");
+    const shellHook = await runCli(["shell", "hook", "bash"], project, home);
+    assert.equal(shellHook.code, 0, shellHook.stderr);
+    assert.match(shellHook.stdout, /__harness_apply_env/);
+    assert.match(await readFile(path.join(home, "environments", "base", "view", "view.json"), "utf8"), /"environment": "base"/);
     const initial = await runCli(["info", "--json"], project, home);
     assert.equal(initial.code, 0, initial.stderr);
     assert.equal((JSON.parse(initial.stdout) as { environment: { name: string } }).environment.name, "base");
@@ -109,8 +136,8 @@ test("CLI provides a Conda-style base environment default from project subdirect
     const activate = await runCli(["activate"], nested, home);
     assert.equal(activate.code, 0, activate.stderr);
     assert.match(activate.stdout, /Activated environment base/);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Persist stable knowledge automatically/);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /\.agents\/skills\/harness-project-memory\/SKILL\.md/);
+    assert.match(await readFile(path.join(home, "environments", "base", "view", "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Persist stable knowledge automatically/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
 
     const current = await runCli(["info", "--json"], nested, home);
     assert.equal(current.code, 0, current.stderr);
@@ -160,17 +187,17 @@ test("CLI always includes foundational packages and rejects the removed without-
     assert.match(create.stdout, /foundational harness-project-memory@0\.1\.0, meta-skill-builder@1\.0\.0/);
     const activate = await runCli(["--project", project, "activate", "minimal"], root, path.join(root, "home"));
     assert.equal(activate.code, 0, activate.stderr);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /harness-project-memory\/SKILL\.md/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
     const current = JSON.parse((await runCli(["--project", project, "info", "--json"], root, path.join(root, "home"))).stdout) as {
       packages: { name: string }[];
     };
     assert.deepEqual(current.packages.map((pkg) => pkg.name), ["harness-project-memory", "meta-skill-builder"]);
     assert.match(
-      await readFile(path.join(project, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
+      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
       /Persist stable knowledge automatically/,
     );
     assert.match(
-      await readFile(path.join(project, ".agents", "skills", "meta-skill-builder", "SKILL.md"), "utf8"),
+      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "meta-skill-builder", "SKILL.md"), "utf8"),
       /meta-skill/i,
     );
   } finally {
@@ -207,10 +234,11 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/local\//);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
     await access(path.join(project, ".harness", "memory", "packages"));
-    assert.match(await readFile(path.join(project, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /harness info --json/);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "paper-search", "SKILL.md"), "utf8"), /paper-search/);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "auto-research", "SKILL.md"), "utf8"), /auto-research/);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /\.agents\/skills\/harness-project-memory\/SKILL\.md/);
+    const researchSkills = path.join(home, "environments", "research", "view", "codex", "skills");
+    assert.match(await readFile(path.join(researchSkills, "harness-project-memory", "SKILL.md"), "utf8"), /harness info --json/);
+    assert.match(await readFile(path.join(researchSkills, "paper-search", "SKILL.md"), "utf8"), /paper-search/);
+    assert.match(await readFile(path.join(researchSkills, "auto-research", "SKILL.md"), "utf8"), /auto-research/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
 
     const current = await runCli(["--project", project, "info"], root, home);
     assert.equal(current.code, 0, current.stderr);
@@ -225,7 +253,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     const installWhileActive = await runCli(["--project", project, "install", idea], root, home);
     assert.equal(installWhileActive.code, 0, installWhileActive.stderr);
     assert.match(installWhileActive.stdout, /Installed idea-gen@1\.0\.0 into research/);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /idea-gen/);
+    assert.match(await readFile(path.join(researchSkills, "idea-gen", "SKILL.md"), "utf8"), /idea-gen/);
     const activeContext = JSON.parse((await runCli(["--project", project, "info", "--json"], root, home)).stdout) as {
       packages: { name: string; skills: string[] }[];
     };
@@ -235,18 +263,18 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.match(removeWhileActive.stderr, /is active.*deactivate/);
     const doctor = await runCli(["--project", project, "doctor", "-n", "research"], root, home);
     assert.equal(doctor.code, 0, doctor.stderr || doctor.stdout);
-    assert.match(doctor.stdout, /\[ok\] active:auto-research/);
-    assert.match(doctor.stdout, /\[ok\] active:idea-gen/);
+    assert.match(doctor.stdout, /\[ok\] view:/);
     assert.match(doctor.stdout, /\[ok\] memory-bootstrap/);
 
     const deactivate = await runCli(["--project", project, "deactivate"], root, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
-    await assert.rejects(readFile(path.join(project, ".agents", "skills", "paper-search", "SKILL.md")), /ENOENT/);
-    await assert.rejects(readFile(path.join(project, ".agents", "skills", "auto-research", "SKILL.md")), /ENOENT/);
-    await assert.rejects(readFile(path.join(project, ".agents", "skills", "idea-gen", "SKILL.md")), /ENOENT/);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Project Memory/);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "meta-skill-builder", "SKILL.md"), "utf8"), /meta-skill/i);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /harness-project-memory\/SKILL\.md/);
+    const baseSkills = path.join(home, "environments", "base", "view", "codex", "skills");
+    await assert.rejects(readFile(path.join(baseSkills, "paper-search", "SKILL.md")), /ENOENT/);
+    await assert.rejects(readFile(path.join(baseSkills, "auto-research", "SKILL.md")), /ENOENT/);
+    await assert.rejects(readFile(path.join(baseSkills, "idea-gen", "SKILL.md")), /ENOENT/);
+    assert.match(await readFile(path.join(baseSkills, "harness-project-memory", "SKILL.md"), "utf8"), /Project Memory/);
+    assert.match(await readFile(path.join(baseSkills, "meta-skill-builder", "SKILL.md"), "utf8"), /meta-skill/i);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
     const removeEnvironment = await runCli(["--project", project, "env", "remove", "research"], root, home);
     assert.equal(removeEnvironment.code, 0, removeEnvironment.stderr);
@@ -273,11 +301,11 @@ test("CLI atomically switches environments", { concurrency: false }, async () =>
 
     const installActive = await runCli(["--project", project, "install", second], root, home);
     assert.equal(installActive.code, 0, installActive.stderr);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
+    assert.match(await readFile(path.join(home, "environments", "first", "view", "codex", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
     const switched = await runCli(["--project", project, "activate", "second"], root, home);
     assert.equal(switched.code, 0, switched.stderr);
-    await assert.rejects(readFile(path.join(project, ".agents", "skills", "first-skill", "SKILL.md")), /ENOENT/);
-    assert.match(await readFile(path.join(project, ".agents", "skills", "second-skill", "SKILL.md"), "utf8"), /second-skill/);
+    assert.match(await readFile(path.join(home, "environments", "first", "view", "codex", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
+    assert.match(await readFile(path.join(home, "environments", "second", "view", "codex", "skills", "second-skill", "SKILL.md"), "utf8"), /second-skill/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

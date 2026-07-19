@@ -12,6 +12,7 @@ import {
   DEFAULT_ENVIRONMENT,
   environmentLockPath,
   environmentPath,
+  ensureBaseEnvironment,
   FOUNDATIONAL_PACKAGES,
   installIntoEnvironment,
   listEnvironments,
@@ -90,7 +91,7 @@ program
   .description("Create, reproduce, and switch isolated Agent environments")
   .version("0.6.0")
   .enablePositionalOptions()
-  .option("-p, --project <directory>", "project whose Memory and Agent projection are managed; defaults to the nearest parent with .harness");
+  .option("-p, --project <directory>", "project whose Memory and Environment selection are managed; defaults to the nearest parent with .harness");
 
 program
   .command("init [directory]")
@@ -187,7 +188,7 @@ program
     const project = projectRoot(command);
     const state = await readState(project);
     const previous = state.activeEnvironment?.name;
-    const result = await activateEnvironment(project, DEFAULT_ENVIRONMENT);
+    const result = await deactivateEnvironment(project);
     printActions(result.actions);
     console.log(`Deactivated environment ${previous ?? DEFAULT_ENVIRONMENT}; using ${DEFAULT_ENVIRONMENT}`);
   });
@@ -211,12 +212,13 @@ program
     console.log(`  packages  ${Object.keys(lock.packages).join(", ") || "none"}`);
   });
 
-const shellCommand = program.command("shell").description("print shell integration code for the active-environment prompt");
+const shellCommand = program.command("shell").description("print shell integration for Environment selection and the prompt");
 
 shellCommand
   .command("hook [shell]")
   .description("print a bash or zsh hook for eval")
-  .action((shell: string | undefined) => {
+  .action(async (shell: string | undefined, _options: unknown, command: Command) => {
+    await ensureBaseEnvironment(projectRoot(command));
     process.stdout.write(renderShellHook(resolveShell(shell)));
   });
 
@@ -236,7 +238,7 @@ program
 
 program
   .command("doctor")
-  .description("verify environment recipes, locks, requirements, activation, and drift")
+  .description("verify environment recipes, locks, views, requirements, activation, and Memory discovery")
   .option("-n, --name <environment>", "environment to check")
   .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);

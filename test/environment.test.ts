@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -18,6 +18,7 @@ import {
   removeEnvironment,
   syncEnvironment,
 } from "../src/environment.js";
+import { environmentViewPath } from "../src/view.js";
 import { readState, statePath } from "../src/store.js";
 import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 
@@ -134,6 +135,16 @@ test("global environments are shared across projects while Project Memory remain
     assert.deepEqual(await readEnvironmentLock(secondProject, "research"), await readEnvironmentLock(firstProject, "research"));
     await activateEnvironment(firstProject, "research");
     await activateEnvironment(secondProject, "research");
+    const sharedSkill = path.join(environmentViewPath("research"), "codex", "skills", "paper-search");
+    assert.equal((await lstat(sharedSkill)).isSymbolicLink(), true);
+    assert.match(await readlink(sharedSkill), /packages\/paper-search\//);
+    await installIntoEnvironment(secondProject, "research", "builtin:idea-gen");
+    assert.match(
+      await readFile(path.join(environmentViewPath("research"), "codex", "skills", "idea-gen", "SKILL.md"), "utf8"),
+      /idea-gen/,
+    );
+    await assert.rejects(readFile(path.join(firstProject, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /ENOENT/);
+    await assert.rejects(readFile(path.join(secondProject, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /ENOENT/);
     await writeFile(projectMemoryPath(firstProject), "# First project\n", "utf8");
 
     assert.equal(await readFile(projectMemoryPath(firstProject), "utf8"), "# First project\n");
@@ -223,7 +234,7 @@ test("install and sync reject unreachable lock packages before resolving their s
   }
 });
 
-test("doctor reports active environment state that diverges from its recipe and lock", { concurrency: false }, async () => {
+test("doctor reports active target state that diverges from its Environment recipe", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-doctor-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
@@ -231,14 +242,11 @@ test("doctor reports active environment state that diverges from its recipe and 
     await installIntoEnvironment(root, "research", "builtin:paper-search");
     await activateEnvironment(root, "research");
     const state = await readState(root);
-    const activation = state.activations["paper-search"]!;
-    state.activeEnvironment = { ...state.activeEnvironment!, packages: [], targets: ["claude"] };
-    state.activations["paper-search"] = { ...activation, packageVersion: "9.9.9", targets: ["claude"] };
-    state.activations.foreign = { ...activation, packageName: "foreign" };
+    state.activeEnvironment = { ...state.activeEnvironment!, targets: ["claude"] };
     await writeFile(statePath(root), `${JSON.stringify(state, null, 2)}\n`, "utf8");
 
     const checks = await doctorEnvironment(root, "research");
-    for (const label of ["active-environment", "active-targets", "active:paper-search", "foreign:foreign"]) {
+    for (const label of ["active-targets"]) {
       assert.equal(checks.find((check) => check.label === label)?.status, "fail", label);
     }
   } finally {
@@ -349,9 +357,9 @@ test("install atomically upgrades a package in the active environment", { concur
 
     await installIntoEnvironment(root, "tools", v2);
 
-    assert.match(await readFile(path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"), "utf8"), /Version two/);
+    assert.match(await readFile(path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"), "utf8"), /Version two/);
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
-    assert.equal((await readState(root)).activations["upgrade-package"]?.packageVersion, "2.0.0");
+    assert.equal((await readState(root)).activeEnvironment?.name, "tools");
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -361,30 +369,32 @@ test("install atomically upgrades a package in the active environment", { concur
 test("active install restores project state when the new package conflicts after removal", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-rollback-"));
   process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "user-codex");
   try {
     const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
     const conflicting = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.", "node");
+    await mkdir(process.env.HARNESS_ORIGINAL_CODEX_HOME, { recursive: true });
+    await writeFile(path.join(process.env.HARNESS_ORIGINAL_CODEX_HOME, "config.toml"), '[mcp_servers.occupied]\ncommand = "other"\n', "utf8");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
     await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
-    await mkdir(path.join(root, ".codex"), { recursive: true });
-    await writeFile(path.join(root, ".codex", "config.toml"), '[mcp_servers.occupied]\ncommand = "other"\n', "utf8");
     await activateEnvironment(root, "tools");
     const trackedPaths = [
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
       statePath(root),
-      path.join(root, ".codex", "config.toml"),
-      path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"),
+      path.join(environmentViewPath("tools"), "view.json"),
+      path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"),
       path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
 
-    await assert.rejects(installIntoEnvironment(root, "tools", conflicting), /Refusing to overwrite MCP server occupied/);
+    await assert.rejects(installIntoEnvironment(root, "tools", conflicting), /Refusing to overwrite Codex MCP server occupied/);
 
     assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
+    delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -403,7 +413,7 @@ test("active install rolls back when interrupted after resources are applied", {
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
       statePath(root),
-      path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md"),
+      path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"),
       path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
@@ -414,7 +424,7 @@ test("active install rolls back when interrupted after resources are applied", {
         onResourcesApplied: async () => {
           interruptedAfterMutation = true;
           assert.match(await readFile(trackedPaths[3]!, "utf8"), /Version two/);
-          assert.equal((await readState(root)).activations["upgrade-package"]?.packageVersion, "2.0.0");
+          assert.match(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8"), /"version": "2.0.0"/);
           assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "1.0.0");
           throw new Error("simulated interruption");
         },
@@ -442,9 +452,9 @@ test("reinstalling a foundational package preserves its recipe, lock, Skill, and
     await installIntoEnvironment(root, "minimal", "builtin:harness-project-memory");
 
     assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
-    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /harness-project-memory\/SKILL\.md/);
+    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
     assert.match(
-      await readFile(path.join(root, ".agents", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
+      await readFile(path.join(environmentViewPath("minimal"), "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
       /Persist stable knowledge automatically/,
     );
   } finally {
@@ -452,7 +462,7 @@ test("reinstalling a foundational package preserves its recipe, lock, Skill, and
   }
 });
 
-test("active install rejects managed-file drift before changing the environment", { concurrency: false }, async () => {
+test("install rebuilds a modified global view from immutable Package contents", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-preflight-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
@@ -461,17 +471,15 @@ test("active install rejects managed-file drift before changing the environment"
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
     await activateEnvironment(root, "tools");
-    const skillPath = path.join(root, ".agents", "skills", "upgrade-skill", "SKILL.md");
-    await writeFile(skillPath, `${await readFile(skillPath, "utf8")}User edit.\n`, "utf8");
-    const recipeBefore = await readFile(environmentPath(root, "tools"), "utf8");
-    const lockBefore = await readFile(environmentLockPath(root, "tools"), "utf8");
+    const skillLink = path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill");
+    await rm(skillLink, { force: true });
     const stateBefore = await readFile(statePath(root), "utf8");
 
-    await assert.rejects(installIntoEnvironment(root, "tools", v2), /modified or missing managed files/);
+    await installIntoEnvironment(root, "tools", v2);
 
-    assert.match(await readFile(skillPath, "utf8"), /User edit/);
-    assert.equal(await readFile(environmentPath(root, "tools"), "utf8"), recipeBefore);
-    assert.equal(await readFile(environmentLockPath(root, "tools"), "utf8"), lockBefore);
+    assert.equal((await lstat(skillLink)).isSymbolicLink(), true);
+    assert.match(await readFile(path.join(skillLink, "SKILL.md"), "utf8"), /Version two/);
+    assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
     assert.equal(await readFile(statePath(root), "utf8"), stateBefore);
   } finally {
     await rm(root, { recursive: true, force: true });

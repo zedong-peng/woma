@@ -1,12 +1,10 @@
-import { access, cp, lstat, mkdir, mkdtemp, readlink, readdir, readFile, rm, symlink } from "node:fs/promises";
-import os from "node:os";
+import { access, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { satisfies } from "semver";
 import { z } from "zod";
-import { activatePackage, deactivatePackage } from "./activation.js";
-import { assertInside, harnessHome, hashDirectory, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
+import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import { installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
 import {
   initializeProjectMemory,
@@ -16,8 +14,9 @@ import {
   projectMemoryPath,
 } from "./memory.js";
 import { prepareMemoryBootstrapTransition } from "./memory-bootstrap.js";
-import { deleteActiveEnvironment, putActiveEnvironment, readState, statePath } from "./store.js";
-import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform, StateFile } from "./types.js";
+import { putActiveEnvironment, readState } from "./store.js";
+import { environmentViewPath, materializeEnvironmentView, validateEnvironmentView } from "./view.js";
+import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
 
 const environmentName = z
   .string()
@@ -219,9 +218,10 @@ async function initializeEnvironment(projectRoot: string, name: string, targets:
     name: installation.root.lock.name,
     source: installation.root.lock.source,
   }));
-  const packages = Object.fromEntries(
-    installations.flatMap((installation) => installation.packages).map((pkg) => [pkg.lock.name, pkg.lock]),
+  const installed = new Map(
+    installations.flatMap((installation) => installation.packages).map((pkg) => [pkg.lock.name, pkg]),
   );
+  const packages = Object.fromEntries([...installed].map(([packageName, pkg]) => [packageName, pkg.lock]));
   const environment: HarnessEnvironment = {
     apiVersion: "harness.conda/environment-v1",
     kind: "HarnessEnvironment",
@@ -230,8 +230,12 @@ async function initializeEnvironment(projectRoot: string, name: string, targets:
   };
   environmentSchema.parse(environment);
   try {
-    await writeJsonAtomic(environmentLockPath(projectRoot, name), { lockfileVersion: 1, packages });
-    await writeEnvironment(projectRoot, environment);
+    await materializeEnvironmentView(environment, [...installed.values()], {
+      afterSwap: async () => {
+        await writeJsonAtomic(environmentLockPath(projectRoot, name), { lockfileVersion: 1, packages });
+        await writeEnvironment(projectRoot, environment);
+      },
+    });
   } catch (error) {
     await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
     throw error;
@@ -346,84 +350,6 @@ function reachableLock(lock: LockFile, roots: string[]): LockFile {
   return { lockfileVersion: 1, packages: Object.fromEntries(names.map((name) => [name, lock.packages[name]!])) };
 }
 
-type PathBackup =
-  | { target: string; kind: "missing" }
-  | { target: string; kind: "file" | "directory"; backup: string }
-  | { target: string; kind: "symlink"; link: string };
-
-function transitionPaths(projectRoot: string, environmentNameValue: string, state: StateFile, desired: LoadedEnvironment): string[] {
-  const project = path.resolve(projectRoot);
-  const paths = new Set<string>([
-    environmentPath(project, environmentNameValue),
-    environmentLockPath(project, environmentNameValue),
-    statePath(project),
-    path.join(project, ".codex", "config.toml"),
-    path.join(project, ".codex", "hooks.json"),
-    path.join(project, ".mcp.json"),
-    path.join(project, ".claude", "settings.json"),
-    path.join(project, "AGENTS.md"),
-    path.join(project, "CLAUDE.md"),
-  ]);
-  for (const activation of Object.values(state.activations)) {
-    for (const artifact of activation.artifacts) {
-      const absolute = path.resolve(project, artifact.path);
-      assertInside(project, absolute, `Managed artifact ${artifact.path}`);
-      paths.add(absolute);
-    }
-  }
-  for (const pkg of desired.packages.values()) {
-    for (const target of desired.environment.spec.targets) {
-      const skillBase = path.join(project, target === "codex" ? ".agents/skills" : ".claude/skills");
-      for (const skill of pkg.manifest.spec.skills) paths.add(path.join(skillBase, skill.name));
-    }
-  }
-  return [...paths];
-}
-
-async function withPathSnapshot<T>(paths: string[], operation: () => Promise<T>): Promise<T> {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "harness-environment-transition-"));
-  const backups: PathBackup[] = [];
-  try {
-    for (const [index, target] of paths.entries()) {
-      const info = await lstat(target).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      });
-      if (!info) {
-        backups.push({ target, kind: "missing" });
-        continue;
-      }
-      if (info.isSymbolicLink()) {
-        backups.push({ target, kind: "symlink", link: await readlink(target) });
-        continue;
-      }
-      if (!info.isFile() && !info.isDirectory()) throw new Error(`Cannot snapshot unsupported path type: ${target}`);
-      const backup = path.join(temporary, String(index));
-      await cp(target, backup, { recursive: info.isDirectory(), preserveTimestamps: true });
-      backups.push({ target, kind: info.isDirectory() ? "directory" : "file", backup });
-    }
-    return await operation();
-  } catch (error) {
-    try {
-      for (const backup of backups) {
-        await rm(backup.target, { recursive: true, force: true });
-        if (backup.kind === "missing") continue;
-        await mkdir(path.dirname(backup.target), { recursive: true });
-        if (backup.kind === "symlink") {
-          await symlink(backup.link, backup.target);
-        } else {
-          await cp(backup.backup, backup.target, { recursive: backup.kind === "directory", preserveTimestamps: true });
-        }
-      }
-    } catch (rollbackError) {
-      throw new AggregateError([error, rollbackError], `Environment transition failed and rollback could not restore the project`);
-    }
-    throw error;
-  } finally {
-    await rm(temporary, { recursive: true, force: true });
-  }
-}
-
 async function writeEnvironmentInstall(
   projectRoot: string,
   environmentNameValue: string,
@@ -447,10 +373,9 @@ export async function installIntoEnvironment(
   cwd = process.cwd(),
   hooks: EnvironmentInstallHooks = {},
 ): Promise<{ environment: HarnessEnvironment; root: InstalledPackage; packages: InstalledPackage[] }> {
-  const [environment, currentLock, state] = await Promise.all([
+  const [environment, currentLock] = await Promise.all([
     readEnvironment(projectRoot, environmentNameValue),
     readEnvironmentLock(projectRoot, environmentNameValue),
-    readState(projectRoot),
   ]);
   validateEnvironmentLockGraph(environment, currentLock);
   const installation = await installPackageTree(source, cwd);
@@ -473,18 +398,13 @@ export async function installIntoEnvironment(
     : [...environment.spec.roots, { name: installation.root.lock.name, source: installation.root.lock.source }];
   const pruned = reachableLock(next, roots.map((root) => root.name));
   const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
-  if (state.activeEnvironment?.name === environmentNameValue) {
-    const desired = await loadEnvironmentSnapshot(updated, pruned);
-    const previous = await loadEnvironmentSnapshot(environment, currentLock);
-    await withPathSnapshot(transitionPaths(projectRoot, environmentNameValue, state, desired), async () => {
-      await transitionEnvironment(projectRoot, environmentNameValue, desired, previous);
+  const desired = await loadEnvironmentSnapshot(updated, pruned);
+  await materializeEnvironmentView(updated, desired.names.map((name) => desired.packages.get(name)!), {
+    afterSwap: async () => {
       await hooks.onResourcesApplied?.();
       await writeEnvironmentInstall(projectRoot, environmentNameValue, updated, pruned, currentLock);
-    });
-  } else {
-    await validateEnvironmentLock(updated, pruned);
-    await writeEnvironmentInstall(projectRoot, environmentNameValue, updated, pruned, currentLock);
-  }
+    },
+  });
   return { environment: updated, root: installation.root, packages: installation.packages };
 }
 
@@ -531,16 +451,6 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
   };
 }
 
-function sameIdentity(pkg: InstalledPackage, active: Awaited<ReturnType<typeof readState>>["activations"][string], targets: Platform[]): boolean {
-  return (
-    active !== undefined &&
-    active.packageVersion === pkg.lock.version &&
-    active.packageIntegrity === pkg.lock.integrity &&
-    active.packageCacheKey === pkg.lock.cacheKey &&
-    JSON.stringify(active.targets) === JSON.stringify(targets)
-  );
-}
-
 async function transitionEnvironment(
   projectRoot: string,
   name: string,
@@ -548,34 +458,6 @@ async function transitionEnvironment(
   previousEnvironment?: LoadedEnvironment,
 ): Promise<EnvironmentActivationResult> {
   const state = await readState(projectRoot);
-  const previousNames = state.activeEnvironment?.packages ?? [];
-  for (const activeName of Object.keys(state.activations)) {
-    if (!previousNames.includes(activeName)) {
-      throw new Error(`Project activation state contains ${activeName} outside the selected Environment`);
-    }
-  }
-
-  const retained = new Set(
-    desired.names.filter((packageName) => {
-      const active = state.activations[packageName];
-      return active && sameIdentity(desired.packages.get(packageName)!, active, desired.environment.spec.targets);
-    }),
-  );
-  const removals = [...previousNames].reverse().filter((packageName) => !retained.has(packageName));
-  const additions = desired.names.filter((packageName) => !retained.has(packageName));
-  const actions: Action[] = [];
-  for (const packageName of removals) {
-    const plan = await deactivatePackage(packageName, projectRoot, true);
-    if (plan.some((action) => action.verb === "keep" && !action.detail.startsWith("still used by "))) {
-      throw new Error(`${packageName} has modified or missing managed files; resolve drift before switching environments`);
-    }
-    actions.push(...plan);
-  }
-  for (const packageName of additions) {
-    if (!state.activations[packageName]) {
-      actions.push(...(await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets, true)));
-    }
-  }
   const contextTransition = await prepareMemoryBootstrapTransition(
     projectRoot,
     previousEnvironment
@@ -586,35 +468,16 @@ async function transitionEnvironment(
       requirePrevious: state.activeEnvironment?.memoryBootstrapVersion === 1,
     },
   );
-  actions.push(...contextTransition.actions);
-
-  const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
-  const added: string[] = [];
   let rollbackContext: (() => Promise<void>) | undefined;
   try {
-    for (const packageName of removals) {
-      const active = state.activations[packageName]!;
-      const pkg = previousEnvironment?.packages.get(packageName);
-      if (!pkg) throw new Error(`Cannot load active package ${packageName} for rollback`);
-      removed.push({ pkg, targets: active.targets });
-      await deactivatePackage(packageName, projectRoot);
-    }
-    for (const packageName of additions) {
-      if (state.activations[packageName]) {
-        actions.push(...(await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets, true)));
-      }
-      await activatePackage(desired.packages.get(packageName)!, projectRoot, desired.environment.spec.targets);
-      added.push(packageName);
-    }
     rollbackContext = await contextTransition.apply();
     await putActiveEnvironment(projectRoot, {
       name,
-      packages: desired.names,
       targets: desired.environment.spec.targets,
       activatedAt: new Date().toISOString(),
       memoryBootstrapVersion: desired.names.includes(PROJECT_MEMORY_PACKAGE) ? 1 : undefined,
     });
-    return { name, packages: desired.names, targets: desired.environment.spec.targets, actions };
+    return { name, packages: desired.names, targets: desired.environment.spec.targets, actions: contextTransition.actions };
   } catch (error) {
     let contextRollbackError: unknown;
     if (rollbackContext) {
@@ -624,8 +487,6 @@ async function transitionEnvironment(
         contextRollbackError = rollbackError;
       }
     }
-    for (const packageName of [...added].reverse()) await deactivatePackage(packageName, projectRoot).catch(() => undefined);
-    for (const item of [...removed].reverse()) await activatePackage(item.pkg, projectRoot, item.targets).catch(() => undefined);
     if (contextRollbackError) {
       throw new AggregateError([error, contextRollbackError], "Environment transition failed and Agent context rollback could not restore the project");
     }
@@ -637,57 +498,14 @@ export async function activateEnvironment(projectRoot: string, name: string): Pr
   await ensureLocalGitExcludes(projectRoot);
   await initializeProjectMemory(projectRoot);
   const desired = await loadOrderedPackages(projectRoot, name);
+  await validateEnvironmentView(desired.environment, desired.names.map((packageName) => desired.packages.get(packageName)!));
   const state = await readState(projectRoot);
   const previous = state.activeEnvironment ? await loadOrderedPackages(projectRoot, state.activeEnvironment.name) : undefined;
   return transitionEnvironment(projectRoot, name, desired, previous);
 }
 
 export async function deactivateEnvironment(projectRoot: string): Promise<EnvironmentActivationResult> {
-  const state = await readState(projectRoot);
-  const active = state.activeEnvironment;
-  if (!active) throw new Error("No active environment");
-  const current = await loadOrderedPackages(projectRoot, active.name);
-  const names = [...active.packages].reverse();
-  const actions: Action[] = [];
-  for (const packageName of names) {
-    const plan = await deactivatePackage(packageName, projectRoot, true);
-    if (plan.some((action) => action.verb === "keep" && !action.detail.startsWith("still used by "))) {
-      throw new Error(`${packageName} has modified or missing managed files; resolve drift before deactivating`);
-    }
-    actions.push(...plan);
-  }
-  const contextTransition = await prepareMemoryBootstrapTransition(
-    projectRoot,
-    { targets: current.environment.spec.targets, hasMemoryPackage: current.names.includes(PROJECT_MEMORY_PACKAGE) },
-    undefined,
-    { requirePrevious: active.memoryBootstrapVersion === 1 },
-  );
-  actions.push(...contextTransition.actions);
-  const removed: { pkg: InstalledPackage; targets: Platform[] }[] = [];
-  let rollbackContext: (() => Promise<void>) | undefined;
-  try {
-    for (const packageName of names) {
-      removed.push({ pkg: current.packages.get(packageName)!, targets: state.activations[packageName]!.targets });
-      await deactivatePackage(packageName, projectRoot);
-    }
-    rollbackContext = await contextTransition.apply();
-    await deleteActiveEnvironment(projectRoot);
-    return { packages: [], targets: [], actions };
-  } catch (error) {
-    let contextRollbackError: unknown;
-    if (rollbackContext) {
-      try {
-        await rollbackContext();
-      } catch (rollbackError) {
-        contextRollbackError = rollbackError;
-      }
-    }
-    for (const item of [...removed].reverse()) await activatePackage(item.pkg, projectRoot, item.targets).catch(() => undefined);
-    if (contextRollbackError) {
-      throw new AggregateError([error, contextRollbackError], "Environment deactivation failed and Agent context rollback could not restore the project");
-    }
-    throw error;
-  }
+  return activateEnvironment(projectRoot, DEFAULT_ENVIRONMENT);
 }
 
 export async function syncEnvironment(projectRoot: string, name: string): Promise<LockedPackage[]> {
@@ -696,6 +514,8 @@ export async function syncEnvironment(projectRoot: string, name: string): Promis
   const names = validateEnvironmentLockGraph(environment, lock);
   for (const packageName of names) await syncLockedPackage(lock.packages[packageName]!);
   await validateLock(lock);
+  const loaded = await loadEnvironmentSnapshot(environment, lock);
+  await materializeEnvironmentView(environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
   return Object.values(lock.packages);
 }
 
@@ -767,14 +587,6 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
   checks.push({ status: active ? "ok" : "warn", label: "activation", detail: active ? environment.spec.targets.join(", ") : "inactive" });
   if (active) {
     const activeEnvironment = state.activeEnvironment!;
-    const closureMatches = JSON.stringify(activeEnvironment.packages) === JSON.stringify(names);
-    checks.push({
-      status: closureMatches ? "ok" : "fail",
-      label: "active-environment",
-      detail: closureMatches
-        ? `${name}: ${names.join(", ") || "no packages"}`
-        : `recorded packages ${activeEnvironment.packages.join(", ") || "none"} do not match lock closure ${names.join(", ") || "none"}`,
-    });
     const targetsMatch = JSON.stringify(activeEnvironment.targets) === JSON.stringify(environment.spec.targets);
     checks.push({
       status: targetsMatch ? "ok" : "fail",
@@ -803,41 +615,13 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
     } catch (error) {
       checks.push({ status: "fail", label: "memory-bootstrap", detail: (error as Error).message });
     }
-    for (const packageName of names) {
-      const activation = state.activations[packageName];
-      const locked = lock.packages[packageName]!;
-      const identityMatches =
-        activation !== undefined &&
-        activation.packageVersion === locked.version &&
-        activation.packageIntegrity === locked.integrity &&
-        activation.packageCacheKey === locked.cacheKey &&
-        JSON.stringify(activation.targets) === JSON.stringify(environment.spec.targets);
-      checks.push({
-        status: identityMatches ? "ok" : "fail",
-        label: `active:${packageName}`,
-        detail: !activation
-          ? "activation record missing"
-          : identityMatches
-            ? activation.targets.join(", ")
-            : `activation ${activation.packageVersion}/${activation.packageCacheKey} [${activation.targets.join(", ")}] does not match lock ${locked.version}/${locked.cacheKey} [${environment.spec.targets.join(", ")}]`,
-      });
-      for (const artifact of activation?.artifacts ?? []) {
-        if (!artifact.managed || artifact.kind !== "directory") continue;
-        const absolute = path.join(projectRoot, artifact.path);
-        if (!(await pathExists(absolute))) {
-          checks.push({ status: "fail", label: artifact.path, detail: "managed Skill is missing" });
-        } else if ((await hashDirectory(absolute)) !== artifact.integrity) {
-          checks.push({ status: "warn", label: artifact.path, detail: "managed Skill was modified after activation" });
-        } else {
-          checks.push({ status: "ok", label: artifact.path, detail: "managed Skill matches activation" });
-        }
-      }
-    }
-    for (const packageName of Object.keys(state.activations)) {
-      if (!names.includes(packageName)) {
-        checks.push({ status: "fail", label: `foreign:${packageName}`, detail: "active outside the selected environment" });
-      }
-    }
+  }
+  try {
+    const loaded = await loadEnvironmentSnapshot(environment, lock);
+    await validateEnvironmentView(environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
+    checks.push({ status: "ok", label: "view", detail: environmentViewPath(name) });
+  } catch (error) {
+    checks.push({ status: "fail", label: "view", detail: (error as Error).message });
   }
   return checks;
 }

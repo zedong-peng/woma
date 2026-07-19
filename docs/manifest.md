@@ -84,13 +84,13 @@ mcpServers:
 
 ## Target mapping
 
-| Package resource | Codex project | Claude Code project |
+| Package resource | Codex Environment view | Claude Code Environment view |
 | --- | --- | --- |
-| Skill | `.agents/skills/<name>` | `.claude/skills/<name>` |
-| MCP server | managed block in `.codex/config.toml` | entry in `.mcp.json` |
-| Hook | entry in `.codex/hooks.json` | entry in `.claude/settings.json` |
+| Skill | `view/codex/skills/<name>` symlink | `view/claude/skills/<name>` symlink |
+| MCP server | managed block in `view/codex/config.toml` | entry in `view/claude/.claude.json` |
+| Hook | entry in `view/codex/hooks.json` | entry in `view/claude/settings.json` |
 
-`~/.harness-conda/environments/<environment>/lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. `<project>/.harness/state.json` records only machine-local Adapter ownership for the active project projection and must not be committed.
+`~/.harness-conda/environments/<environment>/lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. `<project>/.harness/state.json` records the selected Environment and Memory bootstrap state and must not be committed.
 
 ## Requirements
 

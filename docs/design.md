@@ -8,7 +8,8 @@ Harness Conda separates reusable Agent capabilities from repository knowledge.
 | --- | --- | --- |
 | Immutable Package contents | User-global | `$HARNESS_HOME/packages/` |
 | Environment recipes and locks | User-global | `$HARNESS_HOME/environments/<name>/` |
-| Active Agent projection ownership | Project-local | `<project>/.harness/state.json` |
+| Codex and Claude Environment views | User-global | `$HARNESS_HOME/environments/<name>/view/` |
+| Environment selection and Memory bootstrap state | Project-local | `<project>/.harness/state.json` |
 | Shared and Package-specific Memory | Project-local | `<project>/.harness/memory/` |
 | Machine-specific Memory | Project-local, uncommitted | `<project>/.harness/local/` |
 
@@ -18,43 +19,47 @@ An Environment recipe records root Packages and Agent targets. Its lock records 
 
 ## Activation and direct Agent launch
 
-Activation currently builds a project-native view from the selected global Environment:
+Every Environment owns one reusable Agent view:
 
 ```text
-global Environment lock
+global Environment recipe and lock
         |
         v
 content-addressed Package store
         |
         v
-project Codex/Claude projection
+global Codex/Claude Environment view
         |
         v
-direct codex or claude launch
+shell-selected CODEX_HOME / CLAUDE_CONFIG_DIR
+        |
+        v
+direct codex or claude
 ```
 
-The Memory manager is projected like any other Skill. Harness also maintains a marker-delimited pointer in the project `AGENTS.md` or `CLAUDE.md`. At Agent startup, the Memory Skill calls `harness info --json`, reads project and local Memory, maps selected Skills to their Packages, and reads Package-specific Memory before use.
+Skill directories in the view are symbolic links into immutable Package Store entries. MCP and Hook configuration is generated once per Environment. Non-Harness files and directories in the user's original Agent configuration roots are linked into the view so authentication, logs, and session storage are not copied per Environment. Environment-managed configuration files merge the user's baseline configuration and reject conflicting MCP definitions.
+
+The shell hook saves the original Agent configuration roots and exports the selected Environment's `CODEX_HOME` and `CLAUDE_CONFIG_DIR`. It wraps only `harness activate` and `harness deactivate` so a successful CLI operation can update the parent shell. It never proxies `codex` or `claude`.
+
+The Memory manager is available through the view like any other Skill. Harness maintains a marker-delimited startup instruction in the project `AGENTS.md` or `CLAUDE.md`. At Agent startup, the Memory Skill calls `harness info --json`, reads project and local Memory, maps selected Skills to their Packages, and reads Package-specific Memory before use.
 
 Harness does not proxy Agent commands and does not maintain session-to-Environment metadata. Resuming a session under a different Environment is user-managed.
 
 ## Conda parity
 
-The implementation currently provides:
+The implementation provides:
 
 - one global physical Package cache;
 - global named Environment recipes and independent dependency locks;
-- isolated project visibility after activation;
+- one global target-specific view per Environment;
+- Environment-isolated Skill, MCP, and Hook visibility;
+- direct Agent launch through shell-selected configuration roots;
 - project-local Memory independent of Environment storage.
 
-It does not yet provide a true global per-Environment Agent prefix. Skills are materialized into each active project's native Agent directories instead of one reusable Environment view. Consequences include:
+Updating an Environment transactionally refreshes the managed paths in its global view. All projects and newly started Agent processes selecting that Environment therefore observe the same package closure without reactivation. Already-running Agent processes may retain startup-time Skill discovery and should be restarted after an Environment change.
 
-- activated Skill directories are physical project projections;
-- updating a global Environment from one project can leave another project's existing projection stale until reactivation;
-- activation selection is recorded per project rather than being a pure shell/process prefix;
-- an Environment cannot yet provide the same already-materialized view to arbitrary projects without activation.
-
-Full Conda-style parity requires target-specific views under each global Environment plus a reliable way for direct Codex and Claude processes to select those views. That work must preserve direct `codex` and `claude` commands without introducing mandatory Harness launch wrappers.
+Harness does not yet bind Agent session IDs to Environments. A resumed session uses whichever Environment is selected in the current shell; maintaining that consistency remains the user's responsibility.
 
 ## Transaction boundary
 
-Package resolution and lock validation complete before active files are changed. Active installation snapshots the Environment recipe, lock, project Adapter state, Skills, MCP configuration, hooks, and Memory discovery blocks. Ordinary errors restore the snapshot. Abrupt process termination is outside the current transaction guarantee because there is no persistent transaction journal.
+Package resolution and lock validation complete before the current view is changed. Harness builds all managed resources in a temporary directory, validates resource conflicts, and moves the previous managed paths aside before installing their replacements. The recipe and lock are committed inside the same ordinary-error rollback boundary; failures restore the previous view and metadata. Runtime-created state outside the managed paths remains in the stable Environment prefix. Abrupt process termination is outside the current transaction guarantee because there is no persistent transaction journal.

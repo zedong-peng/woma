@@ -19,7 +19,7 @@ Environment recipes and locks are stored under `$HARNESS_HOME/environments/`. `H
 harness install [-n <environment>] <source>
 ```
 
-When `--name` is omitted, installation uses the Environment active in the current project and otherwise falls back to `base`.
+When `--name` is omitted, installation uses `HARNESS_ENV`, then the Environment selected in the current project, and otherwise falls back to `base`.
 
 Supported sources:
 
@@ -31,7 +31,7 @@ https://host/repository.git#<revision>
 git@host:owner/repository.git#<revision>
 ```
 
-Installation recursively resolves dependencies, validates identities and SemVer constraints, rejects cycles and source conflicts, and atomically updates the Environment recipe and lock. Installing into the active Environment also updates the project Agent projection in the same ordinary-error rollback boundary.
+Installation recursively resolves dependencies, validates identities and SemVer constraints, rejects cycles and source conflicts, and atomically updates the Environment recipe, lock, and global Agent view. Every project using that Environment observes the new view without reactivation; already-running Agent processes may need a restart to rediscover Skills.
 
 ## Activation
 
@@ -40,14 +40,14 @@ harness activate [environment]
 harness deactivate
 ```
 
-`activate` defaults to `base`. It projects the complete Environment closure into the current project's Codex and/or Claude Code directories. Run the Agent normally afterward:
+`activate` defaults to `base`. With the recommended shell hook installed, it selects the Environment's global Codex and Claude views in the parent shell. It also initializes Project Memory and records the repository's selected Environment. Run the Agent normally afterward:
 
 ```bash
 codex
 claude
 ```
 
-`deactivate` switches the project projection back to `base`. Harness does not currently associate Codex or Claude session IDs with Environments; activate the intended Environment before resuming an existing session.
+`deactivate` returns to `base`. Harness does not currently associate Codex or Claude session IDs with Environments; activate the intended Environment before resuming an existing session.
 
 ## Inspection and repair
 
@@ -64,7 +64,7 @@ harness inspect <source-or-package> [-n <environment>]
 
 `info --json` is the stable machine-readable context interface used by `harness-project-memory`. It returns the project root, selected Environment, Memory paths, Packages, Skills, and entrypoints. It replaces the redundant user-facing `current` command.
 
-`sync` restores missing content-addressed Package entries from exact lock sources. `doctor` validates dependency locks, platform support, executable and environment requirements, active Adapter ownership, Memory discovery instructions, and managed-file drift.
+`sync` restores missing content-addressed Package entries from exact lock sources and rebuilds the global view. `doctor` validates dependency locks, the global view, platform support, executable and environment requirements, selected targets, and Memory discovery instructions.
 
 ## Package authoring
 
@@ -88,4 +88,4 @@ Add the following line to `~/.bashrc` or `~/.zshrc`:
 eval "$(harness shell hook)"
 ```
 
-The prompt then shows the current project Environment as `(harness:<environment>)`. The hook does not proxy `codex` or `claude`.
+The hook saves the original Agent configuration roots, exports `CODEX_HOME` and `CLAUDE_CONFIG_DIR` for the selected global view, wraps only the `harness` shell command so activation can update the parent shell, and shows `(harness:<environment>)` in the prompt. It does not proxy `codex` or `claude`.

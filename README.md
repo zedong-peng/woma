@@ -13,8 +13,9 @@ Harness Conda packages Skills, meta-skills, MCP servers, and hooks into reusable
 - An implicit, non-removable `base` Environment.
 - `harness-project-memory` and `meta-skill-builder` in every Environment.
 - Recursive Package dependencies for installable meta-skills.
-- Atomic activation, switching, and active-Environment installation with rollback on ordinary errors.
-- Native Codex and Claude Code project integration. After activation, run `codex` or `claude` directly.
+- Global per-Environment Codex and Claude Code views built from Store symlinks.
+- Atomic Environment view updates and installation rollback on ordinary errors.
+- Direct `codex` and `claude` launches after shell activation; no Agent command proxy.
 
 ## Install
 
@@ -33,7 +34,7 @@ Recommended: add the shell hook to `~/.bashrc` or `~/.zshrc`:
 eval "$(harness shell hook)"
 ```
 
-Open a new shell or reload the startup file. The prompt then shows the current Harness Environment directly, for example `(harness:base)` or `(harness:performance)`.
+Open a new shell or reload the startup file. The hook selects the active global Agent view and shows it in the prompt, for example `(harness:base)` or `(harness:performance)`.
 
 ## Quick Start
 
@@ -61,25 +62,27 @@ codex
 
 ```text
 ~/.harness-conda/
-├── packages/                    immutable Package contents
+├── packages/                    immutable, content-addressed Package contents
 └── environments/<name>/
     ├── environment.yaml         root Packages and Agent targets
-    └── lock.json                exact recursive dependency closure
+    ├── lock.json                exact recursive dependency closure
+    └── view/
+        ├── codex/               Codex Skills, MCP, Hooks, and shared-state links
+        └── claude/              Claude Skills, MCP, Hooks, and shared-state links
 
 <project>/.harness/
 ├── memory/                      portable project and Package knowledge
 ├── local/                       machine-local Memory
-└── state.json                   project Adapter ownership
+└── state.json                   selected Environment and Memory bootstrap state
 ```
 
-Activation materializes the selected Environment into the current project's native Agent locations:
+Each Skill in a view is a symbolic link into the immutable Package Store. Installing into an Environment transactionally refreshes the managed paths in that one global view, so every project and new Agent process using the Environment observes the same dependency closure:
 
 ```text
-Codex:  .agents/skills/, .codex/, AGENTS.md
-Claude: .claude/skills/, .mcp.json, CLAUDE.md
+project/shell -> Environment view -> Package Store
 ```
 
-This means direct `codex` and `claude` launches work after activation. The current implementation globally shares Package contents and dependency locks, but still uses project-local materialized Agent views. A true global per-Environment Agent view, equivalent to a Conda prefix, remains future work.
+The shell hook exports `CODEX_HOME` and `CLAUDE_CONFIG_DIR` for the selected view. Non-Harness runtime state such as authentication, logs, and session directories is linked from the user's original Agent configuration root. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
 
 ## Documentation
 
