@@ -22,6 +22,8 @@ test("bash hook keeps the shell Environment across project directories", async (
     const nested = path.join(project, "src", "nested");
     const hookPath = path.join(root, "hook.bash");
     await mkdir(nested, { recursive: true });
+    await mkdir(path.join(root, "home", "environments", "research", "view", "codex", "skills"), { recursive: true });
+    await mkdir(path.join(root, "home", "environments", "research", "view", "claude", "skills"), { recursive: true });
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     await run("bash", ["-n", hookPath]);
     const script = 'source "$1"\ncd "$2"\n__harness_prompt_update\nprintf \'%s|%s|%s|%s\' "$HARNESS_PROMPT_PREFIX" "$HARNESS_ENV" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"';
@@ -61,6 +63,10 @@ test("bash hook updates the parent shell after activate and deactivate", async (
     await mkdir(path.dirname(executable), { recursive: true });
     await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(executable, 0o755);
+    const harnessHome = path.join(root, "home");
+    await mkdir(path.join(harnessHome, "environments", "research", "view", "codex", "skills"), { recursive: true });
+    await mkdir(path.join(harnessHome, "environments", "base", "view", "codex", "skills"), { recursive: true });
+    await mkdir(path.join(harnessHome, "environments", "base", "view", "claude", "skills"), { recursive: true });
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     const script = [
       'source "$1"',
@@ -69,7 +75,6 @@ test("bash hook updates the parent shell after activate and deactivate", async (
       "harness deactivate",
       'printf \'%s|%s\\n\' "$HARNESS_ENV" "$CLAUDE_CONFIG_DIR"',
     ].join("\n");
-    const harnessHome = path.join(root, "home");
     const { stdout } = await run(
       "bash",
       ["--noprofile", "--norc", "-c", script, "bash", hookPath],
@@ -79,6 +84,35 @@ test("bash hook updates the parent shell after activate and deactivate", async (
       stdout,
       `research|${path.join(harnessHome, "environments", "research", "view", "codex")}\nbase|${path.join(harnessHome, "environments", "base", "view", "claude")}\n`,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("shell hook restores the original Agent home for an unsupported target", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-target-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const home = path.join(root, "home");
+    const originalCodex = path.join(root, "original-codex");
+    const originalClaude = path.join(root, "original-claude");
+    await mkdir(path.join(home, "environments", "codex-only", "view", "codex", "skills"), { recursive: true });
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const script = 'source "$1"\nprintf \'%s|%s\' "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"';
+    const { stdout } = await run(
+      "bash",
+      ["--noprofile", "--norc", "-c", script, "bash", hookPath],
+      {
+        env: {
+          ...process.env,
+          HARNESS_HOME: home,
+          HARNESS_ENV: "codex-only",
+          CODEX_HOME: originalCodex,
+          CLAUDE_CONFIG_DIR: originalClaude,
+        },
+      },
+    );
+    assert.equal(stdout, `${path.join(home, "environments", "codex-only", "view", "codex")}|${originalClaude}`);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

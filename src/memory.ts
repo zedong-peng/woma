@@ -1,4 +1,4 @@
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { pathExists, writeTextAtomic } from "./fs.js";
@@ -40,9 +40,54 @@ export function localMemoryPath(projectRoot: string): string {
 }
 
 export async function initializeProjectMemory(projectRoot: string): Promise<void> {
-  await mkdir(packageMemoryRoot(projectRoot), { recursive: true });
+  await (await prepareProjectMemoryInitialization(projectRoot)).apply();
+}
+
+export interface PreparedProjectMemoryInitialization {
+  apply: () => Promise<() => Promise<void>>;
+}
+
+export async function prepareProjectMemoryInitialization(projectRoot: string): Promise<PreparedProjectMemoryInitialization> {
+  const harnessRoot = path.join(projectRoot, ".harness");
+  const memoryRoot = projectMemoryRoot(projectRoot);
+  const packagesRoot = packageMemoryRoot(projectRoot);
   const shared = projectMemoryPath(projectRoot);
-  if (!(await pathExists(shared))) await writeTextAtomic(shared, projectMemoryTemplate);
+  const existed = {
+    harness: await pathExists(harnessRoot),
+    memory: await pathExists(memoryRoot),
+    packages: await pathExists(packagesRoot),
+    shared: await pathExists(shared),
+  };
+  return {
+    apply: async () => {
+      let createdShared = false;
+      const restore = async (): Promise<void> => {
+        if (createdShared) await rm(shared, { force: true });
+        for (const [directory, wasPresent] of [
+          [packagesRoot, existed.packages],
+          [memoryRoot, existed.memory],
+          [harnessRoot, existed.harness],
+        ] as const) {
+          if (!wasPresent) {
+            await rmdir(directory).catch((error: NodeJS.ErrnoException) => {
+              if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY") throw error;
+            });
+          }
+        }
+      };
+      try {
+        await mkdir(packagesRoot, { recursive: true });
+        if (!existed.shared && !(await pathExists(shared))) {
+          await writeTextAtomic(shared, projectMemoryTemplate);
+          createdShared = true;
+        }
+        return restore;
+      } catch (error) {
+        await restore();
+        throw error;
+      }
+    },
+  };
 }
 
 export async function readProjectMemory(projectRoot: string): Promise<string> {

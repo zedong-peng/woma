@@ -63,6 +63,8 @@ codex
 ```text
 ~/.harness-conda/
 ├── packages/                    immutable, content-addressed Package contents
+├── runtime/                     shared Agent authentication and session state
+├── locks/                       cross-process Environment and project locks
 └── environments/<name>/
     ├── environment.yaml         root Packages and Agent targets
     ├── lock.json                exact recursive dependency closure
@@ -81,7 +83,7 @@ Each Skill in a view is a symbolic link into the immutable Package Store. Instal
 project/shell -> Environment view -> Package Store
 ```
 
-The shell hook exports `CODEX_HOME` and `CLAUDE_CONFIG_DIR` for the selected view. Non-Harness runtime state such as authentication, logs, and session directories is linked from the user's original Agent configuration root. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
+The shell hook exports an Environment view only for targets that Environment supports and restores the original Agent home for unsupported targets. Authentication, logs, and session directories use stable links through the shared runtime root; existing state is adopted from the user's original Agent configuration root. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
 
 ## Documentation
 

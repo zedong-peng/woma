@@ -40,7 +40,7 @@ harness activate [environment]
 harness deactivate
 ```
 
-`activate` defaults to `base`. With the recommended shell hook installed, it selects the Environment's global Codex and Claude views in the parent shell. It also initializes Project Memory in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
+`activate` defaults to `base`. With the recommended shell hook installed, it selects each supported Agent view in the parent shell and leaves unsupported Agents on their original configuration homes. It atomically initializes Project Memory and stable discovery pointers for both Agents in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
 
 The project defaults to the exact current working directory. Harness does not search parent directories for `.harness` or `.git`, so Git and non-Git projects follow the same rule. Run commands from the intended project root or pass the global `--project <directory>` option explicitly when working from a subdirectory.
 
@@ -90,4 +90,4 @@ Add the following line to `~/.bashrc` or `~/.zshrc`:
 eval "$(harness shell hook)"
 ```
 
-The hook saves the original Agent configuration roots, exports `CODEX_HOME` and `CLAUDE_CONFIG_DIR` for the selected global view, wraps only the `harness` shell command so activation can update the parent shell, and shows `(harness:<environment>)` in the prompt. It does not proxy `codex` or `claude`.
+The hook saves the original Agent configuration roots, exports each supported target's selected global view, restores the original root for unsupported targets, wraps only the `harness` shell command so activation can update the parent shell, and shows `(harness:<environment>)` in the prompt. It does not proxy `codex` or `claude`.

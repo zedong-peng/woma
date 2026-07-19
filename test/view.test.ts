@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
 import { createEnvironment, doctorEnvironment, installIntoEnvironment } from "../src/environment.js";
-import { environmentViewPath } from "../src/view.js";
+import { environmentViewPath, reconcileRuntimeState } from "../src/view.js";
 
 async function write(filePath: string, content: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -21,16 +21,16 @@ test("global Environment views link Skills, merge adapters, and share runtime st
   };
   const home = path.join(root, "harness-home");
   const codexHome = path.join(root, "codex-home");
-  const claudeHome = path.join(root, "claude-home");
+  const claudeHome = path.join(root, "user", ".claude");
   process.env.HARNESS_HOME = home;
   process.env.HARNESS_ORIGINAL_CODEX_HOME = codexHome;
   process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claudeHome;
   try {
     await write(path.join(codexHome, "config.toml"), 'model = "gpt-test"\n');
     await write(path.join(codexHome, "hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"true"}]}]}}\n');
-    await write(path.join(codexHome, "auth.json"), '{"auth":"shared"}\n');
+    await write(path.join(codexHome, "installation_id"), "existing-installation\n");
     await write(path.join(claudeHome, "settings.json"), '{"permissions":{"allow":["Read"]}}\n');
-    await write(path.join(claudeHome, ".claude.json"), '{"mcpServers":{"existing":{"type":"stdio","command":"keep","args":[],"env":{}}}}\n');
+    await write(path.join(path.dirname(claudeHome), ".claude.json"), '{"runtimeMarker":"from-default-state","mcpServers":{"existing":{"type":"stdio","command":"keep","args":[],"env":{}}}}\n');
     await mkdir(path.join(claudeHome, "projects"), { recursive: true });
 
     const packageRoot = path.join(root, "package");
@@ -87,16 +87,38 @@ spec:
     const codexHooks = JSON.parse(await readFile(path.join(view, "codex", "hooks.json"), "utf8")) as Record<string, any>;
     assert.equal(codexHooks.hooks.SessionStart[0].hooks[0].command, "true");
     assert.equal(codexHooks.hooks.PostToolUse[0].hooks[0].command, "git diff --check");
+    assert.equal((await lstat(path.join(view, "codex", "installation_id"))).isSymbolicLink(), true);
+    assert.equal(await realpath(path.join(view, "codex", "installation_id")), path.join(codexHome, "installation_id"));
+    await write(path.join(view, "codex", "auth.json"), '{"auth":"created-after-views"}\n');
+    assert.equal(
+      await readFile(path.join(environmentViewPath("isolated"), "codex", "auth.json"), "utf8"),
+      '{"auth":"created-after-views"}\n',
+    );
+    await rm(path.join(view, "codex", "auth.json"));
+    await write(path.join(view, "codex", "auth.json"), '{"auth":"atomically-replaced"}\n');
+    await reconcileRuntimeState("tools");
     assert.equal((await lstat(path.join(view, "codex", "auth.json"))).isSymbolicLink(), true);
-    assert.equal(await readlink(path.join(view, "codex", "auth.json")), path.join(codexHome, "auth.json"));
+    assert.equal(
+      await readFile(path.join(environmentViewPath("isolated"), "codex", "auth.json"), "utf8"),
+      '{"auth":"atomically-replaced"}\n',
+    );
+    await rm(path.join(environmentViewPath("isolated"), "codex", "auth.json"));
+    await reconcileRuntimeState("isolated");
+    await assert.rejects(readFile(path.join(view, "codex", "auth.json")), /ENOENT/);
 
     const claudeState = JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")) as Record<string, any>;
+    assert.equal(claudeState.runtimeMarker, "from-default-state");
     assert.equal(claudeState.mcpServers.existing.command, "keep");
     assert.equal(claudeState.mcpServers["view-server"].env.VIEW_TOKEN, "${VIEW_TOKEN}");
     const claudeSettings = JSON.parse(await readFile(path.join(view, "claude", "settings.json"), "utf8")) as Record<string, any>;
     assert.deepEqual(claudeSettings.permissions, { allow: ["Read"] });
     assert.equal(claudeSettings.hooks.PostToolUse[0].hooks[0].command, "git diff --check");
     assert.equal((await lstat(path.join(view, "claude", "projects"))).isSymbolicLink(), true);
+    await write(path.join(view, "claude", "projects", "late-session.json"), '{"session":"shared"}\n');
+    assert.equal(
+      await readFile(path.join(environmentViewPath("isolated"), "claude", "projects", "late-session.json"), "utf8"),
+      '{"session":"shared"}\n',
+    );
 
     await write(path.join(view, "codex", "runtime-created.db"), "runtime state\n");
     claudeState.runtimeMarker = "preserve-me";

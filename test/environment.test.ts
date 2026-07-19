@@ -173,6 +173,47 @@ test("activation validates an Environment before creating project files", { conc
   }
 });
 
+test("activation keeps both Agent discovery files stable across target changes", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-stable-discovery-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await createEnvironment(root, "both", ["codex", "claude"]);
+    await createEnvironment(root, "codex-only", ["codex"]);
+    await activateEnvironment(root, "both");
+    const claudePath = path.join(root, "CLAUDE.md");
+    await writeFile(claudePath, `${await readFile(claudePath, "utf8")}\n# User Claude instructions\n`, "utf8");
+    const before = await readFile(claudePath, "utf8");
+
+    await activateEnvironment(root, "codex-only");
+
+    assert.equal(await readFile(claudePath, "utf8"), before);
+    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /Harness Project Memory/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("failed discovery validation leaves project initialization unchanged", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-project-rollback-"));
+  const project = path.join(root, "project");
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await mkdir(project, { recursive: true });
+    await ensureBaseEnvironment(project);
+    const invalid = "<!-- >>> harness-conda:project-memory -->\nmodified\n<!-- <<< harness-conda:project-memory -->\n";
+    await writeFile(path.join(project, "CLAUDE.md"), invalid, "utf8");
+
+    await assert.rejects(activateEnvironment(project, "base"), /discovery block was modified/);
+
+    assert.equal(await readFile(path.join(project, "CLAUDE.md"), "utf8"), invalid);
+    await assert.rejects(access(path.join(project, ".harness")));
+    await assert.rejects(access(path.join(project, ".gitignore")));
+    await assert.rejects(access(path.join(project, "AGENTS.md")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("environment removal is guarded by the current shell only", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-shell-removal-"));
   const previousEnvironment = process.env.HARNESS_ENV;
@@ -222,6 +263,21 @@ test("concurrent first reads initialize the implicit base Environment once", { c
     assert.equal(environment.metadata.name, "base");
     assert.deepEqual(environment.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
     assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "meta-skill-builder"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("install can initialize and lock base as the first Harness command", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-first-install-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await installIntoEnvironment(root, "base", "builtin:paper-search");
+    assert.deepEqual(Object.keys((await readEnvironmentLock(root, "base")).packages), [
+      "harness-project-memory",
+      "meta-skill-builder",
+      "paper-search",
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

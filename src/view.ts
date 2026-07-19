@@ -1,13 +1,23 @@
-import { chmod, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
-import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
+import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
+import { withRuntimeLock } from "./environment-lock.js";
 import type { HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
 const MANAGED_CODEX_ENTRIES = new Set(["config.toml", "hooks.json", "skills"]);
 const MANAGED_CLAUDE_ENTRIES = new Set([".claude.json", "settings.json", "skills"]);
+const RUNTIME_DIRECTORIES: Record<Platform, string[]> = {
+  codex: [".tmp", "archived_sessions", "log", "memories", "sessions", "shell_snapshots", "tmp"],
+  claude: ["backups", "debug", "downloads", "file-history", "ide", "plans", "plugins", "projects", "session-env", "shell-snapshots", "statsig", "tasks", "telemetry", "todos"],
+};
+const RUNTIME_FILES: Record<Platform, string[]> = {
+  codex: [".personality_migration", "auth.json", "history.jsonl", "installation_id", "session_index.jsonl", "version.json"],
+  claude: [".credentials.json", "history.jsonl"],
+};
 
 interface ViewInstallHooks {
   afterSwap?: () => Promise<void> | void;
@@ -157,13 +167,58 @@ function sourceAgentHome(platform: Platform): string {
   return candidate;
 }
 
-async function linkRuntimeState(sourceRoot: string, destinationRoot: string, excluded: Set<string>): Promise<void> {
-  if (!(await pathExists(sourceRoot))) return;
-  for (const entry of await readdir(sourceRoot, { withFileTypes: true })) {
-    if (excluded.has(entry.name)) continue;
-    const destination = path.join(destinationRoot, entry.name);
+async function sharedRuntimeRoot(platform: Platform, originalRoot: string, excluded: Set<string>): Promise<string> {
+  const sharedRoot = path.join(harnessHome(), "runtime", platform);
+  await mkdir(sharedRoot, { recursive: true, mode: 0o700 });
+  if (await pathExists(originalRoot)) {
+    for (const entry of await readdir(originalRoot, { withFileTypes: true })) {
+      if (excluded.has(entry.name)) continue;
+      const shared = path.join(sharedRoot, entry.name);
+      if (await lstat(shared).then(() => true, () => false)) continue;
+      await createSymlink(path.join(originalRoot, entry.name), shared, entry.isDirectory());
+    }
+  }
+  for (const directory of RUNTIME_DIRECTORIES[platform]) {
+    const shared = path.join(sharedRoot, directory);
+    if (!excluded.has(directory) && !(await lstat(shared).then(() => true, () => false))) {
+      await mkdir(shared, { recursive: true, mode: 0o700 });
+    }
+  }
+  return sharedRoot;
+}
+
+async function linkRuntimeState(platform: Platform, originalRoot: string, destinationRoot: string, excluded: Set<string>): Promise<void> {
+  const sourceRoot = await sharedRuntimeRoot(platform, originalRoot, excluded);
+  const entries = new Map<string, Dirent | undefined>(
+    (await readdir(sourceRoot, { withFileTypes: true })).map((entry) => [entry.name, entry]),
+  );
+  for (const file of RUNTIME_FILES[platform]) {
+    if (!entries.has(file)) entries.set(file, undefined);
+  }
+  for (const directory of RUNTIME_DIRECTORIES[platform]) {
+    if (!entries.has(directory)) entries.set(directory, undefined);
+  }
+  for (const [name, entry] of entries) {
+    if (excluded.has(name)) continue;
+    const destination = path.join(destinationRoot, name);
     if (await lstat(destination).then(() => true, () => false)) continue;
-    await symlink(path.join(sourceRoot, entry.name), destination, process.platform === "win32" ? (entry.isDirectory() ? "junction" : "file") : undefined);
+    const directory = entry?.isDirectory() || RUNTIME_DIRECTORIES[platform].includes(name);
+    await createSymlink(path.join(sourceRoot, name), destination, directory);
+  }
+}
+
+function originalClaudeStatePath(sourceHome: string): string {
+  const sibling = path.join(path.dirname(sourceHome), ".claude.json");
+  return path.basename(sourceHome) === ".claude" ? sibling : path.join(sourceHome, ".claude.json");
+}
+
+async function createSymlink(source: string, destination: string, directory: boolean): Promise<void> {
+  try {
+    await symlink(source, destination, process.platform === "win32" ? (directory ? "junction" : "file") : undefined);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const existing = await readlink(destination).catch(() => undefined);
+    if (existing !== source) throw new Error(`Refusing to replace runtime path ${destination}`);
   }
 }
 
@@ -282,7 +337,7 @@ async function buildClaudeView(
   const sourceHome = sourceAgentHome("claude");
   const links = await linkSkills(root, packages);
 
-  const sourceState = path.join(sourceHome, ".claude.json");
+  const sourceState = originalClaudeStatePath(sourceHome);
   const currentState = await readOptional(currentStatePath);
   const state = parseJsonObject(currentState ?? await readOptional(sourceState), currentState === null ? sourceState : currentStatePath);
   const mcpServers = objectAt(state, "mcpServers", sourceState);
@@ -314,6 +369,34 @@ export function environmentViewPath(name: string): string {
   return path.join(harnessHome(), "environments", name, "view");
 }
 
+export async function reconcileRuntimeState(environmentName: string): Promise<void> {
+  for (const platform of ["codex", "claude"] as const) {
+    const viewRoot = path.join(environmentViewPath(environmentName), platform);
+    if (!(await pathExists(path.join(viewRoot, "skills")))) continue;
+    await withRuntimeLock(platform, async () => {
+      const sharedRoot = path.join(harnessHome(), "runtime", platform);
+      await mkdir(sharedRoot, { recursive: true, mode: 0o700 });
+      for (const name of RUNTIME_FILES[platform]) {
+        const viewPath = path.join(viewRoot, name);
+        const sharedPath = path.join(sharedRoot, name);
+        const viewInfo = await lstat(viewPath).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (!viewInfo) {
+          if (await lstat(sharedPath).then(() => true, () => false)) await rm(sharedPath, { force: true });
+          continue;
+        }
+        if (viewInfo.isSymbolicLink()) continue;
+        if (!viewInfo.isFile()) throw new Error(`Unsupported runtime path at ${viewPath}`);
+        await writeTextPreservingFile(sharedPath, await readFile(viewPath, "utf8"));
+        await rm(viewPath, { force: true });
+        await createSymlink(sharedPath, viewPath, false);
+      }
+    });
+  }
+}
+
 interface ViewMetadata {
   viewVersion?: unknown;
   targets?: unknown;
@@ -338,10 +421,13 @@ async function replaceManagedPaths(
   for (const target of targets) {
     const targetRoot = path.join(destination, target);
     await mkdir(targetRoot, { recursive: true, mode: 0o700 });
-    await linkRuntimeState(
-      sourceAgentHome(target),
-      targetRoot,
-      target === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES,
+    await withRuntimeLock(target, () =>
+      linkRuntimeState(
+        target,
+        sourceAgentHome(target),
+        targetRoot,
+        target === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES,
+      ),
     );
   }
 

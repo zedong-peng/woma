@@ -9,7 +9,8 @@ Harness packages can install agent instructions, MCP process definitions, and Ag
 - Skill directories containing symbolic links are rejected so package content cannot escape its root during installation.
 - Project-scoped MCP servers still require the trust and approval flow of the target agent.
 - Activation refuses conflicting skills and MCP entries. Deactivation leaves user-modified artifacts in place.
-- When `harness-project-memory` is active, Environment activation writes only a clearly marked pointer to its target-local `SKILL.md` in `AGENTS.md` and/or `CLAUDE.md`; content outside that block is preserved and Memory contents remain in their own reviewable files.
+- Environment activation may add clearly marked Project Memory discovery blocks to `AGENTS.md` and `CLAUDE.md`; it never removes them during target switching. Content outside those blocks, instruction symlinks, and file modes are preserved, and Memory contents remain in their own reviewable files.
+- Shared runtime paths under `$HARNESS_HOME/runtime/` may contain Agent credentials and session data created after first activation. Harness creates parent directories with user-only permissions; protect `$HARNESS_HOME` like the original Agent configuration directories and never publish it.
 - Environment recipes and locks contain package metadata, sources, and integrity values, but never environment-variable values or Agent prompts.
 - Portable Project Memory is reviewable Agent context and must never contain credentials; machine-specific memory belongs under the git-ignored `.harness/local/` directory.
 - Environment selection is stored only in the current shell's `HARNESS_ENV` and is never written into a project or uploaded by Harness Conda.
