@@ -26,6 +26,34 @@ export async function writeTextAtomic(filePath: string, content: string): Promis
   await rename(tempPath, filePath);
 }
 
+export async function writeBufferPreservingFile(filePath: string, content: Buffer, mode?: number): Promise<void> {
+  const linkInfo = await lstat(filePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  const target = linkInfo?.isSymbolicLink()
+    ? await realpath(filePath).catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        return path.resolve(path.dirname(filePath), await readlink(filePath));
+      })
+    : filePath;
+  const targetInfo = await stat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  await mkdir(path.dirname(target), { recursive: true });
+  const tempPath = `${target}.tmp-${process.pid}-${randomUUID()}`;
+  const targetMode = mode ?? targetInfo?.mode;
+  try {
+    await writeFile(tempPath, content, targetMode === undefined ? undefined : { mode: targetMode });
+    if (targetMode !== undefined) await chmod(tempPath, targetMode);
+    await rename(tempPath, target);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
+}
+
 export async function writeTextPreservingFile(filePath: string, content: string): Promise<void> {
   const linkInfo = await lstat(filePath).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
@@ -88,7 +116,7 @@ async function hashEntry(root: string, relative: string, hash: ReturnType<typeof
 
 export async function hashDirectory(root: string): Promise<string> {
   const hash = createHash("sha256");
-  await hashEntry(root, "", hash);
+  await hashEntry(await realpath(root), "", hash);
   return `sha256-${hash.digest("hex")}`;
 }
 

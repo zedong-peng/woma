@@ -107,6 +107,8 @@ interface LoadedEnvironment {
 
 interface EnvironmentInstallHooks {
   onResourcesApplied?: () => Promise<void> | void;
+  onViewPrepared?: () => Promise<void> | void;
+  onMetadataPrepared?: () => Promise<void> | void;
 }
 
 interface EnvironmentActivationHooks {
@@ -293,9 +295,18 @@ async function initializeEnvironment(projectRoot: string, name: string, targets:
   environmentSchema.parse(environment);
   try {
     await materializeEnvironmentView(environment, [...installed.values()], {
-      afterSwap: async () => {
+      beforeSwap: async () => {
         await writeJsonAtomic(environmentLockPath(projectRoot, name), { lockfileVersion: 1, packages });
-        await writeEnvironment(projectRoot, environment);
+        try {
+          await writeEnvironment(projectRoot, environment);
+        } catch (error) {
+          await rm(environmentLockPath(projectRoot, name), { force: true });
+          throw error;
+        }
+        return async () => {
+          await rm(environmentPath(projectRoot, name), { force: true });
+          await rm(environmentLockPath(projectRoot, name), { force: true });
+        };
       },
     });
   } catch (error) {
@@ -337,7 +348,7 @@ export async function createEnvironment(projectRoot: string, name: string, targe
 }
 
 export async function listEnvironments(projectRoot: string): Promise<string[]> {
-  await ensureBaseEnvironment(projectRoot);
+  if (!(await pathExists(environmentPath(projectRoot, DEFAULT_ENVIRONMENT)))) await ensureBaseEnvironment(projectRoot);
   return (await readdir(environmentsRoot(projectRoot), { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
@@ -476,9 +487,21 @@ export async function installIntoEnvironment(
     const desired = await loadEnvironmentSnapshot(updated, pruned);
     await materializeEnvironmentView(updated, desired.names.map((name) => desired.packages.get(name)!), {
       previousPackages: previous.names.map((name) => previous.packages.get(name)!),
-      afterSwap: async () => {
+      ...(hooks.onViewPrepared ? { beforePublish: hooks.onViewPrepared } : {}),
+      beforeSwap: async () => {
         await hooks.onResourcesApplied?.();
         await writeEnvironmentInstall(projectRoot, environmentNameValue, updated, pruned, currentLock);
+        try {
+          await hooks.onMetadataPrepared?.();
+        } catch (error) {
+          await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), currentLock);
+          await writeEnvironment(projectRoot, environment);
+          throw error;
+        }
+        return async () => {
+          await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), currentLock);
+          await writeEnvironment(projectRoot, environment);
+        };
       },
     });
     return { environment: updated, root: installation.root, packages: installation.packages };
@@ -655,12 +678,19 @@ async function findCommand(command: string): Promise<boolean> {
 
 async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Promise<EnvironmentCheck[]> {
   const checks: EnvironmentCheck[] = [];
-  const environment = await readEnvironmentFile(projectRoot, name);
+  let environment: HarnessEnvironment;
+  try {
+    environment = await readEnvironmentFile(projectRoot, name);
+    checks.push({ status: "ok", label: "recipe", detail: environmentPath(projectRoot, name) });
+  } catch (error) {
+    checks.push({ status: "fail", label: "recipe", detail: (error as Error).message });
+    return checks;
+  }
   let lock: LockFile;
   let names: string[];
   try {
     lock = await readEnvironmentLockFile(projectRoot, name);
-    names = await validateEnvironmentLock(environment, lock);
+    names = validateEnvironmentLockGraph(environment, lock);
     checks.push({ status: "ok", label: "lock", detail: `${Object.keys(lock.packages).length} packages` });
   } catch (error) {
     checks.push({ status: "fail", label: "lock", detail: (error as Error).message });
@@ -668,7 +698,13 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
   }
   checks.push({ status: "ok", label: "roots", detail: environment.spec.roots.map((root) => root.name).join(", ") || "none" });
   for (const packageName of names) {
-    const pkg = await loadCachedPackage(lock.packages[packageName]!);
+    let pkg: InstalledPackage;
+    try {
+      pkg = await loadCachedPackage(lock.packages[packageName]!);
+    } catch (error) {
+      checks.push({ status: "fail", label: `package:${packageName}`, detail: (error as Error).message });
+      continue;
+    }
     checks.push({ status: "ok", label: `package:${packageName}`, detail: pkg.lock.version });
     const unsupportedTargets = environment.spec.targets.filter((target) => !pkg.manifest.spec.platforms.includes(target));
     checks.push({
@@ -732,6 +768,6 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
 }
 
 export async function doctorEnvironment(projectRoot: string, name: string): Promise<EnvironmentCheck[]> {
-  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
+  if (name === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, name)))) await ensureBaseEnvironment(projectRoot);
   return withEnvironmentLock(name, () => doctorEnvironmentUnlocked(projectRoot, name));
 }

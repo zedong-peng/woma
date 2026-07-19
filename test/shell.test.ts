@@ -96,6 +96,28 @@ test("bash hook updates the parent shell after activate and deactivate", async (
   }
 });
 
+test("harness-conda alias also updates the parent shell", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-alias-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const executable = path.join(root, "bin", "harness-conda");
+    await mkdir(path.dirname(executable), { recursive: true });
+    await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(executable, 0o755);
+    const harnessHome = path.join(root, "home");
+    await fakeEnvironment(harnessHome, "research", ["codex"]);
+    await fakeEnvironment(harnessHome, "base", ["codex", "claude"]);
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const script = 'source "$1"\nharness-conda activate research\nprintf \'%s|%s\' "$HARNESS_ENV" "$CODEX_HOME"';
+    const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
+      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome },
+    });
+    assert.equal(stdout, `research|${path.join(harnessHome, "environments", "research", "view", "codex")}`);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("shell hook restores the original Agent home for an unsupported target", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-target-"));
   try {

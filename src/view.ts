@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
-import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
+import { harnessHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
 import { withRuntimeLock } from "./environment-lock.js";
 import type { HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
@@ -20,7 +20,8 @@ const RUNTIME_FILES: Record<Platform, string[]> = {
 };
 
 interface ViewInstallHooks {
-  afterSwap?: () => Promise<void> | void;
+  beforeSwap?: () => Promise<(() => Promise<void>) | void>;
+  beforePublish?: () => Promise<void> | void;
   previousPackages?: InstalledPackage[];
 }
 
@@ -226,9 +227,14 @@ async function adoptRuntimeState(platform: Platform, viewRoot: string): Promise<
       if (RUNTIME_FILES[platform].includes(name)) await createSymlink(sharedPath, viewPath, false);
       continue;
     }
-    if (viewInfo.isSymbolicLink()) continue;
+    if (viewInfo.isSymbolicLink()) {
+      const expected = path.join(sharedRoot, name);
+      const actual = path.resolve(path.dirname(viewPath), await readlink(viewPath));
+      if (actual !== expected) throw new Error(`Runtime link has an unexpected target: ${viewPath}`);
+      continue;
+    }
     if (viewInfo.isFile()) {
-      await writeTextPreservingFile(sharedPath, await readFile(viewPath, "utf8"));
+      await writeBufferPreservingFile(sharedPath, await readFile(viewPath), viewInfo.mode);
       await rm(viewPath, { force: true });
       await createSymlink(sharedPath, viewPath, false);
       continue;
@@ -242,6 +248,23 @@ async function adoptRuntimeState(platform: Platform, viewRoot: string): Promise<
   }
 }
 
+async function adoptRetiredRuntimeState(environmentName: string, platforms: Platform[]): Promise<void> {
+  const root = path.dirname(environmentViewPath(environmentName));
+  const entries = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  const generations = entries
+    .filter((entry) => entry.isDirectory() && /^\.view\.gen-[a-z0-9-]+$/.test(entry.name))
+    .map((entry) => entry.name)
+    .sort();
+  for (const platform of platforms) {
+    await withRuntimeLock(platform, async () => {
+      for (const generation of generations) await adoptRuntimeState(platform, path.join(root, generation, platform));
+    });
+  }
+}
+
 async function preflightRuntimeState(platform: Platform, viewRoot: string): Promise<void> {
   if (!(await pathExists(viewRoot))) return;
   const excluded = platform === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES;
@@ -249,7 +272,12 @@ async function preflightRuntimeState(platform: Platform, viewRoot: string): Prom
   for (const name of (await readdir(viewRoot)).filter((entry) => !excluded.has(entry))) {
     const viewPath = path.join(viewRoot, name);
     const info = await lstat(viewPath);
-    if (info.isSymbolicLink()) continue;
+    if (info.isSymbolicLink()) {
+      const expected = path.join(sharedRoot, name);
+      const actual = path.resolve(path.dirname(viewPath), await readlink(viewPath));
+      if (actual !== expected) throw new Error(`Runtime link has an unexpected target: ${viewPath}`);
+      continue;
+    }
     if (info.isFile()) {
       await readFile(viewPath);
       continue;
@@ -419,7 +447,6 @@ async function buildCodexView(root: string, packages: InstalledPackage[]): Promi
 async function buildClaudeView(
   root: string,
   packages: InstalledPackage[],
-  currentStatePath: string,
   previousManagedServers: string[],
 ): Promise<Record<string, string>> {
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -428,11 +455,8 @@ async function buildClaudeView(
 
   const sourceState = originalClaudeStatePath(sourceHome);
   const baseline = parseJsonObject(await readOptional(sourceState), sourceState);
-  const currentState = await readOptional(currentStatePath);
-  const current = parseJsonObject(currentState ?? JSON.stringify(baseline), currentState === null ? sourceState : currentStatePath);
   const baselineMcpServers = objectAt(baseline, "mcpServers", sourceState);
-  const currentMcpServers = objectAt(current, "mcpServers", currentStatePath);
-  const mcpServers = { ...baselineMcpServers, ...currentMcpServers };
+  const mcpServers = { ...baselineMcpServers };
   for (const serverName of previousManagedServers) delete mcpServers[serverName];
   for (const { server } of collectServers(packages, "claude")) {
     const desired = claudeValue(server);
@@ -490,6 +514,7 @@ export async function reconcileRuntimeState(environmentName: string, targetEnvir
     await preflightRuntimeState(platform, path.join(environmentViewPath(environmentName), platform));
   }
   await preflightClaudeRuntimeTransfer(environmentName, targetEnvironmentName);
+  await adoptRetiredRuntimeState(environmentName, ["codex", "claude"]);
   for (const platform of ["codex", "claude"] as const) {
     const viewRoot = path.join(environmentViewPath(environmentName), platform);
     if (!(await pathExists(path.join(viewRoot, "skills")))) continue;
@@ -526,28 +551,39 @@ async function publishViewGeneration(generation: string, destination: string, ho
   }
   const previousTarget = current ? await readlink(destination) : undefined;
   const nextLink = path.join(parent, `.view.link-${process.pid}-${randomUUID()}`);
-  await symlink(path.basename(generation), nextLink, process.platform === "win32" ? "junction" : undefined);
-  await rename(nextLink, destination);
+  let rollbackLink: string | undefined;
+  let rollbackMetadata: (() => Promise<void>) | void = undefined;
   try {
-    await hooks.afterSwap?.();
+    rollbackMetadata = await hooks.beforeSwap?.();
+    await symlink(path.basename(generation), nextLink, process.platform === "win32" ? "junction" : undefined);
+    await rename(nextLink, destination);
   } catch (error) {
+    const rollbackErrors: unknown[] = [];
     try {
       if (previousTarget) {
-        const rollbackLink = path.join(parent, `.view.rollback-${process.pid}-${randomUUID()}`);
+        rollbackLink = path.join(parent, `.view.rollback-${process.pid}-${randomUUID()}`);
         await symlink(previousTarget, rollbackLink, process.platform === "win32" ? "junction" : undefined);
         await rename(rollbackLink, destination);
       } else {
         await rm(destination, { force: true });
       }
     } catch (rollbackError) {
-      throw new AggregateError([error, rollbackError], "Environment view publication failed and rollback could not restore the previous view");
+      rollbackErrors.push(rollbackError);
+    }
+    try {
+      await rollbackMetadata?.();
+    } catch (rollbackError) {
+      rollbackErrors.push(rollbackError);
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError([error, ...rollbackErrors], "Environment view publication failed and rollback was incomplete");
     }
     throw error;
+  } finally {
+    await rm(nextLink, { force: true }).catch(() => undefined);
+    if (rollbackLink) await rm(rollbackLink, { force: true }).catch(() => undefined);
   }
-  if (previousTarget && previousTarget !== path.basename(generation) && /^\.view\.gen-[a-z0-9-]+$/.test(previousTarget)) {
-    // Publication is already committed; an orphaned old generation is safer than reporting a false rollback.
-    await rm(path.join(parent, previousTarget), { recursive: true, force: true }).catch(() => undefined);
-  }
+  // Retired generations remain available to running Agents and are reconciled on the next active operation.
 }
 
 export async function materializeEnvironmentView(
@@ -563,9 +599,14 @@ export async function materializeEnvironmentView(
   await mkdir(temporary, { recursive: true, mode: 0o700 });
   try {
     const previousMetadata = await previousViewMetadata(destination);
+    if ((process.env.HARNESS_ENV || "base") === environment.metadata.name) {
+      await adoptRetiredRuntimeState(environment.metadata.name, environment.spec.targets);
+    }
     for (const target of environment.spec.targets) {
       await withRuntimeLock(target, async () => {
-        await adoptRuntimeState(target, path.join(destination, target));
+        if ((process.env.HARNESS_ENV || "base") === environment.metadata.name) {
+          await adoptRuntimeState(target, path.join(destination, target));
+        }
         if (
           target === "claude" &&
           process.env.HARNESS_ENV === environment.metadata.name &&
@@ -586,7 +627,6 @@ export async function materializeEnvironmentView(
         buildClaudeView(
           path.join(temporary, "claude"),
           packages,
-          path.join(destination, "claude", ".claude.json"),
           [...previousClaudeMcpServers],
         ),
       );
@@ -615,6 +655,20 @@ export async function materializeEnvironmentView(
         );
       });
     }
+    await hooks.beforePublish?.();
+    if ((process.env.HARNESS_ENV || "base") === environment.metadata.name) {
+      for (const target of environment.spec.targets) {
+        await withRuntimeLock(target, async () => {
+          await adoptRuntimeState(target, path.join(destination, target));
+          await linkRuntimeState(
+            target,
+            sourceAgentHome(target),
+            path.join(temporary, target),
+            target === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES,
+          );
+        });
+      }
+    }
     await publishViewGeneration(temporary, destination, hooks);
   } catch (error) {
     await rm(temporary, { recursive: true, force: true });
@@ -627,11 +681,20 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
   const metadataPath = path.join(root, "view.json");
   const metadata = parseJsonObject(await readOptional(metadataPath), metadataPath);
   const expected = packages.map((pkg) => ({ name: pkg.lock.name, version: pkg.lock.version, integrity: pkg.lock.integrity }));
+  const expectedResources = {
+    codexMcpServers: environment.spec.targets.includes("codex")
+      ? collectServers(packages, "codex").map(({ server }) => server.name)
+      : [],
+    claudeMcpServers: environment.spec.targets.includes("claude")
+      ? collectServers(packages, "claude").map(({ server }) => server.name)
+      : [],
+  };
   if (
     metadata.viewVersion !== 1 ||
     metadata.environment !== environment.metadata.name ||
     !equal(metadata.targets, environment.spec.targets) ||
-    !equal(metadata.packages, expected)
+    !equal(metadata.packages, expected) ||
+    !equal(metadata.resources, expectedResources)
   ) {
     throw new Error(`Environment view is missing or stale at ${root}; run harness sync --name ${environment.metadata.name}`);
   }
@@ -661,6 +724,15 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
     if (!equal((metadataSkills as Record<string, unknown>)[target], expectedSkills)) {
       throw new Error(`Environment Skill ownership metadata is stale for ${target} in ${metadataPath}`);
     }
+    const managed = target === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES;
+    const sharedRoot = path.join(harnessHome(), "runtime", target);
+    for (const name of (await readdir(path.join(root, target))).filter((entry) => !managed.has(entry))) {
+      const runtimePath = path.join(root, target, name);
+      const info = await lstat(runtimePath);
+      if (!info.isSymbolicLink()) throw new Error(`Runtime path is not linked to shared state: ${runtimePath}`);
+      const actual = path.resolve(path.dirname(runtimePath), await readlink(runtimePath));
+      if (actual !== path.join(sharedRoot, name)) throw new Error(`Runtime link has an unexpected target: ${runtimePath}`);
+    }
     if (target === "codex") {
       const configPath = path.join(root, "codex", "config.toml");
       const configInput = await readOptional(configPath);
@@ -670,42 +742,46 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
       } catch (error) {
         throw new Error(`Cannot validate ${configPath}: ${(error as Error).message}`);
       }
-      const servers = config.mcp_servers;
-      if (servers !== undefined && (!servers || typeof servers !== "object" || Array.isArray(servers))) {
+      const sourceConfigPath = path.join(sourceAgentHome("codex"), "config.toml");
+      const sourceConfigInput = await readOptional(sourceConfigPath);
+      const expectedConfig = (sourceConfigInput ? parseToml(sourceConfigInput) : {}) as Record<string, unknown>;
+      const baselineServers = expectedConfig.mcp_servers;
+      if (baselineServers !== undefined && (!baselineServers || typeof baselineServers !== "object" || Array.isArray(baselineServers))) {
+        throw new Error(`Cannot validate ${sourceConfigPath}: mcp_servers must be a table`);
+      }
+      const expectedServers = { ...((baselineServers as Record<string, unknown> | undefined) ?? {}) };
+      for (const { server } of collectServers(packages, "codex")) {
+        expectedServers[server.name] = codexValue(server);
+      }
+      const actualServers = config.mcp_servers;
+      if (actualServers !== undefined && (!actualServers || typeof actualServers !== "object" || Array.isArray(actualServers))) {
         throw new Error(`Cannot validate ${configPath}: mcp_servers must be a table`);
       }
-      for (const { server } of collectServers(packages, "codex")) {
-        if (!equal((servers as Record<string, unknown> | undefined)?.[server.name], codexValue(server))) {
-          throw new Error(`Codex MCP server ${server.name} is missing or modified in ${configPath}`);
-        }
+      if (!equal((actualServers as Record<string, unknown> | undefined) ?? {}, expectedServers)) {
+        throw new Error(`Codex MCP configuration differs from the Environment closure in ${configPath}`);
       }
       const hooksPath = path.join(root, "codex", "hooks.json");
       const hooksRoot = parseJsonObject(await readOptional(hooksPath), hooksPath);
-      const hooks = hooksRoot.hooks as Record<string, unknown> | undefined;
-      for (const hook of collectHooks(packages, "codex")) {
-        const values = hooks?.[hook.event];
-        if (!Array.isArray(values) || !values.some((value) => equal(value, hookValue(hook)))) {
-          throw new Error(`Codex Hook ${hook.event} is missing or modified in ${hooksPath}`);
-        }
-      }
+      const sourceHooksPath = path.join(sourceAgentHome("codex"), "hooks.json");
+      const expectedHooks = parseJsonObject(await readOptional(sourceHooksPath), sourceHooksPath);
+      await mergeHooks(sourceHooksPath, expectedHooks, collectHooks(packages, "codex"));
+      if (!equal(hooksRoot, expectedHooks)) throw new Error(`Codex Hooks differ from the Environment closure in ${hooksPath}`);
     } else {
       const statePath = path.join(root, "claude", ".claude.json");
       const state = parseJsonObject(await readOptional(statePath), statePath);
-      const servers = state.mcpServers as Record<string, unknown> | undefined;
+      const sourceStatePath = originalClaudeStatePath(sourceAgentHome("claude"));
+      const baselineState = parseJsonObject(await readOptional(sourceStatePath), sourceStatePath);
+      const expectedServers = { ...objectAt(baselineState, "mcpServers", sourceStatePath) };
       for (const { server } of collectServers(packages, "claude")) {
-        if (!equal(servers?.[server.name], claudeValue(server))) {
-          throw new Error(`Claude MCP server ${server.name} is missing or modified in ${statePath}`);
-        }
+        expectedServers[server.name] = claudeValue(server);
       }
+      if (!equal(state.mcpServers ?? {}, expectedServers)) throw new Error(`Claude MCP configuration differs from the Environment closure in ${statePath}`);
       const settingsPath = path.join(root, "claude", "settings.json");
       const settings = parseJsonObject(await readOptional(settingsPath), settingsPath);
-      const hooks = settings.hooks as Record<string, unknown> | undefined;
-      for (const hook of collectHooks(packages, "claude")) {
-        const values = hooks?.[hook.event];
-        if (!Array.isArray(values) || !values.some((value) => equal(value, hookValue(hook)))) {
-          throw new Error(`Claude Hook ${hook.event} is missing or modified in ${settingsPath}`);
-        }
-      }
+      const sourceSettingsPath = path.join(sourceAgentHome("claude"), "settings.json");
+      const expectedSettings = parseJsonObject(await readOptional(sourceSettingsPath), sourceSettingsPath);
+      await mergeHooks(sourceSettingsPath, expectedSettings, collectHooks(packages, "claude"));
+      if (!equal(settings, expectedSettings)) throw new Error(`Claude Hooks differ from the Environment closure in ${settingsPath}`);
     }
   }
 }

@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, readFile, stat } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { stringify as stringifyYaml } from "yaml";
@@ -171,7 +171,7 @@ export async function captureHarness(options: {
 }): Promise<CaptureResult> {
   const sourceRoot = path.resolve(options.sourceRoot);
   const outputRoot = path.resolve(options.outputRoot);
-  if (await pathExists(path.join(outputRoot, "harness.yaml"))) throw new Error(`Refusing to overwrite ${path.join(outputRoot, "harness.yaml")}`);
+  if (await pathExists(outputRoot)) throw new Error(`Refusing to overwrite existing destination ${outputRoot}`);
   const warnings: string[] = [];
   let mcpServers: McpServer[] = [];
   let hooks: HookSpec[] = [];
@@ -179,38 +179,45 @@ export async function captureHarness(options: {
     mcpServers = await captureCodexMcp(sourceRoot);
     hooks = await captureCommandHooks(path.join(sourceRoot, ".codex", "hooks.json"), warnings, "codex");
   } else ({ servers: mcpServers, hooks } = await captureClaudeConfig(sourceRoot, warnings));
-  await mkdir(outputRoot, { recursive: true });
-  const skills = await captureSkills(sourceRoot, outputRoot, options.platform);
+  await mkdir(path.dirname(outputRoot), { recursive: true });
+  const temporary = await mkdtemp(path.join(path.dirname(outputRoot), `.${path.basename(outputRoot)}.capture-`));
+  try {
+    const skills = await captureSkills(sourceRoot, temporary, options.platform);
 
-  const envNames = new Set<string>();
-  for (const server of mcpServers) {
-    if (server.transport === "stdio") server.env.forEach((name) => envNames.add(name));
-    else Object.values(server.headers).forEach((name) => envNames.add(name));
-  }
-  const name = slug(options.name ?? path.basename(outputRoot));
-  const manifest: HarnessManifest = {
-    apiVersion: "harness.conda/v1",
-    kind: "Harness",
-    metadata: {
-      name,
-      version: "0.1.0",
-      description: `Captured ${options.platform} harness from ${path.basename(sourceRoot)}.`,
-      tags: ["captured"],
-    },
-    spec: {
-      platforms: [options.platform],
-      dependencies: [],
-      entrypoints: [],
-      requirements: {
-        env: [...envNames].sort().map((env) => ({ name: env, description: "Required by a captured MCP server.", optional: false })),
-        commands: [],
+    const envNames = new Set<string>();
+    for (const server of mcpServers) {
+      if (server.transport === "stdio") server.env.forEach((name) => envNames.add(name));
+      else Object.values(server.headers).forEach((name) => envNames.add(name));
+    }
+    const name = slug(options.name ?? path.basename(outputRoot));
+    const manifest: HarnessManifest = {
+      apiVersion: "harness.conda/v1",
+      kind: "Harness",
+      metadata: {
+        name,
+        version: "0.1.0",
+        description: `Captured ${options.platform} harness from ${path.basename(sourceRoot)}.`,
+        tags: ["captured"],
       },
-      skills,
-      mcpServers,
-      hooks,
-    },
-  };
-  await writeTextAtomic(path.join(outputRoot, "harness.yaml"), stringifyYaml(manifest, { lineWidth: 120 }));
-  await validatePackage(outputRoot, manifest);
-  return { root: outputRoot, manifest, warnings };
+      spec: {
+        platforms: [options.platform],
+        dependencies: [],
+        entrypoints: [],
+        requirements: {
+          env: [...envNames].sort().map((env) => ({ name: env, description: "Required by a captured MCP server.", optional: false })),
+          commands: [],
+        },
+        skills,
+        mcpServers,
+        hooks,
+      },
+    };
+    await writeTextAtomic(path.join(temporary, "harness.yaml"), stringifyYaml(manifest, { lineWidth: 120 }));
+    await validatePackage(temporary, manifest);
+    await rename(temporary, outputRoot);
+    return { root: outputRoot, manifest, warnings };
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
 }

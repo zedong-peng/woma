@@ -458,3 +458,70 @@ test("sync refuses a local source that drifted from its lock", { concurrency: fa
     await removeTestTree(root);
   }
 });
+
+test("failed sync preserves the last locked cache bytes", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-preserve-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = await packageFixture(root);
+    const pkg = await installPackageSource(packageRoot);
+    const skillPath = path.join(pkg.root, "skills", "integrity-skill", "SKILL.md");
+    const before = await readFile(skillPath);
+    await chmod(skillPath, 0o600);
+    await rm(packageRoot, { recursive: true, force: true });
+    await assert.rejects(syncLockedPackage(pkg.lock), /Local source does not exist/);
+    assert.deepEqual(await readFile(skillPath), before);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("identity and integrity mismatches preserve the old cache", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-mismatch-preserve-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = await packageFixture(root);
+    const manifestPath = path.join(packageRoot, "harness.yaml");
+    const sourceManifest = await readFile(manifestPath, "utf8");
+    const pkg = await installPackageSource(packageRoot);
+    const cachedSkill = path.join(pkg.root, "skills", "integrity-skill", "SKILL.md");
+    const before = await readFile(cachedSkill);
+    await chmod(cachedSkill, 0o600);
+
+    await writeFile(manifestPath, sourceManifest.replace("name: integrity-test", "name: other-package"), "utf8");
+    await assert.rejects(syncLockedPackage(pkg.lock), /Locked identity mismatch/);
+    assert.deepEqual(await readFile(cachedSkill), before);
+
+    await writeFile(manifestPath, sourceManifest, "utf8");
+    await writeFile(
+      path.join(packageRoot, "skills", "integrity-skill", "SKILL.md"),
+      "---\nname: integrity-skill\ndescription: Drifted.\n---\nDrifted.\n",
+      "utf8",
+    );
+    await assert.rejects(syncLockedPackage(pkg.lock), /Locked integrity mismatch/);
+    assert.deepEqual(await readFile(cachedSkill), before);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("cache repair never makes shared Skill paths disappear", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-observer-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = await packageFixture(root);
+    const pkg = await installPackageSource(packageRoot);
+    const skillPath = path.join(pkg.root, "skills", "integrity-skill", "SKILL.md");
+    await chmod(skillPath, 0o600);
+    const reads = Promise.all(Array.from({ length: 200 }, () => readFile(skillPath, "utf8")));
+    await Promise.all([reads, installPackageSource(packageRoot)]);
+    for (const content of await reads) assert.match(content, /name: integrity-skill/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("Git locators and refs reject option-like arguments", { concurrency: false }, async () => {
+  await assert.rejects(installPackageSource("-c.git"), /Unsafe Git source or ref/);
+  await assert.rejects(installPackageSource("gh:owner/repository#--upload-pack=bad"), /Unsafe Git source or ref/);
+});

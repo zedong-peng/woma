@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -135,6 +135,8 @@ spec:
     );
 
     await write(path.join(view, "codex", "runtime-created.db"), "runtime state\n");
+    const binaryRuntime = Buffer.from([0, 255, 254, 128, 1, 2, 3, 0]);
+    await writeFile(path.join(view, "codex", "runtime-binary.db"), binaryRuntime);
     claudeState.runtimeMarker = "preserve-me";
     await writeFile(path.join(view, "claude", ".claude.json"), `${JSON.stringify(claudeState, null, 2)}\n`, "utf8");
     await reconcileRuntimeState("tools", "isolated");
@@ -144,7 +146,11 @@ spec:
     assert.equal(isolatedClaudeState.runtimeMarker, "preserve-me");
     assert.equal(isolatedClaudeState.mcpServers.existing.command, "keep");
     assert.equal(isolatedClaudeState.mcpServers["view-server"], undefined);
+    const duringPublication = Buffer.from([222, 173, 190, 239, 0, 255]);
     await installIntoEnvironment(root, "tools", packageRoot, process.cwd(), {
+      onViewPrepared: async () => {
+        await writeFile(path.join(view, "codex", "written-during-publication.bin"), duringPublication);
+      },
       onResourcesApplied: async () => {
         assert.equal((await lstat(environmentViewPath("tools"))).isSymbolicLink(), true);
         assert.match(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8"), /view-package/);
@@ -153,6 +159,8 @@ spec:
     });
     assert.notEqual(await readlink(environmentViewPath("tools")), firstGeneration);
     assert.equal(await readFile(path.join(view, "codex", "runtime-created.db"), "utf8"), "runtime state\n");
+    assert.deepEqual(await readFile(path.join(view, "codex", "runtime-binary.db")), binaryRuntime);
+    assert.deepEqual(await readFile(path.join(view, "codex", "written-during-publication.bin")), duringPublication);
     assert.equal(
       JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")).runtimeMarker,
       "preserve-me",
@@ -174,6 +182,7 @@ spec:
     driftedClaude.mcpServers["view-server"].command = "drifted";
     await writeFile(path.join(view, "claude", ".claude.json"), `${JSON.stringify(driftedClaude, null, 2)}\n`, "utf8");
     await syncEnvironment(root, "tools");
+    assert.deepEqual(await readFile(path.join(view, "codex", "runtime-binary.db")), binaryRuntime);
     assert.equal(
       JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")).mcpServers["view-server"].command,
       "node",
@@ -181,6 +190,36 @@ spec:
     const codexConfigPath = path.join(view, "codex", "config.toml");
     await writeFile(codexConfigPath, (await readFile(codexConfigPath, "utf8")).replace('command = "node"', 'command = "other"'), "utf8");
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "fail");
+
+    await syncEnvironment(root, "tools");
+    const codexHooksPath = path.join(view, "codex", "hooks.json");
+    const injectedHooks = JSON.parse(await readFile(codexHooksPath, "utf8")) as Record<string, any>;
+    injectedHooks.hooks.Stop = [{ hooks: [{ type: "command", command: "injected" }] }];
+    await writeFile(codexHooksPath, `${JSON.stringify(injectedHooks, null, 2)}\n`, "utf8");
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "fail");
+    await syncEnvironment(root, "tools");
+
+    const claudeStatePath = path.join(view, "claude", ".claude.json");
+    const injectedMcp = JSON.parse(await readFile(claudeStatePath, "utf8")) as Record<string, any>;
+    injectedMcp.mcpServers.injected = { type: "stdio", command: "injected", args: [] };
+    await writeFile(claudeStatePath, `${JSON.stringify(injectedMcp, null, 2)}\n`, "utf8");
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "fail");
+    await syncEnvironment(root, "tools");
+
+    const outsideRuntime = path.join(root, "outside-auth.json");
+    await write(outsideRuntime, "outside\n");
+    await rm(path.join(view, "codex", "auth.json"), { force: true });
+    await symlink(outsideRuntime, path.join(view, "codex", "auth.json"));
+    await assert.rejects(reconcileRuntimeState("tools"), /unexpected target/);
+    assert.equal(await readFile(outsideRuntime, "utf8"), "outside\n");
+    await rm(path.join(view, "codex", "auth.json"), { force: true });
+    await reconcileRuntimeState("tools");
+
+    await writeFile(path.join(environmentViewPath("isolated"), "codex", "inactive-only.bin"), Buffer.from([9, 8, 7]));
+    await installIntoEnvironment(root, "isolated", packageRoot);
+    await assert.rejects(readFile(path.join(home, "runtime", "codex", "inactive-only.bin")), /ENOENT/);
+    await syncEnvironment(root, "isolated");
+    await assert.rejects(readFile(path.join(home, "runtime", "codex", "inactive-only.bin")), /ENOENT/);
 
     await rm(path.join(view, "view.json"), { force: true });
     await write(

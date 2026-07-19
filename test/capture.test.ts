@@ -75,3 +75,30 @@ test("capture exports project Codex command hooks", async () => {
     await removeTestTree(root);
   }
 });
+
+test("failed capture leaves no partial destination", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-capture-transaction-"));
+  try {
+    const source = path.join(root, "source");
+    const output = path.join(root, "captured");
+    await write(path.join(source, ".agents", "skills", "broken", "SKILL.md"), "not valid Skill frontmatter\n");
+    await assert.rejects(captureHarness({ sourceRoot: source, outputRoot: output, platform: "codex" }), /frontmatter/);
+    await assert.rejects(readFile(output), /ENOENT/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("capture refuses an existing destination without changing it", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-capture-existing-"));
+  try {
+    const source = path.join(root, "source");
+    const output = path.join(root, "captured");
+    const marker = path.join(output, "keep.txt");
+    await write(marker, "keep\n");
+    await assert.rejects(captureHarness({ sourceRoot: source, outputRoot: output, platform: "codex" }), /existing destination/);
+    assert.equal(await readFile(marker, "utf8"), "keep\n");
+  } finally {
+    await removeTestTree(root);
+  }
+});

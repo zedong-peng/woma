@@ -4,6 +4,8 @@ Audit date: 2026-07-20
 Audited head: `c8a59c6` (`feat/global-environments`)  
 Comparison base: `main`
 
+Remediation status updated: 2026-07-20 on `feat/global-environments`. The audit scope is frozen at the 14 findings below; this document does not claim that the unreleased project is defect-free outside that scope.
+
 ## Scope
 
 This audit starts from a fresh, empty `$HARNESS_HOME`. It deliberately excludes every pre-release compatibility concern:
@@ -17,32 +19,36 @@ The findings below are reproducible or structurally present in the current forma
 
 ## Verdict
 
-PR #19 is not ready to merge. The current-format audit found 14 confirmed defects:
+The current-format audit found 14 confirmed defects. All 14 have now been remediated with regression coverage:
 
 - 5 P1 merge blockers involving data loss, shared-runtime corruption, or silent overwrite;
 - 8 P2 correctness, atomicity, diagnostics, or security defects;
 - 1 P3 cleanup defect.
 
-Passing CI does not cover these paths. Existing tests use textual runtime fixtures, update the same Environment selected by the test process, and do not exercise failed source recovery, concurrent Agent writes, the `harness-conda` binary alias, or partially populated authoring destinations.
+The expanded tests cover failed source recovery, observer-safe cache replacement, binary runtime data, inactive Environment isolation, publication barriers, both binary names, corrupt-layer diagnostics, authoring rollback, option-like Git inputs, exact MCP/Hook closure validation, and publication artifact cleanup.
 
 ## Findings summary
 
-| ID | Severity | Finding |
-| --- | --- | --- |
-| CF-01 | P1 | `sync` deletes the current cache entry before validating that a replacement can be obtained. |
-| CF-02 | P2 | Cache repair is not observer-atomic for Environment Skill links. |
-| CF-03 | P1 | Runtime adoption decodes arbitrary files as UTF-8 and can corrupt binary state. |
-| CF-04 | P1 | Updating an inactive Environment can overwrite the active Environment's shared runtime. |
-| CF-05 | P1 | A running Agent can write to the retiring generation after adoption and lose that state during publication. |
-| CF-06 | P1 | `harness init` can silently overwrite an existing `SKILL.md`. |
-| CF-07 | P2 | Runtime symlinks are trusted without verifying that they point into the shared runtime root. |
-| CF-08 | P2 | A new view is externally visible before its recipe and lock commit. |
-| CF-09 | P2 | The installed `harness-conda` binary cannot activate the parent shell. |
-| CF-10 | P2 | Strict base validation prevents useful list and doctor diagnostics. |
-| CF-11 | P2 | Failed `capture` leaves a partial output package. |
-| CF-12 | P2 | Option-like Git locators and refs are not rejected or separated from Git options. |
-| CF-13 | P2 | View validation accepts undeclared MCP and Hook drift. |
-| CF-14 | P3 | Failed view publication can leave temporary link artifacts. |
+| ID | Severity | Status | Remediation |
+| --- | --- | --- | --- |
+| CF-01 | P1 | Fixed | Replacement Packages are staged, made read-only, and fully validated before the cache pointer changes. |
+| CF-02 | P2 | Fixed | Cache keys are stable symlink pointers to immutable generations; old generations remain readable. |
+| CF-03 | P1 | Fixed | Runtime adoption uses byte-preserving atomic writes and retains file modes. |
+| CF-04 | P1 | Fixed | Only the shell-selected Environment may contribute runtime state during materialization. |
+| CF-05 | P1 | Fixed | Retired view generations are retained and reconciled; a second pre-publication adoption closes the tested race window. |
+| CF-06 | P1 | Fixed | `init` preflights non-empty destinations, stages the complete scaffold, and rolls back partial publication. |
+| CF-07 | P2 | Fixed | Runtime links must target the exact shared runtime path; unrelated targets are rejected without access. |
+| CF-08 | P2 | Fixed | Metadata commits under the Environment lock before the view pointer changes and is rolled back on publication failure. |
+| CF-09 | P2 | Fixed | The shell hook wraps both `harness` and `harness-conda`. |
+| CF-10 | P2 | Fixed | Listing tolerates damaged base state and doctor reports recipe, lock, Package, and view failures as checks. |
+| CF-11 | P2 | Fixed | `capture` builds and validates a temporary sibling before atomically publishing to a new destination. |
+| CF-12 | P2 | Fixed | Option-like/control-character Git locators and refs are rejected; clone uses option termination. |
+| CF-13 | P2 | Fixed | View metadata and complete baseline-plus-Package MCP/Hook state are compared exactly. |
+| CF-14 | P3 | Fixed | Temporary publication and rollback links are removed in `finally` paths. |
+
+## Remediation verification
+
+Regression coverage was added alongside the fixes. The merge gate listed at the end of this document must pass on the remediated head before merge. Abrupt process termination, power-loss recovery, and compatibility with earlier unreleased development data remain explicitly excluded.
 
 ## Confirmed defects
 

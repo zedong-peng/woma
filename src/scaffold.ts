@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathExists, writeTextAtomic } from "./fs.js";
 
@@ -16,11 +16,20 @@ export async function scaffoldHarness(directory: string, requestedName?: string)
   const name = normalizeName(requestedName ?? path.basename(root));
   const manifestPath = path.join(root, "harness.yaml");
   const skillPath = path.join(root, "skills", `${name}-workflow`, "SKILL.md");
-  if (await pathExists(manifestPath)) throw new Error(`Refusing to overwrite ${manifestPath}`);
-  await mkdir(path.dirname(skillPath), { recursive: true });
-  await writeTextAtomic(
-    manifestPath,
-    `apiVersion: harness.conda/v1
+  const rootExists = await pathExists(root);
+  if (rootExists) {
+    const entries = await readdir(root);
+    if (entries.length > 0) throw new Error(`Refusing to overwrite non-empty destination ${root}`);
+  }
+  await mkdir(path.dirname(root), { recursive: true });
+  const temporary = await mkdtemp(path.join(path.dirname(root), `.${path.basename(root)}.init-`));
+  try {
+    const temporaryManifest = path.join(temporary, path.relative(root, manifestPath));
+    const temporarySkill = path.join(temporary, path.relative(root, skillPath));
+    await mkdir(path.dirname(temporarySkill), { recursive: true });
+    await writeTextAtomic(
+      temporaryManifest,
+      `apiVersion: harness.conda/v1
 kind: Harness
 metadata:
   name: ${name}
@@ -43,10 +52,10 @@ spec:
   mcpServers: []
   hooks: []
 `,
-  );
-  await writeTextAtomic(
-    skillPath,
-    `---
+    );
+    await writeTextAtomic(
+      temporarySkill,
+      `---
 name: ${name}-workflow
 description: Runs the ${name} workflow. Use when the user asks for this domain-specific outcome.
 ---
@@ -58,6 +67,24 @@ description: Runs the ${name} workflow. Use when the user asks for this domain-s
 3. Verify the result with objective evidence.
 4. Report the outcome, remaining risks, and reproducible commands.
 `,
-  );
+    );
+    if (rootExists) {
+      try {
+        await link(temporaryManifest, manifestPath);
+        await rm(temporaryManifest);
+        await rename(path.join(temporary, "skills"), path.join(root, "skills"));
+      } catch (error) {
+        await rm(manifestPath, { force: true });
+        await rm(path.join(root, "skills"), { recursive: true, force: true });
+        throw error;
+      }
+      await rm(temporary, { recursive: true, force: true });
+    } else {
+      await rename(temporary, root);
+    }
+  } catch (error) {
+    await rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
   return { root, name };
 }

@@ -76,7 +76,7 @@ harness inspect <source>
 harness capture <directory> --from codex|claude [--name <name>]
 ```
 
-`init` scaffolds a Package or meta-skill. `capture` exports supported resources from an existing Agent project configuration without copying literal credential values.
+`init` scaffolds a Package or meta-skill into a new or empty destination and refuses non-empty destinations. `capture` exports supported resources from an existing Agent project configuration without copying literal credential values; its output directory must not already exist. Both commands stage and validate their output before publication and leave no partial package after a normal failure.
 
 ## Shell integration
 

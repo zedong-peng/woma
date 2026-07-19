@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,9 @@ function splitRef(source: string): { locator: string; ref?: string } {
 
 function normalizeGitSource(source: string): { url: string; canonical: string; ref?: string } | undefined {
   const { locator, ref } = splitRef(source);
+  if (/^[\s-]|[\u0000-\u001f\u007f]/.test(locator) || (ref !== undefined && /^[\s-]|[\u0000-\u001f\u007f]/.test(ref))) {
+    throw new Error(`Unsafe Git source or ref: ${source}`);
+  }
   const shorthand = /^(?:gh|github):([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/.exec(locator);
   if (shorthand?.[1]) {
     const repo = shorthand[1].replace(/\.git$/, "");
@@ -104,12 +107,12 @@ async function materializeSource(source: string, cwd: string): Promise<Materiali
   const temp = await mkdtemp(path.join(os.tmpdir(), "harness-conda-"));
   try {
     if (git.ref) {
-      await run("git", ["clone", "--filter=blob:none", "--no-checkout", git.url, temp]);
+      await run("git", ["clone", "--filter=blob:none", "--no-checkout", "--", git.url, temp]);
       await run("git", ["fetch", "--depth", "1", "origin", git.ref], temp);
       await run("git", ["checkout", "--detach", "FETCH_HEAD"], temp);
     } else {
       await rm(temp, { recursive: true, force: true });
-      await run("git", ["clone", "--depth", "1", git.url, temp]);
+      await run("git", ["clone", "--depth", "1", "--", git.url, temp]);
     }
     const resolved = await run("git", ["rev-parse", "HEAD"], temp);
     return {
@@ -233,7 +236,7 @@ function copyFilter(source: string): boolean {
 }
 
 async function verifyCache(root: string, manifest: HarnessManifest, integrity: string): Promise<void> {
-  await assertTreeReadonly(root);
+  await assertTreeReadonly(await realpath(root));
   const cachedIntegrity = await hashDirectory(root);
   if (cachedIntegrity !== integrity) {
     throw new Error(`Cached package is corrupt at ${root}: expected ${integrity}, got ${cachedIntegrity}`);
@@ -259,17 +262,26 @@ async function assertTreeReadonly(root: string): Promise<void> {
   }
 }
 
-async function populateCache(sourceRoot: string, cacheRoot: string): Promise<void> {
+async function populateCache(
+  sourceRoot: string,
+  cacheRoot: string,
+  expectedManifest: HarnessManifest,
+  expectedIntegrity: string,
+): Promise<void> {
   await mkdir(path.dirname(cacheRoot), { recursive: true });
-  const temporary = path.join(path.dirname(cacheRoot), `.${path.basename(cacheRoot)}.tmp-${process.pid}-${randomUUID()}`);
+  const generation = path.join(path.dirname(cacheRoot), `.${path.basename(cacheRoot)}.gen-${randomUUID()}`);
+  const nextLink = path.join(path.dirname(cacheRoot), `.${path.basename(cacheRoot)}.link-${randomUUID()}`);
   try {
-    await cp(sourceRoot, temporary, { recursive: true, errorOnExist: true, filter: copyFilter });
-    await setTreeWritable(temporary, false);
-    await rename(temporary, cacheRoot);
+    await cp(sourceRoot, generation, { recursive: true, errorOnExist: true, filter: copyFilter });
+    await setTreeWritable(generation, false);
+    const manifest = await loadManifest(generation);
+    await validatePackage(generation, manifest);
+    await verifyCache(generation, expectedManifest, expectedIntegrity);
+    await symlink(path.basename(generation), nextLink, process.platform === "win32" ? "junction" : undefined);
+    await rename(nextLink, cacheRoot);
   } catch (error) {
-    await removeCacheEntry(temporary);
-    const code = (error as NodeJS.ErrnoException).code;
-    if ((code === "EEXIST" || code === "ENOTEMPTY") && (await pathExists(cacheRoot))) return;
+    await rm(nextLink, { force: true });
+    await removeCacheEntry(generation);
     throw error;
   }
 }
@@ -305,10 +317,10 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
         await verifyCache(cacheRoot, manifest, integrity);
         return;
       } catch {
-        await removeCacheEntry(cacheRoot);
+        // A replacement is staged before the cache pointer is changed.
       }
     }
-    await populateCache(materialized.root, cacheRoot);
+    await populateCache(materialized.root, cacheRoot, manifest, integrity);
     await verifyCache(cacheRoot, manifest, integrity);
   });
   const lock: LockedPackage = {
@@ -409,7 +421,7 @@ async function loadCachedPackageUnlocked(lock: LockedPackage): Promise<Installed
   if (!(await pathExists(root))) {
     throw new Error(`Package ${lock.name}@${lock.version} is not cached; run harness install ${lock.source}`);
   }
-  await assertTreeReadonly(root);
+  await assertTreeReadonly(await realpath(root));
   const integrity = await hashDirectory(root);
   if (integrity !== lock.integrity) {
     throw new Error(`Integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
@@ -440,9 +452,7 @@ export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledP
     if (await pathExists(expectedRoot)) {
       try {
         return await loadCachedPackageUnlocked(lock);
-      } catch {
-        await removeCacheEntry(expectedRoot);
-      }
+      } catch {}
     }
 
     const materialized = await materializeSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
@@ -461,11 +471,10 @@ export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledP
       if (!lock.source.startsWith("file:") && !lock.source.startsWith("builtin:") && materialized.resolved !== lock.resolved) {
         throw new Error(`Locked revision mismatch for ${lock.name}: expected ${lock.resolved}, got ${materialized.resolved}`);
       }
-      await populateCache(materialized.root, expectedRoot);
+      await populateCache(materialized.root, expectedRoot, manifest, integrity);
       await verifyCache(expectedRoot, manifest, integrity);
       return { manifest, root: expectedRoot, lock };
     } catch (error) {
-      await removeCacheEntry(expectedRoot);
       throw error;
     } finally {
       await materialized.cleanup?.();

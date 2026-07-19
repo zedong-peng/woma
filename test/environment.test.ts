@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -14,6 +14,7 @@ import {
   activateEnvironment,
   doctorEnvironment,
   installIntoEnvironment,
+  listEnvironments,
   readEnvironment,
   readEnvironmentLock,
   removeEnvironment,
@@ -343,6 +344,49 @@ test("existing base initialization rejects missing lock and view state", { concu
   }
 });
 
+test("list and doctor remain useful when current-format base layers are corrupt", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-diagnostics-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await ensureBaseEnvironment(root);
+    await createEnvironment(root, "tools", ["codex"]);
+    const recipePath = environmentPath(root, "base");
+    const lockPath = environmentLockPath(root, "base");
+    const recipe = await readFile(recipePath, "utf8");
+    const lock = await readFile(lockPath, "utf8");
+
+    await writeFile(recipePath, "not: [valid", "utf8");
+    assert.deepEqual(await listEnvironments(root), ["base", "tools"]);
+    assert.equal((await doctorEnvironment(root, "base"))[0]?.label, "recipe");
+    assert.equal((await doctorEnvironment(root, "base"))[0]?.status, "fail");
+
+    await writeFile(recipePath, recipe, "utf8");
+    await writeFile(lockPath, "{}\n", "utf8");
+    assert.equal((await doctorEnvironment(root, "base")).find((check) => check.label === "lock")?.status, "fail");
+
+    await writeFile(lockPath, lock, "utf8");
+    const parsedLock = JSON.parse(lock) as { packages: Record<string, { cacheKey: string }> };
+    const packageName = "harness-project-memory";
+    const skillPath = path.join(
+      process.env.HARNESS_HOME!,
+      "packages",
+      packageName,
+      parsedLock.packages[packageName]!.cacheKey,
+      "skills",
+      packageName,
+      "SKILL.md",
+    );
+    await chmod(skillPath, 0o600);
+    assert.equal((await doctorEnvironment(root, "base")).find((check) => check.label === `package:${packageName}`)?.status, "fail");
+    await chmod(skillPath, 0o444);
+
+    await writeFile(path.join(environmentViewPath("base"), "view.json"), "{}\n", "utf8");
+    assert.equal((await doctorEnvironment(root, "base")).find((check) => check.label === "view")?.status, "fail");
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("sync repairs a missing base view without requiring a healthy view first", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-sync-repair-"));
   process.env.HARNESS_HOME = path.join(root, "home");
@@ -565,12 +609,14 @@ test("Environment snapshots wait for an in-progress metadata commit", { concurre
     const entered = new Promise<void>((resolve) => (enterCommit = resolve));
     const release = new Promise<void>((resolve) => (releaseCommit = resolve));
     const installing = installIntoEnvironment(root, "tools", fixture, process.cwd(), {
-      onResourcesApplied: async () => {
+      onMetadataPrepared: async () => {
         enterCommit();
         await release;
       },
     });
     await entered;
+    assert.equal(JSON.parse(await readFile(environmentLockPath(root, "tools"), "utf8")).packages["upgrade-package"].version, "1.0.0");
+    assert.doesNotMatch(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8"), /upgrade-package/);
     let snapshotSettled = false;
     const snapshotPromise = environmentSnapshot(root, "tools").then((snapshot) => {
       snapshotSettled = true;
@@ -644,8 +690,8 @@ test("active install rolls back when interrupted after resources are applied", {
       installIntoEnvironment(root, "tools", v2, process.cwd(), {
         onResourcesApplied: async () => {
           interruptedAfterMutation = true;
-          assert.match(await readFile(trackedPaths[2]!, "utf8"), /Version two/);
-          assert.match(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8"), /"version": "2.0.0"/);
+          assert.match(await readFile(trackedPaths[2]!, "utf8"), /Version one/);
+          assert.match(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8"), /"version": "1.0.0"/);
           assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "1.0.0");
           throw new Error("simulated interruption");
         },
@@ -655,6 +701,10 @@ test("active install rolls back when interrupted after resources are applied", {
 
     assert.equal(interruptedAfterMutation, true);
     assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
+    assert.deepEqual(
+      (await readdir(path.dirname(environmentViewPath("tools")))).filter((name) => /^\.view\.(?:link|rollback)-/.test(name)),
+      [],
+    );
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
     await removeTestTree(root);
