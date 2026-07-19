@@ -1,5 +1,7 @@
 # PR #19 release-readiness audit
 
+> Superseded for merge readiness by [PR #19 current-format final audit](pr-19-current-format-audit.md). This document records the earlier `5ab1a98` findings and their remediation; it does not claim that the later remediation diff is defect-free.
+
 Audit date: 2026-07-20  
 Audited head: `5ab1a98` (`feat/global-environments`)  
 Comparison base: `main`  
