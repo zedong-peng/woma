@@ -110,7 +110,7 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
   }
 });
 
-test("CLI provides a Conda-style base environment default from project subdirectories", { concurrency: false }, async () => {
+test("CLI provides base from an explicit project when invoked in a subdirectory", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-base-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
@@ -133,16 +133,16 @@ test("CLI provides a Conda-style base environment default from project subdirect
     const install = await runCli(["install", pkg], project, home);
     assert.equal(install.code, 0, install.stderr);
     assert.match(install.stdout, /into base/);
-    const activate = await runCli(["activate"], nested, home);
+    const activate = await runCli(["--project", project, "activate"], nested, home);
     assert.equal(activate.code, 0, activate.stderr);
     assert.match(activate.stdout, /Activated environment base/);
     assert.match(await readFile(path.join(home, "environments", "base", "view", "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Persist stable knowledge automatically/);
     assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
 
-    const current = await runCli(["info", "--json"], nested, home);
+    const current = await runCli(["--project", project, "info", "--json"], nested, home);
     assert.equal(current.code, 0, current.stderr);
     assert.equal((JSON.parse(current.stdout) as { environment: { name: string } }).environment.name, "base");
-    const structured = await runCli(["info", "--json"], nested, home);
+    const structured = await runCli(["--project", project, "info", "--json"], nested, home);
     assert.equal(structured.code, 0, structured.stderr);
     const context = JSON.parse(structured.stdout) as {
       projectRoot: string;
@@ -155,30 +155,28 @@ test("CLI provides a Conda-style base environment default from project subdirect
     assert.deepEqual(context.packages[0]?.skills, ["harness-project-memory"]);
     assert.match(context.packages.find((pkg) => pkg.name === "base-skill")?.memory ?? "", /\.harness\/memory\/packages\/base-skill\.md$/);
 
-    assert.equal((await runCli(["env", "create", "research", "--target", "codex"], nested, home)).code, 0);
-    assert.equal((await runCli(["activate", "research"], nested, home)).code, 0);
-    const activateDefault = await runCli(["activate"], nested, home);
+    assert.equal((await runCli(["--project", project, "env", "create", "research", "--target", "codex"], nested, home)).code, 0);
+    assert.equal((await runCli(["--project", project, "activate", "research"], nested, home)).code, 0);
+    const activateDefault = await runCli(["--project", project, "activate"], nested, home);
     assert.equal(activateDefault.code, 0, activateDefault.stderr);
     assert.match(activateDefault.stdout, /Activated environment base/);
-    const deactivate = await runCli(["deactivate"], nested, home);
+    const deactivate = await runCli(["--project", project, "deactivate"], nested, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test("CLI never crosses a Git repository boundary to reuse a parent Project Memory", { concurrency: false }, async () => {
+test("CLI uses the exact working directory instead of a parent Project Memory", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-project-boundary-"));
   const workspace = path.join(root, "workspace");
   const project = path.join(workspace, "project");
-  const nested = path.join(project, "src");
   const parentState = path.join(workspace, ".harness", "state.json");
   try {
-    await mkdir(path.join(project, ".git"), { recursive: true });
-    await mkdir(nested, { recursive: true });
+    await mkdir(project, { recursive: true });
     await write(parentState, '{"stateVersion":1,"activeEnvironment":{"name":"parent","targets":["codex"],"activatedAt":"parent"}}\n');
 
-    const activated = await runCli(["activate"], nested, path.join(root, "home"));
+    const activated = await runCli(["activate"], project, path.join(root, "home"));
 
     assert.equal(activated.code, 0, activated.stderr);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);

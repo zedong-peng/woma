@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { statSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { captureHarness } from "./capture.js";
@@ -32,26 +31,7 @@ const program = new Command();
 
 function projectRoot(command: Command): string {
   const configured = command.optsWithGlobals<{ project?: string }>().project;
-  if (configured) return path.resolve(configured);
-  let current = path.resolve(process.cwd());
-  while (true) {
-    try {
-      if (statSync(path.join(current, ".harness")).isDirectory()) return current;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-    }
-    try {
-      statSync(path.join(current, ".git"));
-      return current;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) return path.resolve(process.cwd());
-    current = parent;
-  }
+  return path.resolve(configured ?? process.cwd());
 }
 
 async function selectedEnvironment(project: string, requested?: string): Promise<string> {
@@ -88,7 +68,7 @@ program
   .description("Create, reproduce, and switch isolated Agent environments")
   .version("0.6.0")
   .enablePositionalOptions()
-  .option("-p, --project <directory>", "project whose Memory and Environment selection are managed; defaults to the nearest parent with .harness");
+  .option("-p, --project <directory>", "project whose Memory and Environment selection are managed; defaults to the current directory");
 
 program
   .command("init [directory]")
