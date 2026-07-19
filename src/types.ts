@@ -89,11 +89,6 @@ export interface LockFile {
   packages: Record<string, LockedPackage>;
 }
 
-export interface StateFile {
-  stateVersion: 1;
-  activeEnvironment?: ActiveEnvironmentState | undefined;
-}
-
 export interface EnvironmentRoot {
   name: string;
   source: string;
@@ -109,13 +104,6 @@ export interface HarnessEnvironment {
     targets: Platform[];
     roots: EnvironmentRoot[];
   };
-}
-
-export interface ActiveEnvironmentState {
-  name: string;
-  targets: Platform[];
-  activatedAt: string;
-  memoryBootstrapVersion?: 1 | undefined;
 }
 
 export interface InstalledPackage {

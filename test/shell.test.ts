@@ -15,37 +15,28 @@ test("shell resolution supports explicit and login-shell bash or zsh", () => {
   assert.throws(() => resolveShell("fish"), /choose bash or zsh/);
 });
 
-test("bash hook finds an active environment from a project subdirectory", async () => {
+test("bash hook keeps the shell Environment across project directories", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-hook-"));
   try {
     const project = path.join(root, "project");
     const nested = path.join(project, "src", "nested");
     const hookPath = path.join(root, "hook.bash");
-    await mkdir(path.join(project, ".harness"), { recursive: true });
     await mkdir(nested, { recursive: true });
-    await writeFile(
-      path.join(project, ".harness", "state.json"),
-      `${JSON.stringify({
-        stateVersion: 1,
-        activeEnvironment: { name: "base", targets: ["codex"], activatedAt: new Date().toISOString() },
-      }, null, 2)}\n`,
-      "utf8",
-    );
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     await run("bash", ["-n", hookPath]);
     const script = 'source "$1"\ncd "$2"\n__harness_prompt_update\nprintf \'%s|%s|%s|%s\' "$HARNESS_PROMPT_PREFIX" "$HARNESS_ENV" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"';
-    const options = { env: { ...process.env, HARNESS_HOME: path.join(root, "home") } };
+    const options = { env: { ...process.env, HARNESS_HOME: path.join(root, "home"), HARNESS_ENV: "research" } };
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested], options);
     assert.equal(
       stdout,
-      `(harness:base) |base|${path.join(root, "home", "environments", "base", "view", "codex")}|${path.join(root, "home", "environments", "base", "view", "claude")}`,
+      `(harness:research) |research|${path.join(root, "home", "environments", "research", "view", "codex")}|${path.join(root, "home", "environments", "research", "view", "claude")}`,
     );
 
     await mkdir(path.join(nested, ".harness"));
     const inner = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested], options);
     assert.equal(
       inner.stdout,
-      `(harness:base) |base|${path.join(root, "home", "environments", "base", "view", "codex")}|${path.join(root, "home", "environments", "base", "view", "claude")}`,
+      `(harness:research) |research|${path.join(root, "home", "environments", "research", "view", "codex")}|${path.join(root, "home", "environments", "research", "view", "claude")}`,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -54,8 +45,7 @@ test("bash hook finds an active environment from a project subdirectory", async 
 
 test("zsh hook installs an idempotent precmd prompt prefix", () => {
   const hook = renderShellHook("zsh");
-  assert.match(hook, /\[\[ -d "\$directory\/\.harness" \]\]/);
-  assert.match(hook, /directory="\$\{directory:h\}"/);
+  assert.doesNotMatch(hook, /state\.json|__harness_find_state/);
   assert.match(hook, /add-zsh-hook precmd __harness_prompt_update/);
   assert.match(hook, /PROMPT='\$\{HARNESS_PROMPT_PREFIX\}'/);
   assert.match(hook, /HARNESS_SHELL_HOOK_INSTALLED/);

@@ -56,7 +56,7 @@ harness activate performance
 codex
 ```
 
-`harness deactivate` returns the project to `base`. Every Environment includes the Project Memory manager and meta-skill authoring assistant.
+`harness deactivate` returns the current shell to `base`. Every Environment includes the Project Memory manager and meta-skill authoring assistant.
 
 ## Model
 
@@ -72,8 +72,7 @@ codex
 
 <project>/.harness/
 ├── memory/                      portable project and Package knowledge
-├── local/                       machine-local Memory
-└── state.json                   selected Environment and Memory bootstrap state
+└── local/                       machine-local Memory
 ```
 
 Each Skill in a view is a symbolic link into the immutable Package Store. Installing into an Environment transactionally refreshes the managed paths in that one global view, so every project and new Agent process using the Environment observes the same dependency closure:

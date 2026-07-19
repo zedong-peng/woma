@@ -90,7 +90,7 @@ mcpServers:
 | MCP server | managed block in `view/codex/config.toml` | entry in `view/claude/.claude.json` |
 | Hook | entry in `view/codex/hooks.json` | entry in `view/claude/settings.json` |
 
-`~/.harness-conda/environments/<environment>/lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. `<project>/.harness/state.json` records the selected Environment and Memory bootstrap state and must not be committed.
+`~/.harness-conda/environments/<environment>/lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. The active Environment belongs to the current shell and is selected by `HARNESS_ENV`; no Environment state is stored in a project.
 
 ## Requirements
 

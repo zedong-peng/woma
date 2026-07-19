@@ -14,7 +14,6 @@ import {
   projectMemoryPath,
 } from "./memory.js";
 import { prepareMemoryBootstrapTransition } from "./memory-bootstrap.js";
-import { putActiveEnvironment, readState } from "./store.js";
 import { environmentViewPath, materializeEnvironmentView, validateEnvironmentView } from "./view.js";
 import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
 
@@ -172,7 +171,7 @@ async function ensureLocalGitExcludes(projectRoot: string): Promise<void> {
   });
   const lines = existing.split(/\r?\n/).filter(Boolean);
   let changed = false;
-  for (const required of ["/.harness/state.json", "/.harness/local/"]) {
+  for (const required of ["/.harness/local/"]) {
     if (!lines.includes(required)) {
       lines.push(required);
       changed = true;
@@ -279,8 +278,7 @@ export async function listEnvironments(projectRoot: string): Promise<string[]> {
 
 export async function removeEnvironment(projectRoot: string, name: string): Promise<void> {
   if (name === DEFAULT_ENVIRONMENT) throw new Error("The base environment cannot be removed");
-  const state = await readState(projectRoot);
-  if (state.activeEnvironment?.name === name) throw new Error(`Environment ${name} is active; run harness deactivate first`);
+  if (process.env.HARNESS_ENV === name) throw new Error(`Environment ${name} is active in this shell; run harness deactivate first`);
   await readEnvironment(projectRoot, name);
   await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
 }
@@ -429,9 +427,8 @@ async function loadOrderedPackages(projectRoot: string, name: string): Promise<L
 
 export async function environmentInfo(projectRoot: string): Promise<CurrentEnvironmentContext> {
   const project = path.resolve(projectRoot);
-  const state = await readState(project);
   const memory = { project: projectMemoryPath(project), local: localMemoryPath(project) };
-  const selected = process.env.HARNESS_ENV || state.activeEnvironment?.name || DEFAULT_ENVIRONMENT;
+  const selected = process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT;
   const loaded = await loadOrderedPackages(project, selected);
   return {
     projectRoot: project,
@@ -455,28 +452,15 @@ async function transitionEnvironment(
   projectRoot: string,
   name: string,
   desired: LoadedEnvironment,
-  previousEnvironment?: LoadedEnvironment,
 ): Promise<EnvironmentActivationResult> {
-  const state = await readState(projectRoot);
   const contextTransition = await prepareMemoryBootstrapTransition(
     projectRoot,
-    previousEnvironment
-      ? { targets: previousEnvironment.environment.spec.targets, hasMemoryPackage: previousEnvironment.names.includes(PROJECT_MEMORY_PACKAGE) }
-      : undefined,
+    undefined,
     { targets: desired.environment.spec.targets, hasMemoryPackage: desired.names.includes(PROJECT_MEMORY_PACKAGE) },
-    {
-      requirePrevious: state.activeEnvironment?.memoryBootstrapVersion === 1,
-    },
   );
   let rollbackContext: (() => Promise<void>) | undefined;
   try {
     rollbackContext = await contextTransition.apply();
-    await putActiveEnvironment(projectRoot, {
-      name,
-      targets: desired.environment.spec.targets,
-      activatedAt: new Date().toISOString(),
-      memoryBootstrapVersion: desired.names.includes(PROJECT_MEMORY_PACKAGE) ? 1 : undefined,
-    });
     return { name, packages: desired.names, targets: desired.environment.spec.targets, actions: contextTransition.actions };
   } catch (error) {
     let contextRollbackError: unknown;
@@ -495,13 +479,11 @@ async function transitionEnvironment(
 }
 
 export async function activateEnvironment(projectRoot: string, name: string): Promise<EnvironmentActivationResult> {
-  await ensureLocalGitExcludes(projectRoot);
-  await initializeProjectMemory(projectRoot);
   const desired = await loadOrderedPackages(projectRoot, name);
   await validateEnvironmentView(desired.environment, desired.names.map((packageName) => desired.packages.get(packageName)!));
-  const state = await readState(projectRoot);
-  const previous = state.activeEnvironment ? await loadOrderedPackages(projectRoot, state.activeEnvironment.name) : undefined;
-  return transitionEnvironment(projectRoot, name, desired, previous);
+  await ensureLocalGitExcludes(projectRoot);
+  await initializeProjectMemory(projectRoot);
+  return transitionEnvironment(projectRoot, name, desired);
 }
 
 export async function deactivateEnvironment(projectRoot: string): Promise<EnvironmentActivationResult> {
@@ -550,7 +532,6 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
     checks.push({ status: "fail", label: "lock", detail: (error as Error).message });
     return checks;
   }
-  const state = await readState(projectRoot);
   checks.push({ status: "ok", label: "roots", detail: environment.spec.roots.map((root) => root.name).join(", ") || "none" });
   for (const packageName of names) {
     const pkg = await loadCachedPackage(lock.packages[packageName]!);
@@ -583,25 +564,15 @@ export async function doctorEnvironment(projectRoot: string, name: string): Prom
       });
     }
   }
-  const active = state.activeEnvironment?.name === name;
+  const active = (process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT) === name;
   checks.push({ status: active ? "ok" : "warn", label: "activation", detail: active ? environment.spec.targets.join(", ") : "inactive" });
   if (active) {
-    const activeEnvironment = state.activeEnvironment!;
-    const targetsMatch = JSON.stringify(activeEnvironment.targets) === JSON.stringify(environment.spec.targets);
-    checks.push({
-      status: targetsMatch ? "ok" : "fail",
-      label: "active-targets",
-      detail: targetsMatch
-        ? environment.spec.targets.join(", ")
-        : `recorded targets ${activeEnvironment.targets.join(", ")} do not match recipe ${environment.spec.targets.join(", ")}`,
-    });
     try {
       const hasMemoryPackage = names.includes(PROJECT_MEMORY_PACKAGE);
       const contextCheck = await prepareMemoryBootstrapTransition(
         projectRoot,
         { targets: environment.spec.targets, hasMemoryPackage },
         { targets: environment.spec.targets, hasMemoryPackage },
-        { requirePrevious: activeEnvironment.memoryBootstrapVersion === 1 },
       );
       checks.push({
         status: contextCheck.actions.length === 0 ? "ok" : "fail",

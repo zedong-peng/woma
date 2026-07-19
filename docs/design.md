@@ -9,7 +9,7 @@ Harness Conda separates reusable Agent capabilities from repository knowledge.
 | Immutable Package contents | User-global | `$HARNESS_HOME/packages/` |
 | Environment recipes and locks | User-global | `$HARNESS_HOME/environments/<name>/` |
 | Codex and Claude Environment views | User-global | `$HARNESS_HOME/environments/<name>/view/` |
-| Environment selection and Memory bootstrap state | Project-local | `<project>/.harness/state.json` |
+| Environment selection | Current shell | `HARNESS_ENV` (defaults to `base`) |
 | Shared and Package-specific Memory | Project-local | `<project>/.harness/memory/` |
 | Machine-specific Memory | Project-local, uncommitted | `<project>/.harness/local/` |
 

@@ -10,43 +10,10 @@ export function resolveShell(requested?: string, loginShell = process.env.SHELL)
   return name;
 }
 
-const findStateZsh = [
-  "__harness_find_state() {",
-  '  local directory="$PWD"',
-  "  while true; do",
-  '    if [[ -d "$directory/.harness" ]]; then',
-  '      print -r -- "$directory/.harness/state.json"',
-  "      return 0",
-  "    fi",
-  '    [[ "$directory" == "/" ]] && return 1',
-  '    directory="${directory:h}"',
-  "  done",
-  "}",
-];
-
-const findStateBash = [
-  "__harness_find_state() {",
-  '  local directory="$PWD"',
-  "  while true; do",
-  '    if [[ -d "$directory/.harness" ]]; then',
-  '      printf \'%s\\n\' "$directory/.harness/state.json"',
-  "      return 0",
-  "    fi",
-  '    [[ "$directory" == "/" ]] && return 1',
-  '    directory="${directory%/*}"',
-  '    [[ -n "$directory" ]] || directory="/"',
-  "  done",
-  "}",
-];
-
 const updatePrompt = [
   "__harness_prompt_update() {",
-  "  local state active",
-  '  state="$(__harness_find_state 2>/dev/null)" || state=""',
+  "  local active",
   '  active="${HARNESS_ENV:-}"',
-  '  if [[ -z "$active" && -f "$state" ]]; then',
-  '    active="$(command sed -n \'/"activeEnvironment"[[:space:]]*:/,/^[[:space:]]*}/ s/^[[:space:]]*"name":[[:space:]]*"\\([^"]*\\)".*/\\1/p\' "$state")"',
-  "  fi",
   '  [[ -n "$active" ]] || active="base"',
   '  case "$active" in',
   '    *[!a-z0-9._-]*) HARNESS_PROMPT_PREFIX="" ;;',
@@ -92,7 +59,6 @@ const environmentSelection = [
 function zshHook(): string {
   return [
     "# harness-conda shell hook (zsh)",
-    ...findStateZsh,
     ...updatePrompt,
     ...environmentSelection,
     'if [[ -z "${HARNESS_SHELL_HOOK_INSTALLED:-}" ]]; then',
@@ -114,7 +80,6 @@ function zshHook(): string {
 function bashHook(): string {
   return [
     "# harness-conda shell hook (bash)",
-    ...findStateBash,
     ...updatePrompt,
     ...environmentSelection,
     'if [[ -z "${HARNESS_SHELL_HOOK_INSTALLED:-}" ]]; then',

@@ -19,7 +19,7 @@ Environment recipes and locks are stored under `$HARNESS_HOME/environments/`. `H
 harness install [-n <environment>] <source>
 ```
 
-When `--name` is omitted, installation uses `HARNESS_ENV`, then the Environment selected in the current project, and otherwise falls back to `base`.
+When `--name` is omitted, installation uses the current shell's `HARNESS_ENV` and falls back to `base` when it is unset.
 
 Supported sources:
 
@@ -40,7 +40,7 @@ harness activate [environment]
 harness deactivate
 ```
 
-`activate` defaults to `base`. With the recommended shell hook installed, it selects the Environment's global Codex and Claude views in the parent shell. It also initializes Project Memory and records the repository's selected Environment. Run the Agent normally afterward:
+`activate` defaults to `base`. With the recommended shell hook installed, it selects the Environment's global Codex and Claude views in the parent shell. It also initializes Project Memory in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
 
 The project defaults to the exact current working directory. Harness does not search parent directories for `.harness` or `.git`, so Git and non-Git projects follow the same rule. Run commands from the intended project root or pass the global `--project <directory>` option explicitly when working from a subdirectory.
 
@@ -62,7 +62,7 @@ harness doctor [-n <environment>]
 harness inspect <source-or-package> [-n <environment>]
 ```
 
-`env list` marks the Environment selected in the current project. `env show` displays one Environment's roots, targets, and locked closure.
+`env list` marks the Environment selected in the current shell. `env show` displays one Environment's roots, targets, and locked closure.
 
 `info --json` is the stable machine-readable context interface used by `harness-project-memory`. It returns the configured project directory, selected Environment, Memory paths, Packages, Skills, and entrypoints. It replaces the redundant user-facing `current` command.
 

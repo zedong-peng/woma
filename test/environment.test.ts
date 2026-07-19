@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -19,7 +19,6 @@ import {
   syncEnvironment,
 } from "../src/environment.js";
 import { environmentViewPath } from "../src/view.js";
-import { readState, statePath } from "../src/store.js";
 import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 
 async function environmentPackageFixture(
@@ -135,6 +134,8 @@ test("global environments are shared across projects while Project Memory remain
     assert.deepEqual(await readEnvironmentLock(secondProject, "research"), await readEnvironmentLock(firstProject, "research"));
     await activateEnvironment(firstProject, "research");
     await activateEnvironment(secondProject, "research");
+    await assert.rejects(access(path.join(firstProject, ".harness", "state.json")));
+    await assert.rejects(access(path.join(secondProject, ".harness", "state.json")));
     const sharedSkill = path.join(environmentViewPath("research"), "codex", "skills", "paper-search");
     assert.equal((await lstat(sharedSkill)).isSymbolicLink(), true);
     assert.match(await readlink(sharedSkill), /packages\/paper-search\//);
@@ -151,6 +152,43 @@ test("global environments are shared across projects while Project Memory remain
     assert.match(await readFile(projectMemoryPath(secondProject), "utf8"), /Project Memory/);
     assert.notEqual(packageMemoryPath(firstProject, "paper-search"), packageMemoryPath(secondProject, "paper-search"));
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("activation validates an Environment before creating project files", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-activation-preflight-"));
+  const project = path.join(root, "project");
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await mkdir(project, { recursive: true });
+
+    await assert.rejects(activateEnvironment(project, "missing"), /Unknown environment: missing/);
+
+    await assert.rejects(access(path.join(project, ".harness")));
+    await assert.rejects(access(path.join(project, ".gitignore")));
+    await assert.rejects(access(path.join(project, "AGENTS.md")));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("environment removal is guarded by the current shell only", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-shell-removal-"));
+  const previousEnvironment = process.env.HARNESS_ENV;
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    process.env.HARNESS_ENV = "tools";
+    await assert.rejects(removeEnvironment(root, "tools"), /active in this shell/);
+
+    process.env.HARNESS_ENV = "base";
+    await removeEnvironment(root, "tools");
+    await assert.rejects(readEnvironment(root, "tools"), /Unknown environment: tools/);
+    await activateEnvironment(root, "base");
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -234,34 +272,35 @@ test("install and sync reject unreachable lock packages before resolving their s
   }
 });
 
-test("doctor reports active target state that diverges from its Environment recipe", { concurrency: false }, async () => {
+test("doctor derives activation exclusively from the shell Environment", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-doctor-"));
+  const previousEnvironment = process.env.HARNESS_ENV;
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
     await installIntoEnvironment(root, "research", "builtin:paper-search");
-    await activateEnvironment(root, "research");
-    const state = await readState(root);
-    state.activeEnvironment = { ...state.activeEnvironment!, targets: ["claude"] };
-    await writeFile(statePath(root), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+    process.env.HARNESS_ENV = "research";
 
     const checks = await doctorEnvironment(root, "research");
-    for (const label of ["active-targets"]) {
-      assert.equal(checks.find((check) => check.label === label)?.status, "fail", label);
-    }
+    assert.equal(checks.find((check) => check.label === "activation")?.status, "ok");
+    assert.equal(checks.some((check) => check.label === "active-targets"), false);
   } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
     await rm(root, { recursive: true, force: true });
   }
 });
 
 test("doctor reports modified Agent Memory discovery instructions", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-context-doctor-"));
+  const previousEnvironment = process.env.HARNESS_ENV;
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
     await installIntoEnvironment(root, "research", "builtin:harness-project-memory");
     await installIntoEnvironment(root, "research", "builtin:paper-search");
     await activateEnvironment(root, "research");
+    process.env.HARNESS_ENV = "research";
     const agentsPath = path.join(root, "AGENTS.md");
     await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("At the beginning", "Later"), "utf8");
 
@@ -270,6 +309,8 @@ test("doctor reports modified Agent Memory discovery instructions", { concurrenc
     assert.equal(checks.find((check) => check.label === "memory-bootstrap")?.status, "fail");
     await assert.rejects(deactivateEnvironment(root), /discovery block was modified/);
   } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -359,7 +400,7 @@ test("install atomically upgrades a package in the active environment", { concur
 
     assert.match(await readFile(path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"), "utf8"), /Version two/);
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
-    assert.equal((await readState(root)).activeEnvironment?.name, "tools");
+    await assert.rejects(access(path.join(root, ".harness", "state.json")));
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -382,7 +423,6 @@ test("active install restores project state when the new package conflicts after
     const trackedPaths = [
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
-      statePath(root),
       path.join(environmentViewPath("tools"), "view.json"),
       path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"),
       path.join(root, "AGENTS.md"),
@@ -412,7 +452,6 @@ test("active install rolls back when interrupted after resources are applied", {
     const trackedPaths = [
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
-      statePath(root),
       path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"),
       path.join(root, "AGENTS.md"),
     ];
@@ -423,7 +462,7 @@ test("active install rolls back when interrupted after resources are applied", {
       installIntoEnvironment(root, "tools", v2, process.cwd(), {
         onResourcesApplied: async () => {
           interruptedAfterMutation = true;
-          assert.match(await readFile(trackedPaths[3]!, "utf8"), /Version two/);
+          assert.match(await readFile(trackedPaths[2]!, "utf8"), /Version two/);
           assert.match(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8"), /"version": "2.0.0"/);
           assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "1.0.0");
           throw new Error("simulated interruption");
@@ -473,14 +512,12 @@ test("install rebuilds a modified global view from immutable Package contents", 
     await activateEnvironment(root, "tools");
     const skillLink = path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill");
     await rm(skillLink, { force: true });
-    const stateBefore = await readFile(statePath(root), "utf8");
-
     await installIntoEnvironment(root, "tools", v2);
 
     assert.equal((await lstat(skillLink)).isSymbolicLink(), true);
     assert.match(await readFile(path.join(skillLink, "SKILL.md"), "utf8"), /Version two/);
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
-    assert.equal(await readFile(statePath(root), "utf8"), stateBefore);
+    await assert.rejects(access(path.join(root, ".harness", "state.json")));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

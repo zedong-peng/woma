@@ -171,17 +171,17 @@ test("CLI uses the exact working directory instead of a parent Project Memory", 
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-project-boundary-"));
   const workspace = path.join(root, "workspace");
   const project = path.join(workspace, "project");
-  const parentState = path.join(workspace, ".harness", "state.json");
+  const parentMemory = path.join(workspace, ".harness", "memory", "project.md");
   try {
     await mkdir(project, { recursive: true });
-    await write(parentState, '{"stateVersion":1,"activeEnvironment":{"name":"parent","targets":["codex"],"activatedAt":"parent"}}\n');
+    await write(parentMemory, "# Parent Memory\n");
 
     const activated = await runCli(["activate"], project, path.join(root, "home"));
 
     assert.equal(activated.code, 0, activated.stderr);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
-    assert.match(await readFile(path.join(project, ".harness", "state.json"), "utf8"), /"name": "base"/);
-    assert.match(await readFile(parentState, "utf8"), /"name":"parent"/);
+    await assert.rejects(access(path.join(project, ".harness", "state.json")));
+    assert.equal(await readFile(parentMemory, "utf8"), "# Parent Memory\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -229,6 +229,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-environment-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
+  const previousEnvironment = process.env.HARNESS_ENV;
   try {
     await packageFixture(root, "paper-search");
     const meta = await packageFixture(root, "auto-research", [{ name: "paper-search", source: "../paper-search" }]);
@@ -250,7 +251,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     const activate = await runCli(["--project", project, "activate", "research"], root, home);
     assert.equal(activate.code, 0, activate.stderr);
     assert.match(activate.stdout, /packages\s+harness-project-memory, meta-skill-builder, paper-search, auto-research/);
-    assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/state\.json/);
+    assert.doesNotMatch(await readFile(path.join(project, ".gitignore"), "utf8"), /state\.json/);
     assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/local\//);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
     await access(path.join(project, ".harness", "memory", "packages"));
@@ -259,6 +260,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.match(await readFile(path.join(researchSkills, "paper-search", "SKILL.md"), "utf8"), /paper-search/);
     assert.match(await readFile(path.join(researchSkills, "auto-research", "SKILL.md"), "utf8"), /auto-research/);
     assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
+    process.env.HARNESS_ENV = "research";
 
     const current = await runCli(["--project", project, "info"], root, home);
     assert.equal(current.code, 0, current.stderr);
@@ -288,6 +290,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
 
     const deactivate = await runCli(["--project", project, "deactivate"], root, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
+    process.env.HARNESS_ENV = "base";
     const baseSkills = path.join(home, "environments", "base", "view", "codex", "skills");
     await assert.rejects(readFile(path.join(baseSkills, "paper-search", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(baseSkills, "auto-research", "SKILL.md")), /ENOENT/);
@@ -300,6 +303,8 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.equal(removeEnvironment.code, 0, removeEnvironment.stderr);
     await assert.rejects(readFile(path.join(home, "environments", "research", "environment.yaml")), /ENOENT/);
   } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -308,6 +313,7 @@ test("CLI atomically switches environments", { concurrency: false }, async () =>
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-switch-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
+  const previousEnvironment = process.env.HARNESS_ENV;
   try {
     const first = await packageFixture(root, "first-skill");
     const second = await packageFixture(root, "second-skill");
@@ -318,15 +324,19 @@ test("CLI atomically switches environments", { concurrency: false }, async () =>
     assert.equal((await runCli(["--project", project, "install", "-n", "first", first], root, home)).code, 0);
     assert.equal((await runCli(["--project", project, "install", "-n", "second", second], root, home)).code, 0);
     assert.equal((await runCli(["--project", project, "activate", "first"], root, home)).code, 0);
+    process.env.HARNESS_ENV = "first";
 
     const installActive = await runCli(["--project", project, "install", second], root, home);
     assert.equal(installActive.code, 0, installActive.stderr);
     assert.match(await readFile(path.join(home, "environments", "first", "view", "codex", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
     const switched = await runCli(["--project", project, "activate", "second"], root, home);
     assert.equal(switched.code, 0, switched.stderr);
+    process.env.HARNESS_ENV = "second";
     assert.match(await readFile(path.join(home, "environments", "first", "view", "codex", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
     assert.match(await readFile(path.join(home, "environments", "second", "view", "codex", "skills", "second-skill", "SKILL.md"), "utf8"), /second-skill/);
   } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
     await rm(root, { recursive: true, force: true });
   }
 });

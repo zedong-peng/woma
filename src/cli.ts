@@ -24,7 +24,6 @@ import {
 import { installPackageSource, loadCachedPackage } from "./package.js";
 import { scaffoldHarness } from "./scaffold.js";
 import { renderShellHook, resolveShell } from "./shell.js";
-import { readState } from "./store.js";
 import type { Action, Platform } from "./types.js";
 
 const program = new Command();
@@ -34,9 +33,9 @@ function projectRoot(command: Command): string {
   return path.resolve(configured ?? process.cwd());
 }
 
-async function selectedEnvironment(project: string, requested?: string): Promise<string> {
+function selectedEnvironment(requested?: string): string {
   if (requested) return requested;
-  return process.env.HARNESS_ENV || (await readState(project)).activeEnvironment?.name || DEFAULT_ENVIRONMENT;
+  return process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT;
 }
 
 function targets(input: string): Platform[] {
@@ -68,7 +67,7 @@ program
   .description("Create, reproduce, and switch isolated Agent environments")
   .version("0.6.0")
   .enablePositionalOptions()
-  .option("-p, --project <directory>", "project whose Memory and Environment selection are managed; defaults to the current directory");
+  .option("-p, --project <directory>", "project whose Memory is managed; defaults to the current directory");
 
 program
   .command("init [directory]")
@@ -103,7 +102,7 @@ envCommand
   .action(async (_options: unknown, command: Command) => {
     const project = projectRoot(command);
     const names = await listEnvironments(project);
-    const active = await selectedEnvironment(project);
+    const active = selectedEnvironment();
     for (const name of names) console.log(`${active === name ? "*" : " "} ${name}`);
   });
 
@@ -115,7 +114,7 @@ envCommand
     const [environment, lock, active] = await Promise.all([
       readEnvironment(project, name),
       readEnvironmentLock(project, name),
-      selectedEnvironment(project),
+      selectedEnvironment(),
     ]);
     console.log(`Environment: ${name}${active === name ? " (active)" : ""}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
@@ -137,7 +136,7 @@ program
   .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
   .action(async (source: string, options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
-    const environmentName = await selectedEnvironment(project, options.name);
+    const environmentName = selectedEnvironment(options.name);
     const result = await installIntoEnvironment(project, environmentName, source, process.cwd());
     console.log(`Installed ${result.root.lock.name}@${result.root.lock.version} into ${environmentName}`);
     console.log(`  source        ${result.root.lock.source}`);
@@ -163,8 +162,7 @@ program
   .description("leave the selected environment and return to base")
   .action(async (_options: unknown, command: Command) => {
     const project = projectRoot(command);
-    const state = await readState(project);
-    const previous = state.activeEnvironment?.name;
+    const previous = selectedEnvironment();
     const result = await deactivateEnvironment(project);
     printActions(result.actions);
     console.log(`Deactivated environment ${previous ?? DEFAULT_ENVIRONMENT}; using ${DEFAULT_ENVIRONMENT}`);
@@ -180,7 +178,7 @@ program
       console.log(JSON.stringify(await environmentInfo(project), null, 2));
       return;
     }
-    const activeName = await selectedEnvironment(project);
+    const activeName = selectedEnvironment();
     const environment = await readEnvironment(project, activeName);
     const lock = await readEnvironmentLock(project, activeName);
     console.log(`Environment: ${activeName}`);
@@ -219,8 +217,7 @@ program
   .option("-n, --name <environment>", "environment to check")
   .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
-    const state = await readState(project);
-    const names = options.name ? [options.name] : state.activeEnvironment ? [state.activeEnvironment.name] : await listEnvironments(project);
+    const names = options.name ? [options.name] : [selectedEnvironment()];
     if (names.length === 0) throw new Error("No environments to check");
     let failed = false;
     for (const name of names) {
