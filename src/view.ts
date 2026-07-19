@@ -366,10 +366,31 @@ async function buildClaudeView(
 }
 
 export function environmentViewPath(name: string): string {
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error(`Invalid Environment name: ${name}`);
   return path.join(harnessHome(), "environments", name, "view");
 }
 
-export async function reconcileRuntimeState(environmentName: string): Promise<void> {
+async function transferClaudeRuntimeState(sourceEnvironment: string, targetEnvironment: string): Promise<void> {
+  if (sourceEnvironment === targetEnvironment) return;
+  const sourcePath = path.join(environmentViewPath(sourceEnvironment), "claude", ".claude.json");
+  const targetRoot = path.join(environmentViewPath(targetEnvironment), "claude");
+  const targetPath = path.join(targetRoot, ".claude.json");
+  if (!(await pathExists(path.join(targetRoot, "skills")))) return;
+  const source = parseJsonObject(await readOptional(sourcePath), sourcePath);
+  const target = parseJsonObject(await readOptional(targetPath), targetPath);
+  const targetMcpServers = target.mcpServers;
+  const runtime = { ...source };
+  delete runtime.mcpServers;
+  const merged = { ...target, ...runtime };
+  if (targetMcpServers === undefined) delete merged.mcpServers;
+  else merged.mcpServers = targetMcpServers;
+  await writeTextPreservingFile(targetPath, `${JSON.stringify(merged, null, 2)}\n`);
+  await chmod(targetPath, 0o600);
+}
+
+export async function reconcileRuntimeState(environmentName: string, targetEnvironmentName = environmentName): Promise<void> {
+  environmentViewPath(environmentName);
+  environmentViewPath(targetEnvironmentName);
   for (const platform of ["codex", "claude"] as const) {
     const viewRoot = path.join(environmentViewPath(environmentName), platform);
     if (!(await pathExists(path.join(viewRoot, "skills")))) continue;
@@ -384,7 +405,7 @@ export async function reconcileRuntimeState(environmentName: string): Promise<vo
           throw error;
         });
         if (!viewInfo) {
-          if (await lstat(sharedPath).then(() => true, () => false)) await rm(sharedPath, { force: true });
+          await createSymlink(sharedPath, viewPath, false);
           continue;
         }
         if (viewInfo.isSymbolicLink()) continue;
@@ -393,6 +414,7 @@ export async function reconcileRuntimeState(environmentName: string): Promise<vo
         await rm(viewPath, { force: true });
         await createSymlink(sharedPath, viewPath, false);
       }
+      if (platform === "claude") await transferClaudeRuntimeState(environmentName, targetEnvironmentName);
     });
   }
 }
@@ -498,11 +520,13 @@ export async function materializeEnvironmentView(
     const skillLinks: Partial<Record<Platform, Record<string, string>>> = {};
     if (environment.spec.targets.includes("codex")) skillLinks.codex = await buildCodexView(path.join(temporary, "codex"), packages);
     if (environment.spec.targets.includes("claude")) {
-      skillLinks.claude = await buildClaudeView(
-        path.join(temporary, "claude"),
-        packages,
-        path.join(destination, "claude", ".claude.json"),
-        previousClaudeMcpServers,
+      skillLinks.claude = await withRuntimeLock("claude", () =>
+        buildClaudeView(
+          path.join(temporary, "claude"),
+          packages,
+          path.join(destination, "claude", ".claude.json"),
+          previousClaudeMcpServers,
+        ),
       );
     }
     const codexMcpServers = environment.spec.targets.includes("codex")

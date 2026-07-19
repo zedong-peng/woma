@@ -104,7 +104,10 @@ spec:
     );
     await rm(path.join(environmentViewPath("isolated"), "codex", "auth.json"));
     await reconcileRuntimeState("isolated");
-    await assert.rejects(readFile(path.join(view, "codex", "auth.json")), /ENOENT/);
+    assert.equal(
+      await readFile(path.join(environmentViewPath("isolated"), "codex", "auth.json"), "utf8"),
+      '{"auth":"atomically-replaced"}\n',
+    );
 
     const claudeState = JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")) as Record<string, any>;
     assert.equal(claudeState.runtimeMarker, "from-default-state");
@@ -123,6 +126,13 @@ spec:
     await write(path.join(view, "codex", "runtime-created.db"), "runtime state\n");
     claudeState.runtimeMarker = "preserve-me";
     await writeFile(path.join(view, "claude", ".claude.json"), `${JSON.stringify(claudeState, null, 2)}\n`, "utf8");
+    await reconcileRuntimeState("tools", "isolated");
+    const isolatedClaudeState = JSON.parse(
+      await readFile(path.join(environmentViewPath("isolated"), "claude", ".claude.json"), "utf8"),
+    ) as Record<string, any>;
+    assert.equal(isolatedClaudeState.runtimeMarker, "preserve-me");
+    assert.equal(isolatedClaudeState.mcpServers.existing.command, "keep");
+    assert.equal(isolatedClaudeState.mcpServers["view-server"], undefined);
     await installIntoEnvironment(root, "tools", packageRoot);
     assert.equal(await readFile(path.join(view, "codex", "runtime-created.db"), "utf8"), "runtime state\n");
     assert.equal(

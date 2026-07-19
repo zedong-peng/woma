@@ -64,7 +64,7 @@ codex
 ~/.harness-conda/
 ├── packages/                    immutable, content-addressed Package contents
 ├── runtime/                     shared Agent authentication and session state
-├── locks/                       cross-process Environment and project locks
+├── locks/                       cross-process Environment, Package, runtime, and project locks
 └── environments/<name>/
     ├── environment.yaml         root Packages and Agent targets
     ├── lock.json                exact recursive dependency closure

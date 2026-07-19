@@ -36,7 +36,7 @@ const lockedPackageSchema = z
     source: z.string().min(1),
     resolved: z.string().min(1),
     integrity: z.string().min(1),
-    cacheKey: z.string().min(1),
+    cacheKey: z.string().regex(/^[a-f0-9]{20}$/, "must be a 20-character lowercase hexadecimal cache key"),
     dependencies: z.array(environmentName),
     installedAt: z.string().min(1),
   })
@@ -90,6 +90,11 @@ export interface CurrentEnvironmentContext {
     skills: string[];
     entrypoints: { name: string; skill: string; description: string }[];
   }[];
+}
+
+export interface EnvironmentSnapshot {
+  environment: HarnessEnvironment;
+  lock: LockFile;
 }
 
 interface LoadedEnvironment {
@@ -217,8 +222,7 @@ function emptyLock(): LockFile {
   return { lockfileVersion: 1, packages: {} };
 }
 
-export async function readEnvironmentLock(projectRoot: string, name: string): Promise<LockFile> {
-  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
+async function readEnvironmentLockFile(projectRoot: string, name: string): Promise<LockFile> {
   const filePath = environmentLockPath(projectRoot, name);
   if (!(await pathExists(filePath))) return emptyLock();
   let document: unknown;
@@ -237,6 +241,23 @@ export async function readEnvironmentLock(projectRoot: string, name: string): Pr
     }
   }
   return parsed.data;
+}
+
+export async function readEnvironmentLock(projectRoot: string, name: string): Promise<LockFile> {
+  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
+  return readEnvironmentLockFile(projectRoot, name);
+}
+
+export async function environmentSnapshot(projectRoot: string, name: string): Promise<EnvironmentSnapshot> {
+  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
+  return withEnvironmentLock(name, async () => {
+    const [environment, lock] = await Promise.all([
+      readEnvironmentFile(projectRoot, name),
+      readEnvironmentLockFile(projectRoot, name),
+    ]);
+    validateEnvironmentLockGraph(environment, lock);
+    return { environment, lock };
+  });
 }
 
 async function initializeEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<HarnessEnvironment> {
@@ -279,12 +300,17 @@ export function ensureBaseEnvironment(projectRoot = process.cwd()): Promise<Harn
   const filePath = environmentPath(projectRoot, DEFAULT_ENVIRONMENT);
   const existing = baseInitializations.get(filePath);
   if (existing) return existing;
-  const initialization = pathExists(filePath).then(async (exists) => {
-    if (exists) return readEnvironmentFile(projectRoot, DEFAULT_ENVIRONMENT);
-    return withEnvironmentLock(DEFAULT_ENVIRONMENT, async () => {
-      if (await pathExists(filePath)) return readEnvironmentFile(projectRoot, DEFAULT_ENVIRONMENT);
-      return initializeEnvironment(projectRoot, DEFAULT_ENVIRONMENT, ["codex", "claude"]);
-    });
+  const initialization = withEnvironmentLock(DEFAULT_ENVIRONMENT, async () => {
+    if (!(await pathExists(filePath))) return initializeEnvironment(projectRoot, DEFAULT_ENVIRONMENT, ["codex", "claude"]);
+    try {
+      const environment = await readEnvironmentFile(projectRoot, DEFAULT_ENVIRONMENT);
+      const lock = await readEnvironmentLockFile(projectRoot, DEFAULT_ENVIRONMENT);
+      const loaded = await loadEnvironmentSnapshot(environment, lock);
+      await validateEnvironmentView(environment, loaded.names.map((name) => loaded.packages.get(name)!));
+      return environment;
+    } catch (error) {
+      throw new Error(`The base Environment is incomplete or corrupt: ${(error as Error).message}`);
+    }
   });
   baseInitializations.set(filePath, initialization);
   void initialization.finally(() => {
@@ -313,7 +339,7 @@ export async function removeEnvironment(projectRoot: string, name: string): Prom
   if (name === DEFAULT_ENVIRONMENT) throw new Error("The base environment cannot be removed");
   if (process.env.HARNESS_ENV === name) throw new Error(`Environment ${name} is active in this shell; run harness deactivate first`);
   await withEnvironmentLock(name, async () => {
-    await readEnvironment(projectRoot, name);
+    await readEnvironmentFile(projectRoot, name);
     await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
   });
 }
@@ -409,8 +435,8 @@ export async function installIntoEnvironment(
   if (environmentNameValue === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
   return withEnvironmentLock(environmentNameValue, async () => {
     const [environment, currentLock] = await Promise.all([
-      readEnvironment(projectRoot, environmentNameValue),
-      readEnvironmentLock(projectRoot, environmentNameValue),
+      readEnvironmentFile(projectRoot, environmentNameValue),
+      readEnvironmentLockFile(projectRoot, environmentNameValue),
     ]);
     validateEnvironmentLockGraph(environment, currentLock);
     const installation = await installPackageTree(source, cwd);
@@ -459,7 +485,7 @@ async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: Lo
 }
 
 async function loadOrderedPackages(projectRoot: string, name: string): Promise<LoadedEnvironment> {
-  const [environment, lock] = await Promise.all([readEnvironment(projectRoot, name), readEnvironmentLock(projectRoot, name)]);
+  const [environment, lock] = await Promise.all([readEnvironmentFile(projectRoot, name), readEnvironmentLockFile(projectRoot, name)]);
   return loadEnvironmentSnapshot(environment, lock);
 }
 
@@ -489,11 +515,16 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
   });
 }
 
-async function transitionEnvironment(
+interface PreparedEnvironmentTransition {
+  actions: Action[];
+  apply: () => Promise<EnvironmentActivationResult>;
+}
+
+async function prepareEnvironmentTransition(
   projectRoot: string,
   name: string,
   desired: LoadedEnvironment,
-): Promise<EnvironmentActivationResult> {
+): Promise<PreparedEnvironmentTransition> {
   const gitExclude = await prepareLocalGitExcludes(projectRoot);
   const memoryInitialization = await prepareProjectMemoryInitialization(projectRoot);
   const contextTransition = await prepareMemoryBootstrapTransition(
@@ -501,26 +532,34 @@ async function transitionEnvironment(
     undefined,
     { targets: ["codex", "claude"], hasMemoryPackage: desired.names.includes(PROJECT_MEMORY_PACKAGE) },
   );
-  const rollbacks: (() => Promise<void>)[] = [];
-  try {
-    rollbacks.push(await gitExclude.apply());
-    rollbacks.push(await memoryInitialization.apply());
-    rollbacks.push(await contextTransition.apply());
-    return { name, packages: desired.names, targets: desired.environment.spec.targets, actions: contextTransition.actions };
-  } catch (error) {
-    return rollbackProjectChanges(rollbacks, error);
-  }
+  return {
+    actions: contextTransition.actions,
+    apply: async () => {
+      const rollbacks: (() => Promise<void>)[] = [];
+      try {
+        rollbacks.push(await gitExclude.apply());
+        rollbacks.push(await memoryInitialization.apply());
+        rollbacks.push(await contextTransition.apply());
+        return { name, packages: desired.names, targets: desired.environment.spec.targets, actions: contextTransition.actions };
+      } catch (error) {
+        return rollbackProjectChanges(rollbacks, error);
+      }
+    },
+  };
 }
 
 export async function activateEnvironment(projectRoot: string, name: string): Promise<EnvironmentActivationResult> {
   if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
-  await reconcileRuntimeState(process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT);
   const desired = await withEnvironmentLock(name, async () => {
     const loaded = await loadOrderedPackages(projectRoot, name);
     await validateEnvironmentView(loaded.environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
     return loaded;
   });
-  return withProjectLock(projectRoot, () => transitionEnvironment(projectRoot, name, desired));
+  return withProjectLock(projectRoot, async () => {
+    const transition = await prepareEnvironmentTransition(projectRoot, name, desired);
+    await reconcileRuntimeState(process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT, name);
+    return transition.apply();
+  });
 }
 
 export async function deactivateEnvironment(projectRoot: string): Promise<EnvironmentActivationResult> {
@@ -530,8 +569,8 @@ export async function deactivateEnvironment(projectRoot: string): Promise<Enviro
 export async function syncEnvironment(projectRoot: string, name: string): Promise<LockedPackage[]> {
   if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
   return withEnvironmentLock(name, async () => {
-    const environment = await readEnvironment(projectRoot, name);
-    const lock = await readEnvironmentLock(projectRoot, name);
+    const environment = await readEnvironmentFile(projectRoot, name);
+    const lock = await readEnvironmentLockFile(projectRoot, name);
     const names = validateEnvironmentLockGraph(environment, lock);
     for (const packageName of names) await syncLockedPackage(lock.packages[packageName]!);
     await validateLock(lock);
@@ -561,11 +600,11 @@ async function findCommand(command: string): Promise<boolean> {
 
 async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Promise<EnvironmentCheck[]> {
   const checks: EnvironmentCheck[] = [];
-  const environment = await readEnvironment(projectRoot, name);
+  const environment = await readEnvironmentFile(projectRoot, name);
   let lock: LockFile;
   let names: string[];
   try {
-    lock = await readEnvironmentLock(projectRoot, name);
+    lock = await readEnvironmentLockFile(projectRoot, name);
     names = await validateEnvironmentLock(environment, lock);
     checks.push({ status: "ok", label: "lock", detail: `${Object.keys(lock.packages).length} packages` });
   } catch (error) {

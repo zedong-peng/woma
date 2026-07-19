@@ -136,3 +136,15 @@ export async function withRuntimeLock<T>(platform: string, operation: () => Prom
     await release();
   }
 }
+
+export async function withPackageLock<T>(name: string, cacheKey: string, operation: () => Promise<T>): Promise<T> {
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error(`Invalid Package lock name: ${name}`);
+  if (!/^[a-f0-9]{20}$/.test(cacheKey)) throw new Error(`Invalid Package cache key: ${cacheKey}`);
+  const directory = path.join(harnessHome(), "locks", "packages", name, `${cacheKey}.lock`);
+  const release = await acquire(directory, `Package ${name}/${cacheKey}`);
+  try {
+    return await operation();
+  } finally {
+    await release();
+  }
+}

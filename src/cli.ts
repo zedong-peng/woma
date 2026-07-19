@@ -6,6 +6,7 @@ import {
   activateEnvironment,
   createEnvironment,
   environmentInfo,
+  environmentSnapshot,
   deactivateEnvironment,
   doctorEnvironment,
   DEFAULT_ENVIRONMENT,
@@ -15,7 +16,6 @@ import {
   FOUNDATIONAL_PACKAGES,
   installIntoEnvironment,
   listEnvironments,
-  readEnvironment,
   readEnvironmentLock,
   removeEnvironment,
   syncEnvironment,
@@ -111,11 +111,7 @@ envCommand
   .description("show an environment recipe and resolved package closure")
   .action(async (name: string, _options: unknown, command: Command) => {
     const project = projectRoot(command);
-    const [environment, lock, active] = await Promise.all([
-      readEnvironment(project, name),
-      readEnvironmentLock(project, name),
-      selectedEnvironment(),
-    ]);
+    const [{ environment, lock }, active] = await Promise.all([environmentSnapshot(project, name), selectedEnvironment()]);
     console.log(`Environment: ${name}${active === name ? " (active)" : ""}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
@@ -179,8 +175,7 @@ program
       return;
     }
     const activeName = selectedEnvironment();
-    const environment = await readEnvironment(project, activeName);
-    const lock = await readEnvironmentLock(project, activeName);
+    const { environment, lock } = await environmentSnapshot(project, activeName);
     console.log(`Environment: ${activeName}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);

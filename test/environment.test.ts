@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   createEnvironment,
   ensureBaseEnvironment,
+  environmentSnapshot,
   environmentLockPath,
   environmentPath,
   parseEnvironment,
@@ -173,6 +174,65 @@ test("activation validates an Environment before creating project files", { conc
   }
 });
 
+test("activation rejects an invalid current Environment before runtime or project mutation", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-invalid-current-"));
+  const project = path.join(root, "project");
+  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  try {
+    await mkdir(project, { recursive: true });
+    await createEnvironment(project, "tools", ["codex"]);
+    const sharedAuth = path.join(process.env.HARNESS_HOME, "runtime", "codex", "auth.json");
+    await writeFile(sharedAuth, '{"auth":"keep"}\n', "utf8");
+    process.env.HARNESS_ENV = "../../victim";
+
+    await assert.rejects(activateEnvironment(project, "tools"), /Invalid Environment name/);
+
+    assert.equal(await readFile(sharedAuth, "utf8"), '{"auth":"keep"}\n');
+    await assert.rejects(access(path.join(project, ".harness")));
+    await assert.rejects(access(path.join(project, ".gitignore")));
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("unknown target activation does not reconcile the current runtime", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-runtime-preflight-"));
+  const project = path.join(root, "project");
+  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  try {
+    await mkdir(project, { recursive: true });
+    await createEnvironment(project, "current", ["codex"]);
+    const viewAuth = path.join(environmentViewPath("current"), "codex", "auth.json");
+    const sharedAuth = path.join(process.env.HARNESS_HOME, "runtime", "codex", "auth.json");
+    await writeFile(viewAuth, '{"auth":"shared-old"}\n', "utf8");
+    await rm(viewAuth);
+    await writeFile(viewAuth, '{"auth":"unreconciled-new"}\n', "utf8");
+    process.env.HARNESS_ENV = "current";
+
+    await assert.rejects(activateEnvironment(project, "missing"), /Unknown environment: missing/);
+
+    assert.equal(await readFile(sharedAuth, "utf8"), '{"auth":"shared-old"}\n');
+    assert.equal((await lstat(viewAuth)).isSymbolicLink(), false);
+    assert.equal(await readFile(viewAuth, "utf8"), '{"auth":"unreconciled-new"}\n');
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("activation keeps both Agent discovery files stable across target changes", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-stable-discovery-"));
   process.env.HARNESS_HOME = path.join(root, "home");
@@ -263,6 +323,20 @@ test("concurrent first reads initialize the implicit base Environment once", { c
     assert.equal(environment.metadata.name, "base");
     assert.deepEqual(environment.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
     assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "meta-skill-builder"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("existing base initialization rejects missing lock and view state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-corruption-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await ensureBaseEnvironment(root);
+    await rm(environmentLockPath(root, "base"), { force: true });
+    await rm(environmentViewPath("base"), { recursive: true, force: true });
+
+    await assert.rejects(ensureBaseEnvironment(root), /base Environment is incomplete or corrupt/i);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -458,6 +532,41 @@ test("install atomically upgrades a package in the active environment", { concur
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
     await assert.rejects(access(path.join(root, ".harness", "state.json")));
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Environment snapshots wait for an in-progress metadata commit", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-snapshot-lock-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const fixture = await environmentPackageFixture(root, "snapshot-package", "1.0.0", "Snapshot package.");
+    await createEnvironment(root, "tools", ["codex"]);
+    let enterCommit!: () => void;
+    let releaseCommit!: () => void;
+    const entered = new Promise<void>((resolve) => (enterCommit = resolve));
+    const release = new Promise<void>((resolve) => (releaseCommit = resolve));
+    const installing = installIntoEnvironment(root, "tools", fixture, process.cwd(), {
+      onResourcesApplied: async () => {
+        enterCommit();
+        await release;
+      },
+    });
+    await entered;
+    let snapshotSettled = false;
+    const snapshotPromise = environmentSnapshot(root, "tools").then((snapshot) => {
+      snapshotSettled = true;
+      return snapshot;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(snapshotSettled, false);
+
+    releaseCommit();
+    await installing;
+    const snapshot = await snapshotPromise;
+    assert.equal(snapshot.environment.spec.roots.some((item) => item.name === "upgrade-package"), true);
+    assert.equal(snapshot.lock.packages["upgrade-package"]?.version, "1.0.0");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { satisfies } from "semver";
 import { assertInside, harnessHome, hashDirectory, pathExists } from "./fs.js";
+import { withPackageLock } from "./environment-lock.js";
 import { loadManifest } from "./schema.js";
 import type { HarnessManifest, InstalledPackage, LockedPackage, PackageDependency } from "./types.js";
 
@@ -243,8 +244,10 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
   const resolved = materialized.resolved === "local" || materialized.resolved === "builtin" ? integrity : materialized.resolved;
   const key = cacheKey(materialized.source, resolved, integrity);
   const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
-  if (!(await pathExists(cacheRoot))) await populateCache(materialized.root, cacheRoot);
-  await verifyCache(cacheRoot, manifest, integrity);
+  await withPackageLock(manifest.metadata.name, key, async () => {
+    if (!(await pathExists(cacheRoot))) await populateCache(materialized.root, cacheRoot);
+    await verifyCache(cacheRoot, manifest, integrity);
+  });
   const lock: LockedPackage = {
     name: manifest.metadata.name,
     version: manifest.metadata.version,
@@ -338,7 +341,7 @@ export async function installPackageTree(source: string, cwd = process.cwd()): P
   return { root, packages: ordered };
 }
 
-export async function loadCachedPackage(lock: LockedPackage): Promise<InstalledPackage> {
+async function loadCachedPackageUnlocked(lock: LockedPackage): Promise<InstalledPackage> {
   const root = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
   if (!(await pathExists(root))) {
     throw new Error(`Package ${lock.name}@${lock.version} is not cached; run harness install ${lock.source}`);
@@ -357,6 +360,10 @@ export async function loadCachedPackage(lock: LockedPackage): Promise<InstalledP
   return { manifest, root, lock };
 }
 
+export function loadCachedPackage(lock: LockedPackage): Promise<InstalledPackage> {
+  return withPackageLock(lock.name, lock.cacheKey, () => loadCachedPackageUnlocked(lock));
+}
+
 function sourceAtRevision(source: string, resolved: string): string {
   if (source.startsWith("file:") || source.startsWith("builtin:")) return source;
   const { locator } = splitRef(source);
@@ -364,38 +371,40 @@ function sourceAtRevision(source: string, resolved: string): string {
 }
 
 export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
-  const expectedRoot = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
-  if (await pathExists(expectedRoot)) {
-    try {
-      return await loadCachedPackage(lock);
-    } catch {
-      await rm(expectedRoot, { recursive: true, force: true });
+  return withPackageLock(lock.name, lock.cacheKey, async () => {
+    const expectedRoot = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
+    if (await pathExists(expectedRoot)) {
+      try {
+        return await loadCachedPackageUnlocked(lock);
+      } catch {
+        await rm(expectedRoot, { recursive: true, force: true });
+      }
     }
-  }
 
-  const materialized = await materializeSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
-  try {
-    const manifest = await loadManifest(materialized.root);
-    await validatePackage(materialized.root, manifest);
-    const integrity = await hashDirectory(materialized.root);
-    if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
-      throw new Error(
-        `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
-      );
+    const materialized = await materializeSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
+    try {
+      const manifest = await loadManifest(materialized.root);
+      await validatePackage(materialized.root, manifest);
+      const integrity = await hashDirectory(materialized.root);
+      if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
+        throw new Error(
+          `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
+        );
+      }
+      if (integrity !== lock.integrity) {
+        throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
+      }
+      if (!lock.source.startsWith("file:") && !lock.source.startsWith("builtin:") && materialized.resolved !== lock.resolved) {
+        throw new Error(`Locked revision mismatch for ${lock.name}: expected ${lock.resolved}, got ${materialized.resolved}`);
+      }
+      await populateCache(materialized.root, expectedRoot);
+      await verifyCache(expectedRoot, manifest, integrity);
+      return { manifest, root: expectedRoot, lock };
+    } catch (error) {
+      await rm(expectedRoot, { recursive: true, force: true });
+      throw error;
+    } finally {
+      await materialized.cleanup?.();
     }
-    if (integrity !== lock.integrity) {
-      throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
-    }
-    if (!lock.source.startsWith("file:") && !lock.source.startsWith("builtin:") && materialized.resolved !== lock.resolved) {
-      throw new Error(`Locked revision mismatch for ${lock.name}: expected ${lock.resolved}, got ${materialized.resolved}`);
-    }
-    await populateCache(materialized.root, expectedRoot);
-    await verifyCache(expectedRoot, manifest, integrity);
-    return { manifest, root: expectedRoot, lock };
-  } catch (error) {
-    await rm(expectedRoot, { recursive: true, force: true });
-    throw error;
-  } finally {
-    await materialized.cleanup?.();
-  }
+  });
 }

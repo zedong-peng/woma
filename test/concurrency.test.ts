@@ -78,3 +78,30 @@ test("concurrent first use initializes base exactly once across processes", asyn
     }
   }
 });
+
+test("different Environments serialize repair of one shared Package cache entry", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-concurrent-cache-repair-"));
+  const home = path.join(root, "home");
+  const env = { ...process.env, HARNESS_HOME: home };
+  try {
+    for (const name of ["a", "b"]) {
+      await run(process.execPath, [cli, "env", "create", name, "--target", "codex"], { cwd: root, env });
+      await run(process.execPath, [cli, "install", "-n", name, "builtin:paper-search"], { cwd: root, env });
+    }
+    const lock = JSON.parse(await readFile(path.join(home, "environments", "a", "lock.json"), "utf8")) as {
+      packages: Record<string, { cacheKey: string }>;
+    };
+    const cacheKey = lock.packages["paper-search"]!.cacheKey;
+    const skill = path.join(home, "packages", "paper-search", cacheKey, "skills", "paper-search", "SKILL.md");
+    await writeFile(skill, "corrupt\n", "utf8");
+
+    await Promise.all([
+      run(process.execPath, [cli, "sync", "-n", "a"], { cwd: root, env }),
+      run(process.execPath, [cli, "sync", "-n", "b"], { cwd: root, env }),
+    ]);
+
+    assert.match(await readFile(skill, "utf8"), /paper-search/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
