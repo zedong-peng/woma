@@ -34,7 +34,6 @@ function projectRoot(command: Command): string {
   const configured = command.optsWithGlobals<{ project?: string }>().project;
   if (configured) return path.resolve(configured);
   let current = path.resolve(process.cwd());
-  let repositoryRoot: string | undefined;
   while (true) {
     try {
       if (statSync(path.join(current, ".harness")).isDirectory()) return current;
@@ -42,17 +41,15 @@ function projectRoot(command: Command): string {
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
     }
-    if (!repositoryRoot) {
-      try {
-        statSync(path.join(current, ".git"));
-        repositoryRoot = current;
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-      }
+    try {
+      statSync(path.join(current, ".git"));
+      return current;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
     }
     const parent = path.dirname(current);
-    if (parent === current) return repositoryRoot ?? path.resolve(process.cwd());
+    if (parent === current) return path.resolve(process.cwd());
     current = parent;
   }
 }

@@ -167,6 +167,28 @@ test("CLI provides a Conda-style base environment default from project subdirect
   }
 });
 
+test("CLI never crosses a Git repository boundary to reuse a parent Project Memory", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-project-boundary-"));
+  const workspace = path.join(root, "workspace");
+  const project = path.join(workspace, "project");
+  const nested = path.join(project, "src");
+  const parentState = path.join(workspace, ".harness", "state.json");
+  try {
+    await mkdir(path.join(project, ".git"), { recursive: true });
+    await mkdir(nested, { recursive: true });
+    await write(parentState, '{"stateVersion":1,"activeEnvironment":{"name":"parent","targets":["codex"],"activatedAt":"parent"}}\n');
+
+    const activated = await runCli(["activate"], nested, path.join(root, "home"));
+
+    assert.equal(activated.code, 0, activated.stderr);
+    assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
+    assert.match(await readFile(path.join(project, ".harness", "state.json"), "utf8"), /"name": "base"/);
+    assert.match(await readFile(parentState, "utf8"), /"name":"parent"/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("CLI always includes foundational packages and rejects the removed without-memory option", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-foundations-"));
   const project = path.join(root, "project");
