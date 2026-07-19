@@ -233,25 +233,27 @@ function emptyLock(): LockFile {
   return { lockfileVersion: 1, packages: {} };
 }
 
-async function readEnvironmentLockFile(projectRoot: string, name: string): Promise<LockFile> {
-  const filePath = environmentLockPath(projectRoot, name);
-  if (!(await pathExists(filePath))) return emptyLock();
+export function parseEnvironmentLock(input: string, source = "lock.json"): LockFile {
   let document: unknown;
   try {
-    document = JSON.parse(await readFile(filePath, "utf8"));
+    document = JSON.parse(input);
   } catch (error) {
-    throw new Error(`Cannot parse ${filePath}: ${(error as Error).message}`);
+    throw new Error(`Cannot parse ${source}: ${(error as Error).message}`);
   }
   const parsed = lockSchema.safeParse(document);
-  if (!parsed.success) {
-    throw new Error(`${filePath}: invalid environment lock\n${formatIssues(parsed.error)}`);
-  }
+  if (!parsed.success) throw new Error(`${source}: invalid environment lock\n${formatIssues(parsed.error)}`);
   for (const [packageName, locked] of Object.entries(parsed.data.packages)) {
     if (packageName !== locked.name) {
-      throw new Error(`${filePath}: lock key ${packageName} does not match package identity ${locked.name}`);
+      throw new Error(`${source}: lock key ${packageName} does not match package identity ${locked.name}`);
     }
   }
   return parsed.data;
+}
+
+async function readEnvironmentLockFile(projectRoot: string, name: string): Promise<LockFile> {
+  const filePath = environmentLockPath(projectRoot, name);
+  if (!(await pathExists(filePath))) return emptyLock();
+  return parseEnvironmentLock(await readFile(filePath, "utf8"), filePath);
 }
 
 export async function readEnvironmentLock(projectRoot: string, name: string): Promise<LockFile> {
@@ -345,6 +347,53 @@ export async function createEnvironment(projectRoot: string, name: string, targe
     throw new Error("The base environment exists implicitly and cannot be created");
   }
   return withEnvironmentLock(name, () => initializeEnvironment(projectRoot, name, targets));
+}
+
+export async function importEnvironmentSnapshot(
+  projectRoot: string,
+  sourceEnvironment: HarnessEnvironment,
+  lock: LockFile,
+  requestedName = sourceEnvironment.metadata.name,
+): Promise<EnvironmentSnapshot> {
+  environmentName.parse(requestedName);
+  if (requestedName === DEFAULT_ENVIRONMENT) {
+    throw new Error("The base environment exists implicitly and cannot be imported; pass --name <name>");
+  }
+  const environment: HarnessEnvironment = {
+    ...sourceEnvironment,
+    metadata: { name: requestedName },
+    spec: {
+      targets: [...sourceEnvironment.spec.targets],
+      roots: sourceEnvironment.spec.roots.map((root) => ({ ...root })),
+    },
+  };
+  environmentSchema.parse(environment);
+  return withEnvironmentLock(requestedName, async () => {
+    const root = path.dirname(environmentPath(projectRoot, requestedName));
+    if (await pathExists(root)) throw new Error(`Environment already exists: ${requestedName}`);
+    const loaded = await loadEnvironmentSnapshot(environment, lock);
+    try {
+      await materializeEnvironmentView(environment, loaded.names.map((name) => loaded.packages.get(name)!), {
+        beforeSwap: async () => {
+          await writeJsonAtomic(environmentLockPath(projectRoot, requestedName), lock);
+          try {
+            await writeEnvironment(projectRoot, environment);
+          } catch (error) {
+            await rm(environmentLockPath(projectRoot, requestedName), { force: true });
+            throw error;
+          }
+          return async () => {
+            await rm(environmentPath(projectRoot, requestedName), { force: true });
+            await rm(environmentLockPath(projectRoot, requestedName), { force: true });
+          };
+        },
+      });
+      return { environment, lock };
+    } catch (error) {
+      await rm(root, { recursive: true, force: true });
+      throw error;
+    }
+  });
 }
 
 export async function listEnvironments(projectRoot: string): Promise<string[]> {

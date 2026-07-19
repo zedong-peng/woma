@@ -2,6 +2,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { captureHarness } from "./capture.js";
+import { exportEnvironmentBundle, importEnvironmentBundle } from "./environment-bundle.js";
 import {
   activateEnvironment,
   createEnvironment,
@@ -124,6 +125,29 @@ envCommand
   .action(async (name: string, _options: unknown, command: Command) => {
     await removeEnvironment(projectRoot(command), name);
     console.log(`Removed environment ${name}`);
+  });
+
+envCommand
+  .command("export")
+  .description("export a portable Environment bundle with its complete Package closure")
+  .requiredOption("-n, --name <environment>", "environment to export")
+  .requiredOption("-o, --output <file>", "destination .harness-env file")
+  .action(async (options: { name: string; output: string }, command: Command) => {
+    const result = await exportEnvironmentBundle(projectRoot(command), options.name, options.output);
+    console.log(`Exported environment ${result.environment} to ${result.path}`);
+    console.log(`  packages  ${result.packages}`);
+    console.log(`  bytes     ${result.bytes}`);
+  });
+
+envCommand
+  .command("import <bundle>")
+  .description("atomically import a portable Environment bundle")
+  .option("--name <environment>", "destination environment name; defaults to the exported name")
+  .action(async (bundle: string, options: { name?: string }, command: Command) => {
+    const result = await importEnvironmentBundle(projectRoot(command), bundle, options.name);
+    console.log(`Imported environment ${result.snapshot.environment.metadata.name} from ${result.path}`);
+    console.log(`  targets   ${result.snapshot.environment.spec.targets.join(", ")}`);
+    console.log(`  packages  ${result.packages}`);
   });
 
 program

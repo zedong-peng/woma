@@ -13,6 +13,7 @@ Harness packages can install agent instructions, MCP process definitions, and Ag
 - Environment activation may add clearly marked Project Memory discovery blocks to `AGENTS.md` and `CLAUDE.md`; it never removes them during target switching. Content outside those blocks, instruction symlinks, and file modes are preserved, and Memory contents remain in their own reviewable files.
 - Shared runtime paths under `$HARNESS_HOME/runtime/` may contain Agent credentials and session data created after first activation. Harness creates parent directories with user-only permissions; protect `$HARNESS_HOME` like the original Agent configuration directories and never publish it.
 - Environment recipes and locks contain package metadata, sources, and integrity values, but never environment-variable values or Agent prompts.
+- `.harness-env` bundles contain the complete locked Package closure and must be treated like executable code. Import validates size limits, paths, identities, dependency edges, and integrity before publishing an Environment. Bundles exclude shared runtime, credentials, sessions, Project Memory, and environment-variable values, but private Package source and file contents remain private and must not be uploaded unintentionally.
 - Portable Project Memory is reviewable Agent context and must never contain credentials; machine-specific memory belongs under the git-ignored `.harness/local/` directory.
 - Environment selection is stored only in the current shell's `HARNESS_ENV` and is never written into a project or uploaded by Harness Conda.
 

@@ -13,6 +13,7 @@ Harness Conda packages Skills, meta-skills, MCP servers, and hooks into reusable
 - An implicit, non-removable `base` Environment.
 - `harness-project-memory` and `meta-skill-builder` in every Environment.
 - Recursive Package dependencies for installable meta-skills.
+- Portable, deterministic Environment bundles for offline migration between machines.
 - Atomically published per-Environment Codex and Claude Code views built from read-only Store symlinks.
 - Atomic Environment view updates and installation rollback on ordinary errors.
 - Direct `codex` and `claude` launches after shell activation; no Agent command proxy.
@@ -57,6 +58,19 @@ codex
 ```
 
 `harness deactivate` returns the current shell to `base`. Every Environment includes the Project Memory manager and meta-skill authoring assistant.
+
+Move the complete Environment, including local `file:` Packages, to another machine without copying credentials or project state:
+
+```bash
+# Source machine
+harness env export --name performance --output performance.harness-env
+
+# Destination machine
+harness env import performance.harness-env
+harness activate performance
+```
+
+Use `--name performance-copy` during import to choose a different Environment name. Import refuses to overwrite an existing Environment.
 
 ## Model
 

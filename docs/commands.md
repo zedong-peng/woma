@@ -13,6 +13,19 @@ harness env remove <name>
 
 Environment recipes and locks are stored under `$HARNESS_HOME/environments/`. `HARNESS_HOME` defaults to `~/.harness-conda`.
 
+## Environment migration
+
+```bash
+harness env export --name <environment> --output <file.harness-env>
+harness env import <file.harness-env> [--name <new-environment>]
+```
+
+`env export` creates one deterministic, gzip-compressed bundle containing the Environment recipe, exact lock, and byte-complete Package dependency closure. It therefore remains importable when an original Git remote is unavailable or a `file:` Package source no longer exists.
+
+`env import` validates the complete bundle before publishing a new global Environment. The exported name is used by default; `--name` selects another name. Import refuses `base` and every existing destination instead of merging or overwriting them.
+
+Bundles contain Package files, Skills, MCP definitions, Hooks, source provenance, and integrity metadata. They do not contain shared Agent runtime, authentication, sessions, environment-variable values, Project Memory, machine-local Memory, `AGENTS.md`, or `CLAUDE.md`. Package instructions and Hooks are executable trust input, so inspect bundles received from another person before activation.
+
 ## Package installation
 
 ```bash

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added deterministic, offline-capable Environment bundle export/import with complete Package closures and atomic destination publication.
 - Added global, content-addressed Package storage and user-global named Environment recipes and locks.
 - Added atomic global per-Environment Codex and Claude views backed by Package Store symlinks.
 - Added shell selection of Environment views for direct `codex` and `claude` launches while preserving shared Agent runtime state.

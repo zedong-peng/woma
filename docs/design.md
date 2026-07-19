@@ -19,6 +19,14 @@ An Environment recipe records root Packages and Agent targets. Its lock records 
 
 `base` is lazily initialized on first use and cannot be removed. Every Environment must contain the built-in `harness-project-memory` and `meta-skill-builder` roots; those identities and sources are reserved. An existing `base` is accepted only after its recipe, lock, Package closure, and complete Agent view validate successfully. `harness sync -n base` deliberately bypasses the healthy-view precondition so a parseable recipe and lock can repair missing Package entries and rebuild the view.
 
+## Portable Environment bundles
+
+A `.harness-env` file is a versioned, gzip-compressed JSON document containing one Environment recipe, its exact lock, and every regular file in the locked Package closure. Binary files are Base64 encoded and file read/execute modes are preserved. Stable key ordering and a deterministic gzip stream make repeated exports of an unchanged Environment byte-identical.
+
+Import limits compressed, decompressed, file-count, and decoded payload sizes. It rejects unsafe or duplicate paths, symbolic and special files, writable bundled modes, malformed Base64, duplicate or missing Packages, cache-key drift, Package identity or integrity drift, invalid dependency graphs, foundational Package spoofing, unsupported targets, `base`, and existing destination names. Bundled foundational Packages must exactly match the builtins shipped with the importing Harness Conda installation. All Package trees are materialized and validated in temporary storage before Package Store publication. The Environment recipe, lock, and view are then published through the ordinary Environment transaction, so a normal failure leaves no partially visible Environment.
+
+Bundles deliberately exclude `$HARNESS_HOME/runtime`, project files, Project Memory, machine-local Memory, and actual environment-variable values. Source strings and Package content are retained for provenance and offline restoration; a bundle should therefore be treated as executable Package input, not as a credential or session backup.
+
 ## Activation and direct Agent launch
 
 Every Environment owns one reusable Agent view:
