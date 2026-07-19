@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { prepareMemoryBootstrapTransition, type MemoryBootstrapEnvironment } from "../src/memory-bootstrap.js";
+import { removeTestTree } from "./helpers.js";
 
 function environment(targets: ("codex" | "claude")[], hasMemoryPackage = true): MemoryBootstrapEnvironment {
   return { targets, hasMemoryPackage };
@@ -26,7 +27,7 @@ test("Memory bootstrap points to the normally activated Skill and preserves user
     await rollback();
     assert.equal(await readFile(agentsPath, "utf8"), original);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -49,7 +50,7 @@ test("Memory bootstrap never removes another target's stable discovery pointer",
       /discovery block was modified/,
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -68,7 +69,7 @@ test("Memory bootstrap preserves instruction symlinks and their targets", async 
     assert.match(await readFile(target, "utf8"), /Shared instructions[\s\S]*Harness Project Memory/);
     assert.equal((await stat(target)).mode & 0o777, 0o640);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -81,6 +82,6 @@ test("Memory bootstrap is absent when the ordinary Memory package is not active"
     await assert.rejects(readFile(path.join(root, "AGENTS.md"), "utf8"), /ENOENT/);
     await assert.rejects(readFile(path.join(root, "CLAUDE.md"), "utf8"), /ENOENT/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });

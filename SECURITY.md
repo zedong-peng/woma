@@ -7,6 +7,7 @@ Harness packages can install agent instructions, MCP process definitions, and Ag
 - Manifests declare environment variable names only. Never put credential values in a manifest.
 - `capture` rejects literal MCP environment and header values instead of exporting possible secrets.
 - Skill directories containing symbolic links are rejected so package content cannot escape its root during installation.
+- Content-addressed Package entries are published without write permission. Their Environment Skill links are read-only views; use Harness repair paths rather than editing Store contents. To remove an entire development `HARNESS_HOME` manually, restore owner write permission first with `chmod -R u+w "$HARNESS_HOME"`.
 - Project-scoped MCP servers still require the trust and approval flow of the target agent.
 - Activation refuses conflicting skills and MCP entries. Deactivation leaves user-modified artifacts in place.
 - Environment activation may add clearly marked Project Memory discovery blocks to `AGENTS.md` and `CLAUDE.md`; it never removes them during target switching. Content outside those blocks, instruction symlinks, and file modes are preserved, and Memory contents remain in their own reviewable files.

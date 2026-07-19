@@ -3,7 +3,11 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 demo_root="$(mktemp -d)"
-trap 'rm -rf "$demo_root"' EXIT
+cleanup() {
+  chmod -R u+w "$demo_root" 2>/dev/null || true
+  rm -rf "$demo_root"
+}
+trap cleanup EXIT
 
 mkdir -p "$demo_root/project"
 export HARNESS_HOME="$demo_root/home"

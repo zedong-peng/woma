@@ -20,6 +20,7 @@ import {
   syncEnvironment,
 } from "../src/environment.js";
 import { environmentViewPath } from "../src/view.js";
+import { removeTestTree } from "./helpers.js";
 import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 
 async function environmentPackageFixture(
@@ -112,7 +113,7 @@ test("removing an environment preserves user-owned Project Memory", { concurrenc
     assert.equal(await readFile(projectMemoryPath(root), "utf8"), "# Shared knowledge\n");
     assert.equal(await readFile(scoped, "utf8"), "# Research adaptation\n");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -153,7 +154,7 @@ test("global environments are shared across projects while Project Memory remain
     assert.match(await readFile(projectMemoryPath(secondProject), "utf8"), /Project Memory/);
     assert.notEqual(packageMemoryPath(firstProject, "paper-search"), packageMemoryPath(secondProject, "paper-search"));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -170,7 +171,7 @@ test("activation validates an Environment before creating project files", { conc
     await assert.rejects(access(path.join(project, ".gitignore")));
     await assert.rejects(access(path.join(project, "AGENTS.md")));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -198,7 +199,7 @@ test("activation rejects an invalid current Environment before runtime or projec
     else process.env.HARNESS_ENV = previousEnvironment;
     if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
     else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -229,7 +230,7 @@ test("unknown target activation does not reconcile the current runtime", { concu
     else process.env.HARNESS_ENV = previousEnvironment;
     if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
     else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -249,7 +250,7 @@ test("activation keeps both Agent discovery files stable across target changes",
     assert.equal(await readFile(claudePath, "utf8"), before);
     assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /Harness Project Memory/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -270,7 +271,7 @@ test("failed discovery validation leaves project initialization unchanged", { co
     await assert.rejects(access(path.join(project, ".gitignore")));
     await assert.rejects(access(path.join(project, "AGENTS.md")));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -290,7 +291,7 @@ test("environment removal is guarded by the current shell only", { concurrency: 
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -308,7 +309,7 @@ test("global Environment reads reject missing foundational packages", { concurre
     );
     await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package meta-skill-builder/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -324,7 +325,7 @@ test("concurrent first reads initialize the implicit base Environment once", { c
     assert.deepEqual(environment.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
     assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "meta-skill-builder"]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -338,7 +339,23 @@ test("existing base initialization rejects missing lock and view state", { concu
 
     await assert.rejects(ensureBaseEnvironment(root), /base Environment is incomplete or corrupt/i);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
+  }
+});
+
+test("sync repairs a missing base view without requiring a healthy view first", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-sync-repair-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await ensureBaseEnvironment(root);
+    await rm(environmentViewPath("base"), { force: true });
+
+    await syncEnvironment(root, "base");
+
+    assert.equal((await lstat(environmentViewPath("base"))).isSymbolicLink(), true);
+    await ensureBaseEnvironment(root);
+  } finally {
+    await removeTestTree(root);
   }
 });
 
@@ -353,7 +370,7 @@ test("install can initialize and lock base as the first Harness command", { conc
       "paper-search",
     ]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -371,7 +388,7 @@ test("environment locks reject keys that do not match package identities", { con
 
     await assert.rejects(readEnvironmentLock(root, "research"), /lock key alias does not match package identity paper-search/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -398,7 +415,7 @@ test("install and sync reject unreachable lock packages before resolving their s
       /packages unreachable from its roots: rogue/,
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -417,7 +434,7 @@ test("doctor derives activation exclusively from the shell Environment", { concu
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -441,7 +458,7 @@ test("doctor reports modified Agent Memory discovery instructions", { concurrenc
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -478,7 +495,7 @@ spec:
       detail: "not found on PATH",
     });
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -512,7 +529,7 @@ spec:
     const checks = await doctorEnvironment(root, "tools");
     assert.equal(checks.some((check) => check.label === "command:harness-claude-command-that-does-not-exist"), false);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -533,7 +550,7 @@ test("install atomically upgrades a package in the active environment", { concur
     await assert.rejects(access(path.join(root, ".harness", "state.json")));
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -568,7 +585,7 @@ test("Environment snapshots wait for an in-progress metadata commit", { concurre
     assert.equal(snapshot.environment.spec.roots.some((item) => item.name === "upgrade-package"), true);
     assert.equal(snapshot.lock.packages["upgrade-package"]?.version, "1.0.0");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -600,7 +617,7 @@ test("active install restores project state when the new package conflicts after
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
     delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -640,7 +657,7 @@ test("active install rolls back when interrupted after resources are applied", {
     assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -662,7 +679,7 @@ test("reinstalling a foundational package preserves its recipe, lock, Skill, and
       /Persist stable knowledge automatically/,
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -684,6 +701,170 @@ test("install rebuilds a modified global view from immutable Package contents", 
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
     await assert.rejects(access(path.join(root, ".harness", "state.json")));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
+  }
+});
+
+test("activation holds the target Environment lock through the project transition", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-activation-remove-lock-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
+  process.env.HARNESS_ENV = "base";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    let entered!: () => void;
+    let release!: () => void;
+    const projectApplied = new Promise<void>((resolve) => (entered = resolve));
+    const continueActivation = new Promise<void>((resolve) => (release = resolve));
+    const activation = activateEnvironment(root, "tools", {
+      onProjectApplied: async () => {
+        entered();
+        await continueActivation;
+      },
+    });
+    await projectApplied;
+    let removed = false;
+    const removal = removeEnvironment(root, "tools").then(() => {
+      removed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(removed, false);
+
+    release();
+    await activation;
+    await removal;
+    assert.equal(removed, true);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    await removeTestTree(root);
+  }
+});
+
+test("project initialization failure happens before runtime reconciliation", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-activation-runtime-rollback-"));
+  const project = path.join(root, "project");
+  process.env.HARNESS_HOME = path.join(root, "home");
+  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
+  process.env.HARNESS_ENV = "base";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  try {
+    await ensureBaseEnvironment(project);
+    await createEnvironment(project, "tools", ["codex"]);
+    await mkdir(project, { recursive: true });
+    await writeFile(path.join(project, ".harness"), "blocks memory initialization\n", "utf8");
+    const baseAuth = path.join(environmentViewPath("base"), "codex", "auth.json");
+    const sharedAuth = path.join(process.env.HARNESS_HOME, "runtime", "codex", "auth.json");
+    await writeFile(sharedAuth, "old\n", "utf8");
+    await rm(baseAuth, { force: true });
+    await writeFile(baseAuth, "new-but-not-reconciled\n", "utf8");
+
+    await assert.rejects(activateEnvironment(project, "tools"), /ENOTDIR|not a directory/);
+
+    assert.equal(await readFile(sharedAuth, "utf8"), "old\n");
+    assert.equal((await lstat(baseAuth)).isSymbolicLink(), false);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    await removeTestTree(root);
+  }
+});
+
+test("runtime preflight failure rolls back project activation before runtime mutation", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-runtime-preflight-rollback-"));
+  const project = path.join(root, "project");
+  process.env.HARNESS_HOME = path.join(root, "home");
+  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
+  const previousClaudeHome = process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+  process.env.HARNESS_ENV = "base";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  try {
+    await mkdir(project, { recursive: true });
+    await ensureBaseEnvironment(project);
+    await createEnvironment(project, "tools", ["codex", "claude"]);
+    const baseAuth = path.join(environmentViewPath("base"), "codex", "auth.json");
+    const sharedAuth = path.join(process.env.HARNESS_HOME, "runtime", "codex", "auth.json");
+    await writeFile(sharedAuth, "old\n", "utf8");
+    await rm(baseAuth, { force: true });
+    await writeFile(baseAuth, "new-but-not-reconciled\n", "utf8");
+    const projects = path.join(environmentViewPath("base"), "claude", "projects");
+    await rm(projects, { force: true });
+    await mkdir(projects);
+
+    await assert.rejects(activateEnvironment(project, "tools"), /Unsupported runtime path/);
+
+    assert.equal(await readFile(sharedAuth, "utf8"), "old\n");
+    assert.equal((await lstat(baseAuth)).isSymbolicLink(), false);
+    await assert.rejects(access(path.join(project, ".harness")));
+    await assert.rejects(access(path.join(project, "AGENTS.md")));
+    await assert.rejects(access(path.join(project, "CLAUDE.md")));
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    if (previousClaudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaudeHome;
+    await removeTestTree(root);
+  }
+});
+
+test("foundational Package names cannot be replaced by user sources", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-foundational-identity-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const replacement = path.join(root, "replacement");
+    await mkdir(path.join(replacement, "skills", "harness-project-memory"), { recursive: true });
+    await writeFile(
+      path.join(replacement, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: harness-project-memory
+  version: 9.0.0
+  description: Untrusted replacement.
+spec:
+  platforms: [codex]
+  skills:
+    - name: harness-project-memory
+      path: ./skills/harness-project-memory
+`,
+      "utf8",
+    );
+    await writeFile(
+      path.join(replacement, "skills", "harness-project-memory", "SKILL.md"),
+      "---\nname: harness-project-memory\ndescription: Replacement.\n---\nReplacement.\n",
+      "utf8",
+    );
+    await createEnvironment(root, "tools", ["codex"]);
+
+    await assert.rejects(installIntoEnvironment(root, "tools", replacement), /can only be installed from builtin:/);
+    assert.equal((await readEnvironmentLock(root, "tools")).packages["harness-project-memory"]?.source, "builtin:harness-project-memory");
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("doctor rejects undeclared extra Skills in an Environment view", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-view-extra-skill-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    await mkdir(path.join(environmentViewPath("tools"), "codex", "skills", "undeclared"));
+
+    const viewCheck = (await doctorEnvironment(root, "tools")).find((check) => check.label === "view");
+    assert.equal(viewCheck?.status, "fail");
+    assert.match(viewCheck?.detail ?? "", /visibility differs from the lock/);
+  } finally {
+    await removeTestTree(root);
   }
 });

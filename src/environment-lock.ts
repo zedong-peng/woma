@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { mkdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { harnessHome, writeJsonAtomic } from "./fs.js";
 
@@ -115,7 +115,11 @@ export async function withEnvironmentLock<T>(name: string, operation: () => Prom
 }
 
 export async function withProjectLock<T>(projectRoot: string, operation: () => Promise<T>): Promise<T> {
-  const project = path.resolve(projectRoot);
+  const resolved = path.resolve(projectRoot);
+  const project = await realpath(resolved).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return resolved;
+    throw error;
+  });
   const key = createHash("sha256").update(project).digest("hex").slice(0, 24);
   const directory = path.join(harnessHome(), "locks", "projects", `${key}.lock`);
   const release = await acquire(directory, `project ${project}`);

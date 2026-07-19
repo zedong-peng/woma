@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { validRange } from "semver";
+import { valid, validRange } from "semver";
 import type { HarnessManifest } from "./types.js";
 
 const packageName = z
@@ -12,6 +12,7 @@ const packageName = z
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
 const envName = z.string().regex(/^[A-Z_][A-Z0-9_]*$/, "must be an environment variable name");
 const platform = z.enum(["codex", "claude"]);
+const platformList = z.array(platform).min(1).refine((items) => new Set(items).size === items.length, "must not contain duplicates");
 const versionRange = z.string().min(1).refine((value) => validRange(value) !== null, "must be a valid semver range");
 
 const stdioMcp = z
@@ -21,7 +22,7 @@ const stdioMcp = z
     command: z.string().min(1),
     args: z.array(z.string()).default([]),
     env: z.array(envName).default([]),
-    platforms: z.array(platform).min(1).optional(),
+    platforms: platformList.optional(),
   })
   .strict();
 
@@ -31,7 +32,7 @@ const remoteMcp = z
     transport: z.enum(["http", "sse", "ws"]),
     url: z.string().url(),
     headers: z.record(z.string().min(1), envName).default({}),
-    platforms: z.array(platform).min(1).optional(),
+    platforms: platformList.optional(),
   })
   .strict();
 
@@ -42,14 +43,14 @@ const manifestSchema = z
     metadata: z
       .object({
         name: packageName,
-        version: z.string().regex(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, "must be semver"),
+        version: z.string().refine((value) => valid(value) !== null, "must be valid SemVer"),
         description: z.string().min(1).max(300),
         tags: z.array(packageName).default([]),
       })
       .strict(),
     spec: z
       .object({
-        platforms: z.array(platform).min(1).default(["codex", "claude"]),
+        platforms: platformList.default(["codex", "claude"]),
         dependencies: z
           .array(
             z
@@ -108,7 +109,7 @@ const manifestSchema = z
                 matcher: z.string().min(1).optional(),
                 command: z.string().min(1),
                 timeout: z.number().int().positive().optional(),
-                platforms: z.array(platform).min(1).optional(),
+                platforms: platformList.optional(),
               })
               .strict(),
           )

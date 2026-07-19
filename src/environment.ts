@@ -27,6 +27,7 @@ const platform = z.enum(["codex", "claude"]);
 
 export const DEFAULT_ENVIRONMENT = "base";
 export const FOUNDATIONAL_PACKAGES = ["harness-project-memory", "meta-skill-builder"] as const;
+const FOUNDATIONAL_SOURCES = new Map(FOUNDATIONAL_PACKAGES.map((name) => [name, `builtin:${name}`]));
 const baseInitializations = new Map<string, Promise<HarnessEnvironment>>();
 
 const lockedPackageSchema = z
@@ -108,6 +109,10 @@ interface EnvironmentInstallHooks {
   onResourcesApplied?: () => Promise<void> | void;
 }
 
+interface EnvironmentActivationHooks {
+  onProjectApplied?: () => Promise<void> | void;
+}
+
 export function environmentsRoot(_projectRoot?: string): string {
   return path.join(harnessHome(), "environments");
 }
@@ -156,8 +161,12 @@ async function readEnvironmentFile(projectRoot: string, name: string): Promise<H
     throw new Error(`${filePath}: metadata.name must match filename ${name}`);
   }
   for (const foundational of FOUNDATIONAL_PACKAGES) {
-    if (!environment.spec.roots.some((root) => root.name === foundational)) {
+    const root = environment.spec.roots.find((candidate) => candidate.name === foundational);
+    if (!root) {
       throw new Error(`${filePath}: missing foundational root package ${foundational}`);
+    }
+    if (root.source !== FOUNDATIONAL_SOURCES.get(foundational)) {
+      throw new Error(`${filePath}: foundational package ${foundational} must use builtin:${foundational}`);
     }
   }
   return environment;
@@ -439,7 +448,12 @@ export async function installIntoEnvironment(
       readEnvironmentLockFile(projectRoot, environmentNameValue),
     ]);
     validateEnvironmentLockGraph(environment, currentLock);
+    const previous = await loadEnvironmentSnapshot(environment, currentLock);
     const installation = await installPackageTree(source, cwd);
+    const foundationalSource = FOUNDATIONAL_SOURCES.get(installation.root.lock.name as typeof FOUNDATIONAL_PACKAGES[number]);
+    if (foundationalSource && installation.root.lock.source !== foundationalSource) {
+      throw new Error(`Foundational package ${installation.root.lock.name} can only be installed from ${foundationalSource}`);
+    }
     const next: LockFile = { lockfileVersion: 1, packages: { ...currentLock.packages } };
     for (const pkg of installation.packages) {
       const existing = currentLock.packages[pkg.lock.name];
@@ -461,6 +475,7 @@ export async function installIntoEnvironment(
     const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
     const desired = await loadEnvironmentSnapshot(updated, pruned);
     await materializeEnvironmentView(updated, desired.names.map((name) => desired.packages.get(name)!), {
+      previousPackages: previous.names.map((name) => previous.packages.get(name)!),
       afterSwap: async () => {
         await hooks.onResourcesApplied?.();
         await writeEnvironmentInstall(projectRoot, environmentNameValue, updated, pruned, currentLock);
@@ -479,6 +494,15 @@ async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: Lo
       if (!pkg.manifest.spec.platforms.includes(target)) {
         throw new Error(`${pkg.manifest.metadata.name} does not support environment target ${target}`);
       }
+    }
+  }
+  for (const foundational of FOUNDATIONAL_PACKAGES) {
+    const pkg = packages.get(foundational);
+    if (!pkg || pkg.lock.source !== FOUNDATIONAL_SOURCES.get(foundational)) {
+      throw new Error(`Foundational package ${foundational} must resolve from builtin:${foundational}`);
+    }
+    if (!pkg.manifest.spec.skills.some((skill) => skill.name === foundational)) {
+      throw new Error(`Foundational package ${foundational} must provide Skill ${foundational}`);
     }
   }
   return { environment, lock, names, packages };
@@ -517,7 +541,7 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
 
 interface PreparedEnvironmentTransition {
   actions: Action[];
-  apply: () => Promise<EnvironmentActivationResult>;
+  apply: () => Promise<{ result: EnvironmentActivationResult; rollback: () => Promise<void> }>;
 }
 
 async function prepareEnvironmentTransition(
@@ -540,7 +564,20 @@ async function prepareEnvironmentTransition(
         rollbacks.push(await gitExclude.apply());
         rollbacks.push(await memoryInitialization.apply());
         rollbacks.push(await contextTransition.apply());
-        return { name, packages: desired.names, targets: desired.environment.spec.targets, actions: contextTransition.actions };
+        return {
+          result: { name, packages: desired.names, targets: desired.environment.spec.targets, actions: contextTransition.actions },
+          rollback: async () => {
+            const errors: unknown[] = [];
+            for (const rollback of [...rollbacks].reverse()) {
+              try {
+                await rollback();
+              } catch (error) {
+                errors.push(error);
+              }
+            }
+            if (errors.length > 0) throw new AggregateError(errors, "Could not roll back the project Environment transition");
+          },
+        };
       } catch (error) {
         return rollbackProjectChanges(rollbacks, error);
       }
@@ -548,17 +585,31 @@ async function prepareEnvironmentTransition(
   };
 }
 
-export async function activateEnvironment(projectRoot: string, name: string): Promise<EnvironmentActivationResult> {
+export async function activateEnvironment(
+  projectRoot: string,
+  name: string,
+  hooks: EnvironmentActivationHooks = {},
+): Promise<EnvironmentActivationResult> {
   if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
-  const desired = await withEnvironmentLock(name, async () => {
+  return withEnvironmentLock(name, async () => {
     const loaded = await loadOrderedPackages(projectRoot, name);
     await validateEnvironmentView(loaded.environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
-    return loaded;
-  });
-  return withProjectLock(projectRoot, async () => {
-    const transition = await prepareEnvironmentTransition(projectRoot, name, desired);
-    await reconcileRuntimeState(process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT, name);
-    return transition.apply();
+    return withProjectLock(projectRoot, async () => {
+      const transition = await prepareEnvironmentTransition(projectRoot, name, loaded);
+      const applied = await transition.apply();
+      try {
+        await hooks.onProjectApplied?.();
+        await reconcileRuntimeState(process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT, name);
+        return applied.result;
+      } catch (error) {
+        try {
+          await applied.rollback();
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], "Activation failed and project rollback was incomplete");
+        }
+        throw error;
+      }
+    });
   });
 }
 
@@ -567,7 +618,9 @@ export async function deactivateEnvironment(projectRoot: string): Promise<Enviro
 }
 
 export async function syncEnvironment(projectRoot: string, name: string): Promise<LockedPackage[]> {
-  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
+  if (name === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, name)))) {
+    await ensureBaseEnvironment(projectRoot);
+  }
   return withEnvironmentLock(name, async () => {
     const environment = await readEnvironmentFile(projectRoot, name);
     const lock = await readEnvironmentLockFile(projectRoot, name);
@@ -575,7 +628,9 @@ export async function syncEnvironment(projectRoot: string, name: string): Promis
     for (const packageName of names) await syncLockedPackage(lock.packages[packageName]!);
     await validateLock(lock);
     const loaded = await loadEnvironmentSnapshot(environment, lock);
-    await materializeEnvironmentView(environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
+    await materializeEnvironmentView(environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!), {
+      previousPackages: loaded.names.map((packageName) => loaded.packages.get(packageName)!),
+    });
     return Object.values(lock.packages);
   });
 }

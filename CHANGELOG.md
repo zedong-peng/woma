@@ -9,6 +9,10 @@
 - Made Project Memory discovery stable across shell-local target changes while preserving instruction symlinks and file modes.
 - Added a shared runtime root for first-use authentication and session state, including activation-time reconciliation of Agent file replacement and Claude runtime fields.
 - Added an implicit, non-removable `base` Environment.
+- Made Package Store entries read-only and Agent view publication generation-atomic.
+- Made `base` repairable from its lock even when its cache or view is damaged.
+- Hardened shell selection, foundational Package identity, exact Skill visibility, and canonical project locking.
+- Replaced Claude Environment-to-Environment shallow merges with an authoritative shared runtime snapshot.
 - Made `harness-project-memory` and `meta-skill-builder` foundational in every Environment.
 - Added recursive Package dependencies and installable natural-language meta-skills.
 - Added atomic Environment view updates and installation with ordinary-error rollback.

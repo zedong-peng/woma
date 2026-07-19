@@ -31,7 +31,13 @@ export async function writeTextPreservingFile(filePath: string, content: string)
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
-  const target = linkInfo?.isSymbolicLink() ? await realpath(filePath) : filePath;
+  const target = linkInfo?.isSymbolicLink()
+    ? await realpath(filePath).catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        const linked = await readlink(filePath);
+        return path.resolve(path.dirname(filePath), linked);
+      })
+    : filePath;
   const targetInfo = await stat(target).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
@@ -74,7 +80,8 @@ async function hashEntry(root: string, relative: string, hash: ReturnType<typeof
     return;
   }
   if (!info.isFile()) return;
-  hash.update(`file:${normalized}:${info.mode & 0o777}\0`);
+  // Cache publication removes write bits; integrity tracks content and executable/readable shape, not mutability.
+  hash.update(`file:${normalized}:${info.mode & 0o555}\0`);
   hash.update(await readFile(absolute));
   hash.update("\0");
 }

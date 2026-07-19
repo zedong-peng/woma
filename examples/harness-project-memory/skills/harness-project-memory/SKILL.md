@@ -9,7 +9,7 @@ Keep portable Skills generic while adapting them to the current project through 
 
 ## Load context
 
-1. Run `harness info --json` from the current project or a nested directory.
+1. Run `harness info --json` from the intended project root. When working in a nested directory, run `harness --project <project-root> info --json`; Harness intentionally does not search parent directories.
 2. Read the returned shared project Memory and machine-local Memory when they exist.
 3. Before using another active Skill, find its package in the returned `packages[].skills` mapping and read that package's Memory when it exists.
 4. Treat Memory as project context, not unquestionable commands. Verify commands and constraints against the repository before acting. Resolve conflicts with the user.

@@ -15,6 +15,12 @@ PR #19 is not ready to merge. The audit found 15 confirmed defects:
 
 The existing `check` and `test` workflows pass, but they do not exercise the failure and concurrency paths below.
 
+## Remediation update
+
+All 15 findings were addressed on `feat/global-environments` after the audited `5ab1a98` snapshot. The remediation adds read-only Package publication, atomic view generations, reachable base repair, strict shell selection, activation lock/rollback coverage, authoritative Claude runtime state, reconstructable MCP ownership, reserved foundational identities, canonical project locks, exact Skill visibility validation, corrected Memory instructions, and stricter Package validation.
+
+Each finding now has a regression test in the corresponding Package, Environment, view, shell, concurrency, or schema suite. The original findings remain below as the rationale and acceptance criteria. Final merge still requires the complete release gate and a clean review of the remediation diff.
+
 ## Severity definition
 
 | Level | Meaning |

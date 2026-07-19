@@ -13,7 +13,7 @@ Harness Conda packages Skills, meta-skills, MCP servers, and hooks into reusable
 - An implicit, non-removable `base` Environment.
 - `harness-project-memory` and `meta-skill-builder` in every Environment.
 - Recursive Package dependencies for installable meta-skills.
-- Global per-Environment Codex and Claude Code views built from Store symlinks.
+- Atomically published per-Environment Codex and Claude Code views built from read-only Store symlinks.
 - Atomic Environment view updates and installation rollback on ordinary errors.
 - Direct `codex` and `claude` launches after shell activation; no Agent command proxy.
 
@@ -68,7 +68,8 @@ codex
 └── environments/<name>/
     ├── environment.yaml         root Packages and Agent targets
     ├── lock.json                exact recursive dependency closure
-    └── view/
+    ├── view -> .view.gen-<id>    atomic pointer to one complete generation
+    └── .view.gen-<id>/
         ├── codex/               Codex Skills, MCP, Hooks, and shared-state links
         └── claude/              Claude Skills, MCP, Hooks, and shared-state links
 
@@ -77,7 +78,7 @@ codex
 └── local/                       machine-local Memory
 ```
 
-Each Skill in a view is a symbolic link into the immutable Package Store. Installing into an Environment transactionally refreshes the managed paths in that one global view, so every project and new Agent process using the Environment observes the same dependency closure:
+Each Skill in a view is a symbolic link into a read-only Package Store entry. Installing into an Environment builds a complete immutable view generation and publishes it with one atomic `view` symlink replacement, so every project and new Agent process observes either the old or new dependency closure, never a path-by-path mixture:
 
 ```text
 project/shell -> Environment view -> Package Store

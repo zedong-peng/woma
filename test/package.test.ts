@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { installPackageSource, installPackageTree, loadCachedPackage, syncLockedPackage } from "../src/package.js";
 import { createEnvironment, installIntoEnvironment, readEnvironmentLock } from "../src/environment.js";
+import { removeTestTree } from "./helpers.js";
 
 const run = promisify(execFile);
 
@@ -32,7 +34,7 @@ spec:
       path: ./skills/integrity-skill
 `,
   );
-  await write(path.join(packageRoot, "skills", "integrity-skill", "SKILL.md"), "---\ndescription: Test.\n---\nTest.\n");
+  await write(path.join(packageRoot, "skills", "integrity-skill", "SKILL.md"), "---\nname: integrity-skill\ndescription: Test.\n---\nTest.\n");
   return packageRoot;
 }
 
@@ -87,7 +89,7 @@ test("the built-in auto-research meta-skill installs its documented component Sk
     ]);
     assert.deepEqual(installation.root.lock.dependencies, ["paper-search", "idea-gen", "exp-design"]);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -111,7 +113,7 @@ test("the built-in meta-skill builder is a valid installable authoring package",
     assert.match(instructions, /interruption checkpoints/);
     assert.match(instructions, /Do not introduce a DAG/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -130,8 +132,10 @@ test("the built-in Project Memory manager is a normal installable Skill package"
     assert.match(instructions, /harness info --json/);
     assert.match(instructions, /even if the user does not explicitly ask to remember it/);
     assert.match(instructions, /before using another active Skill/);
+    assert.match(instructions, /--project <project-root> info --json/);
+    assert.doesNotMatch(instructions, /current project or a nested directory/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -142,7 +146,7 @@ test("the built-in performance method does not require command bindings", { conc
     const installation = await installPackageTree("builtin:performance-engineering");
     assert.deepEqual(installation.root.manifest.spec.requirements, { env: [], commands: ["git", "node"] });
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -164,7 +168,7 @@ test("installing a meta-skill resolves transitive dependencies in dependency-fir
     assert.deepEqual(installation.packages[1]?.lock.dependencies, ["paper-search"]);
 
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -180,7 +184,7 @@ test("dependency installation rejects cycles", { concurrency: false }, async () 
     ]);
     await assert.rejects(installPackageTree(first), /Package dependency cycle: first -> second -> first/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -212,7 +216,7 @@ test("dependency installation rejects version and source conflicts", { concurren
     ]);
     await assert.rejects(installPackageTree(mismatch), /requires \^3\.0\.0.*resolved to 1\.0\.0/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -231,7 +235,7 @@ test("failed dependency resolution leaves the previous lock unchanged", { concur
     await assert.rejects(installIntoEnvironment(project, "stable", broken), /Local source does not exist/);
     assert.deepEqual(await readEnvironmentLock(project, "stable"), before);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -262,7 +266,7 @@ test("an install cannot invalidate dependencies already present in the lock", { 
     );
     assert.deepEqual(await readEnvironmentLock(project, "tools"), before);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -286,7 +290,7 @@ test("a Git package cannot read a local dependency source", { concurrency: false
       /remote-package.*cannot use local dependency source \.\.\/local-secret/,
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -295,10 +299,74 @@ test("cache integrity detects package mutation", { concurrency: false }, async (
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     const pkg = await installPackageSource(await packageFixture(root));
-    await writeFile(path.join(pkg.root, "skills", "integrity-skill", "SKILL.md"), "changed", "utf8");
+    const skillDocument = path.join(pkg.root, "skills", "integrity-skill", "SKILL.md");
+    await chmod(skillDocument, 0o600);
+    await writeFile(skillDocument, "changed", "utf8");
+    await chmod(skillDocument, 0o400);
     await assert.rejects(loadCachedPackage(pkg.lock), /Integrity mismatch/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
+  }
+});
+
+test("published Package Store entries are read-only through Skill views", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-readonly-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const pkg = await installPackageSource(await packageFixture(root));
+    const skillDocument = path.join(pkg.root, "skills", "integrity-skill", "SKILL.md");
+    await assert.rejects(access(skillDocument, constants.W_OK), /EACCES/);
+    await assert.rejects(writeFile(skillDocument, "cannot mutate\n", "utf8"), /EACCES/);
+    await chmod(skillDocument, 0o600);
+    await assert.rejects(loadCachedPackage(pkg.lock), /Cached package is writable/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("Package validation rejects Skill identity mismatches", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-skill-name-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = await packageFixture(root);
+    await writeFile(
+      path.join(packageRoot, "skills", "integrity-skill", "SKILL.md"),
+      "---\nname: different-skill\ndescription: Wrong identity.\n---\nWrong.\n",
+      "utf8",
+    );
+    await assert.rejects(installPackageSource(packageRoot), /frontmatter name must match/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("Package validation rejects MCP targets outside Package platforms", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-mcp-platform-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = path.join(root, "package");
+    await mkdir(packageRoot);
+    await writeFile(
+      path.join(packageRoot, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: targeted-mcp
+  version: 1.0.0
+  description: Target validation fixture.
+spec:
+  platforms: [codex]
+  mcpServers:
+    - name: claude-only
+      transport: stdio
+      command: node
+      platforms: [claude]
+`,
+      "utf8",
+    );
+    await assert.rejects(installPackageSource(packageRoot), /targets claude, which is not listed/);
+  } finally {
+    await removeTestTree(root);
   }
 });
 
@@ -309,7 +377,7 @@ test("cache loading rejects a lock whose package identity was changed", { concur
     const pkg = await installPackageSource(await packageFixture(root));
     await assert.rejects(loadCachedPackage({ ...pkg.lock, version: "2.0.0" }), /Locked identity mismatch/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -322,7 +390,7 @@ test("packages reject skill symlinks", { concurrency: false }, async () => {
     await symlink(path.join(root, "outside.txt"), path.join(packageRoot, "skills", "integrity-skill", "outside.txt"));
     await assert.rejects(installPackageSource(packageRoot), /unsupported symlink/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -339,20 +407,22 @@ test("packages reject a declared skill root symlink", { concurrency: false }, as
     await symlink(outside, skillRoot);
     await assert.rejects(installPackageSource(packageRoot), /root is an unsupported symlink/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
-test("install refuses to reuse a modified content-addressed cache", { concurrency: false }, async () => {
+test("install repairs a modified content-addressed cache", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
     const pkg = await installPackageSource(packageRoot);
+    await chmod(path.join(pkg.root, "skills", "integrity-skill", "SKILL.md"), 0o600);
     await writeFile(path.join(pkg.root, "skills", "integrity-skill", "SKILL.md"), "tampered", "utf8");
-    await assert.rejects(installPackageSource(packageRoot), /Cached package is corrupt/);
+    const repaired = await installPackageSource(packageRoot);
+    assert.match(await readFile(path.join(repaired.root, "skills", "integrity-skill", "SKILL.md"), "utf8"), /name: integrity-skill/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -361,13 +431,13 @@ test("sync restores a locked package after cache loss", { concurrency: false }, 
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     const pkg = await installPackageSource(await packageFixture(root));
-    await rm(pkg.root, { recursive: true, force: true });
+    await removeTestTree(pkg.root);
     const restored = await syncLockedPackage(pkg.lock);
     assert.equal(restored.manifest.metadata.name, "integrity-test");
     assert.equal(restored.root, pkg.root);
     await loadCachedPackage(pkg.lock);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -377,10 +447,14 @@ test("sync refuses a local source that drifted from its lock", { concurrency: fa
   try {
     const packageRoot = await packageFixture(root);
     const pkg = await installPackageSource(packageRoot);
-    await rm(pkg.root, { recursive: true, force: true });
-    await writeFile(path.join(packageRoot, "skills", "integrity-skill", "SKILL.md"), "drifted", "utf8");
+    await removeTestTree(pkg.root);
+    await writeFile(
+      path.join(packageRoot, "skills", "integrity-skill", "SKILL.md"),
+      "---\nname: integrity-skill\ndescription: Drifted.\n---\nDrifted.\n",
+      "utf8",
+    );
     await assert.rejects(syncLockedPackage(pkg.lock), /Locked integrity mismatch/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });

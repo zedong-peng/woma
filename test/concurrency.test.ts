@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { removeTestTree } from "./helpers.js";
+import { withProjectLock } from "../src/environment-lock.js";
 
 const run = promisify(execFile);
 const cli = path.resolve("dist/src/cli.js");
@@ -31,7 +33,7 @@ test("concurrent installs serialize and preserve both successful updates", async
       "idea-gen",
     ]));
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -55,7 +57,7 @@ test("an abandoned Environment lock is recovered after its stale threshold", asy
     const recipe = await readFile(path.join(home, "environments", "tools", "environment.yaml"), "utf8");
     assert.match(recipe, /name: tools/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -74,7 +76,7 @@ test("concurrent first use initializes base exactly once across processes", asyn
       };
       assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "meta-skill-builder"]);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTestTree(root);
     }
   }
 });
@@ -93,6 +95,7 @@ test("different Environments serialize repair of one shared Package cache entry"
     };
     const cacheKey = lock.packages["paper-search"]!.cacheKey;
     const skill = path.join(home, "packages", "paper-search", cacheKey, "skills", "paper-search", "SKILL.md");
+    await chmod(skill, 0o600);
     await writeFile(skill, "corrupt\n", "utf8");
 
     await Promise.all([
@@ -102,6 +105,38 @@ test("different Environments serialize repair of one shared Package cache entry"
 
     assert.match(await readFile(skill, "utf8"), /paper-search/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
+  }
+});
+
+test("project lock serializes real paths and symlink aliases", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-project-lock-alias-"));
+  const project = path.join(root, "project");
+  const alias = path.join(root, "alias");
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await mkdir(project);
+    await symlink(project, alias, "dir");
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => (entered = resolve));
+    const first = withProjectLock(project, async () => {
+      entered();
+      await hold;
+    });
+    await firstEntered;
+    let aliasEntered = false;
+    const second = withProjectLock(alias, async () => {
+      aliasEntered = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(aliasEntered, false);
+
+    release();
+    await Promise.all([first, second]);
+    assert.equal(aliasEntered, true);
+  } finally {
+    await removeTestTree(root);
   }
 });

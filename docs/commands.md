@@ -31,7 +31,7 @@ https://host/repository.git#<revision>
 git@host:owner/repository.git#<revision>
 ```
 
-Installation recursively resolves dependencies, validates identities and SemVer constraints, rejects cycles and source conflicts, and atomically updates the Environment recipe, lock, and global Agent view. Every project using that Environment observes the new view without reactivation; already-running Agent processes may need a restart to rediscover Skills.
+Installation recursively resolves dependencies, validates Package and Skill identities and SemVer constraints, rejects cycles and source conflicts, and publishes one complete global Agent view generation atomically. Package Store entries are read-only after publication. Every project using that Environment observes the new view without reactivation; already-running Agent processes may need a restart to rediscover Skills.
 
 ## Activation
 
@@ -66,7 +66,7 @@ harness inspect <source-or-package> [-n <environment>]
 
 `info --json` is the stable machine-readable context interface used by `harness-project-memory`. It returns the configured project directory, selected Environment, Memory paths, Packages, Skills, and entrypoints. It replaces the redundant user-facing `current` command.
 
-`sync` restores missing content-addressed Package entries from exact lock sources and rebuilds the global view. `doctor` validates dependency locks, the global view, platform support, executable and environment requirements, selected targets, and Memory discovery instructions.
+`sync` restores missing or corrupt content-addressed Package entries from exact lock sources and rebuilds the global view. It can repair `base` when its recipe and lock remain parseable even if its Package cache or view is damaged. `doctor` validates dependency locks, the exact Skill visibility closure, the global view, platform support, executable and environment requirements, selected targets, and Memory discovery instructions.
 
 ## Package authoring
 
@@ -90,4 +90,4 @@ Add the following line to `~/.bashrc` or `~/.zshrc`:
 eval "$(harness shell hook)"
 ```
 
-The hook saves the original Agent configuration roots, exports each supported target's selected global view, restores the original root for unsupported targets, wraps only the `harness` shell command so activation can update the parent shell, and shows `(harness:<environment>)` in the prompt. It does not proxy `codex` or `claude`.
+The hook saves the original Agent configuration roots, validates the selected Environment before exporting its view, restores the original root for unsupported targets, and shows `(harness:<environment>)` in the prompt. A stale inherited selection falls back to `base` with a warning. Only a successful top-level `activate` or `deactivate` updates the parent shell; help and unrelated commands are inert. The hook does not proxy `codex` or `claude`.

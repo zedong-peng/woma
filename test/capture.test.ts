@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { captureHarness } from "../src/capture.js";
 import { loadManifest } from "../src/schema.js";
+import { removeTestTree } from "./helpers.js";
 
 async function write(filePath: string, content: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -16,7 +17,7 @@ test("capture exports Claude resources without secret values", async () => {
   try {
     const source = path.join(root, "source");
     const output = path.join(root, "captured");
-    await write(path.join(source, ".claude", "skills", "review", "SKILL.md"), "---\ndescription: Review code.\n---\nReview.\n");
+    await write(path.join(source, ".claude", "skills", "review", "SKILL.md"), "---\nname: review\ndescription: Review code.\n---\nReview.\n");
     await write(
       path.join(source, ".mcp.json"),
       JSON.stringify({ mcpServers: { docs: { type: "http", url: "https://example.com/mcp", headers: { Authorization: "${DOCS_AUTH}" } } } }),
@@ -33,7 +34,7 @@ test("capture exports Claude resources without secret values", async () => {
     assert.doesNotMatch(await readFile(path.join(output, "harness.yaml"), "utf8"), /secret|Bearer/i);
     assert.equal((await loadManifest(output)).metadata.name, "captured-review");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -52,7 +53,7 @@ test("capture rejects literal MCP credentials before creating package files", as
     );
     await assert.rejects(readFile(path.join(output, "harness.yaml")), /ENOENT/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -61,7 +62,7 @@ test("capture exports project Codex command hooks", async () => {
   try {
     const source = path.join(root, "source");
     const output = path.join(root, "captured");
-    await write(path.join(source, ".agents", "skills", "verify", "SKILL.md"), "---\ndescription: Verify.\n---\nVerify.\n");
+    await write(path.join(source, ".agents", "skills", "verify", "SKILL.md"), "---\nname: verify\ndescription: Verify.\n---\nVerify.\n");
     await write(
       path.join(source, ".codex", "hooks.json"),
       JSON.stringify({ hooks: { PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "git diff --check" }] }] } }),
@@ -71,6 +72,6 @@ test("capture exports project Codex command hooks", async () => {
     assert.deepEqual(result.manifest.spec.hooks[0]?.platforms, ["codex"]);
     assert.equal(result.manifest.spec.hooks[0]?.command, "git diff --check");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });

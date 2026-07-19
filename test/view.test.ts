@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
-import { createEnvironment, doctorEnvironment, installIntoEnvironment } from "../src/environment.js";
+import { createEnvironment, doctorEnvironment, installIntoEnvironment, syncEnvironment } from "../src/environment.js";
 import { environmentViewPath, reconcileRuntimeState } from "../src/view.js";
+import { removeTestTree } from "./helpers.js";
 
 async function write(filePath: string, content: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
@@ -16,6 +17,7 @@ test("global Environment views link Skills, merge adapters, and share runtime st
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-view-"));
   const previous = {
     harnessHome: process.env.HARNESS_HOME,
+    harnessEnvironment: process.env.HARNESS_ENV,
     codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
     claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
@@ -23,6 +25,7 @@ test("global Environment views link Skills, merge adapters, and share runtime st
   const codexHome = path.join(root, "codex-home");
   const claudeHome = path.join(root, "user", ".claude");
   process.env.HARNESS_HOME = home;
+  process.env.HARNESS_ENV = "tools";
   process.env.HARNESS_ORIGINAL_CODEX_HOME = codexHome;
   process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claudeHome;
   try {
@@ -67,6 +70,8 @@ spec:
 
     await createEnvironment(root, "tools", ["codex", "claude"]);
     await installIntoEnvironment(root, "tools", packageRoot);
+    assert.equal((await lstat(environmentViewPath("tools"))).isSymbolicLink(), true);
+    const firstGeneration = await readlink(environmentViewPath("tools"));
     await createEnvironment(root, "isolated", ["codex", "claude"]);
 
     const view = environmentViewPath("tools");
@@ -89,6 +94,12 @@ spec:
     assert.equal(codexHooks.hooks.PostToolUse[0].hooks[0].command, "git diff --check");
     assert.equal((await lstat(path.join(view, "codex", "installation_id"))).isSymbolicLink(), true);
     assert.equal(await realpath(path.join(view, "codex", "installation_id")), path.join(codexHome, "installation_id"));
+    await rm(path.join(codexHome, "installation_id"));
+    await rm(path.join(view, "codex", "installation_id"));
+    await write(path.join(view, "codex", "installation_id"), "replacement-installation\n");
+    await reconcileRuntimeState("tools");
+    assert.equal(await readFile(path.join(codexHome, "installation_id"), "utf8"), "replacement-installation\n");
+    assert.equal((await lstat(path.join(view, "codex", "installation_id"))).isSymbolicLink(), true);
     await write(path.join(view, "codex", "auth.json"), '{"auth":"created-after-views"}\n');
     assert.equal(
       await readFile(path.join(environmentViewPath("isolated"), "codex", "auth.json"), "utf8"),
@@ -133,22 +144,73 @@ spec:
     assert.equal(isolatedClaudeState.runtimeMarker, "preserve-me");
     assert.equal(isolatedClaudeState.mcpServers.existing.command, "keep");
     assert.equal(isolatedClaudeState.mcpServers["view-server"], undefined);
-    await installIntoEnvironment(root, "tools", packageRoot);
+    await installIntoEnvironment(root, "tools", packageRoot, process.cwd(), {
+      onResourcesApplied: async () => {
+        assert.equal((await lstat(environmentViewPath("tools"))).isSymbolicLink(), true);
+        assert.match(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8"), /view-package/);
+        assert.match(await readFile(path.join(environmentViewPath("tools"), "codex", "skills", "view-skill", "SKILL.md"), "utf8"), /View fixture/);
+      },
+    });
+    assert.notEqual(await readlink(environmentViewPath("tools")), firstGeneration);
     assert.equal(await readFile(path.join(view, "codex", "runtime-created.db"), "utf8"), "runtime state\n");
     assert.equal(
       JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")).runtimeMarker,
       "preserve-me",
     );
+    const stateWithoutMarker = JSON.parse(
+      await readFile(path.join(environmentViewPath("isolated"), "claude", ".claude.json"), "utf8"),
+    ) as Record<string, unknown>;
+    delete stateWithoutMarker.runtimeMarker;
+    await writeFile(
+      path.join(environmentViewPath("isolated"), "claude", ".claude.json"),
+      `${JSON.stringify(stateWithoutMarker, null, 2)}\n`,
+      "utf8",
+    );
+    await reconcileRuntimeState("isolated", "tools");
+    assert.equal(JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")).runtimeMarker, undefined);
+
+    await rm(path.join(view, "view.json"), { force: true });
+    const driftedClaude = JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")) as Record<string, any>;
+    driftedClaude.mcpServers["view-server"].command = "drifted";
+    await writeFile(path.join(view, "claude", ".claude.json"), `${JSON.stringify(driftedClaude, null, 2)}\n`, "utf8");
+    await syncEnvironment(root, "tools");
+    assert.equal(
+      JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")).mcpServers["view-server"].command,
+      "node",
+    );
     const codexConfigPath = path.join(view, "codex", "config.toml");
     await writeFile(codexConfigPath, (await readFile(codexConfigPath, "utf8")).replace('command = "node"', 'command = "other"'), "utf8");
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "fail");
+
+    await rm(path.join(view, "view.json"), { force: true });
+    await write(
+      path.join(packageRoot, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: view-package
+  version: 2.0.0
+  description: Global view fixture without MCP.
+spec:
+  platforms: [codex, claude]
+  skills:
+    - name: view-skill
+      path: ./skills/view-skill
+`,
+    );
+    await installIntoEnvironment(root, "tools", packageRoot);
+    const upgradedClaude = JSON.parse(await readFile(path.join(view, "claude", ".claude.json"), "utf8")) as Record<string, any>;
+    assert.equal(upgradedClaude.mcpServers["view-server"], undefined);
+    assert.equal(upgradedClaude.mcpServers.existing.command, "keep");
   } finally {
     if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previous.harnessEnvironment;
     if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
     else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
     if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
     else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });

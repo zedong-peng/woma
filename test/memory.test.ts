@@ -12,6 +12,7 @@ import {
   readPackageMemory,
   readProjectMemory,
 } from "../src/memory.js";
+import { removeTestTree } from "./helpers.js";
 
 test("Project Memory initializes shared and isolated package storage without overwriting content", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-project-memory-"));
@@ -24,7 +25,7 @@ test("Project Memory initializes shared and isolated package storage without ove
     await initializeProjectMemory(root);
     assert.equal(await readProjectMemory(root), "# Confirmed project knowledge\n");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -39,6 +40,6 @@ test("Project Memory scopes package and machine-local context to validated paths
     assert.throws(() => packageMemoryPath(root, "../../outside"), /must use lowercase letters/);
     assert.equal(await readPackageMemory(root, "performance-engineering"), "");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });

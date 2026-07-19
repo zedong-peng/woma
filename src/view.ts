@@ -9,7 +9,7 @@ import { withRuntimeLock } from "./environment-lock.js";
 import type { HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
 const MANAGED_CODEX_ENTRIES = new Set(["config.toml", "hooks.json", "skills"]);
-const MANAGED_CLAUDE_ENTRIES = new Set([".claude.json", "settings.json", "skills"]);
+const MANAGED_CLAUDE_ENTRIES = new Set([".claude.json", ".harness-runtime-state.json", "settings.json", "skills"]);
 const RUNTIME_DIRECTORIES: Record<Platform, string[]> = {
   codex: [".tmp", "archived_sessions", "log", "memories", "sessions", "shell_snapshots", "tmp"],
   claude: ["backups", "debug", "downloads", "file-history", "ide", "plans", "plugins", "projects", "session-env", "shell-snapshots", "statsig", "tasks", "telemetry", "todos"],
@@ -21,6 +21,7 @@ const RUNTIME_FILES: Record<Platform, string[]> = {
 
 interface ViewInstallHooks {
   afterSwap?: () => Promise<void> | void;
+  previousPackages?: InstalledPackage[];
 }
 
 function stable(value: unknown): string {
@@ -207,9 +208,97 @@ async function linkRuntimeState(platform: Platform, originalRoot: string, destin
   }
 }
 
+async function adoptRuntimeState(platform: Platform, viewRoot: string): Promise<void> {
+  if (!(await pathExists(viewRoot))) return;
+  const excluded = platform === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES;
+  const sharedRoot = path.join(harnessHome(), "runtime", platform);
+  await mkdir(sharedRoot, { recursive: true, mode: 0o700 });
+  const names = new Set((await readdir(viewRoot).catch(() => [])).filter((name) => !excluded.has(name)));
+  for (const name of RUNTIME_FILES[platform]) names.add(name);
+  for (const name of names) {
+    const viewPath = path.join(viewRoot, name);
+    const sharedPath = path.join(sharedRoot, name);
+    const viewInfo = await lstat(viewPath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!viewInfo) {
+      if (RUNTIME_FILES[platform].includes(name)) await createSymlink(sharedPath, viewPath, false);
+      continue;
+    }
+    if (viewInfo.isSymbolicLink()) continue;
+    if (viewInfo.isFile()) {
+      await writeTextPreservingFile(sharedPath, await readFile(viewPath, "utf8"));
+      await rm(viewPath, { force: true });
+      await createSymlink(sharedPath, viewPath, false);
+      continue;
+    }
+    if (viewInfo.isDirectory() && !(await pathExists(sharedPath))) {
+      await rename(viewPath, sharedPath);
+      await createSymlink(sharedPath, viewPath, true);
+      continue;
+    }
+    throw new Error(`Unsupported runtime path at ${viewPath}`);
+  }
+}
+
+async function preflightRuntimeState(platform: Platform, viewRoot: string): Promise<void> {
+  if (!(await pathExists(viewRoot))) return;
+  const excluded = platform === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES;
+  const sharedRoot = path.join(harnessHome(), "runtime", platform);
+  for (const name of (await readdir(viewRoot)).filter((entry) => !excluded.has(entry))) {
+    const viewPath = path.join(viewRoot, name);
+    const info = await lstat(viewPath);
+    if (info.isSymbolicLink()) continue;
+    if (info.isFile()) {
+      await readFile(viewPath);
+      continue;
+    }
+    if (info.isDirectory() && !(await pathExists(path.join(sharedRoot, name)))) continue;
+    throw new Error(`Unsupported runtime path at ${viewPath}`);
+  }
+}
+
+async function preflightClaudeRuntimeTransfer(sourceEnvironment: string, targetEnvironment: string): Promise<void> {
+  const sourcePath = path.join(environmentViewPath(sourceEnvironment), "claude", ".claude.json");
+  const targetPath = path.join(environmentViewPath(targetEnvironment), "claude", ".claude.json");
+  if (await pathExists(path.join(environmentViewPath(sourceEnvironment), "claude", "skills"))) {
+    parseJsonObject(await readOptional(sourcePath), sourcePath);
+  }
+  if (await pathExists(path.join(environmentViewPath(targetEnvironment), "claude", "skills"))) {
+    parseJsonObject(await readOptional(targetPath), targetPath);
+  }
+  const sharedPath = path.join(harnessHome(), "runtime", "claude", ".harness-runtime-state.json");
+  const shared = await readOptional(sharedPath);
+  if (shared !== null) parseJsonObject(shared, sharedPath);
+}
+
 function originalClaudeStatePath(sourceHome: string): string {
   const sibling = path.join(path.dirname(sourceHome), ".claude.json");
   return path.basename(sourceHome) === ".claude" ? sibling : path.join(sourceHome, ".claude.json");
+}
+
+function withoutMcpServers(state: Record<string, unknown>): Record<string, unknown> {
+  const runtime = { ...state };
+  delete runtime.mcpServers;
+  return runtime;
+}
+
+async function readSharedClaudeRuntime(sourceHome: string): Promise<Record<string, unknown>> {
+  const runtimePath = path.join(harnessHome(), "runtime", "claude", ".harness-runtime-state.json");
+  const existing = await readOptional(runtimePath);
+  if (existing !== null) return parseJsonObject(existing, runtimePath);
+  const sourcePath = originalClaudeStatePath(sourceHome);
+  const runtime = withoutMcpServers(parseJsonObject(await readOptional(sourcePath), sourcePath));
+  await writeJsonAtomic(runtimePath, runtime);
+  await chmod(runtimePath, 0o600);
+  return runtime;
+}
+
+async function writeSharedClaudeRuntime(runtime: Record<string, unknown>): Promise<void> {
+  const runtimePath = path.join(harnessHome(), "runtime", "claude", ".harness-runtime-state.json");
+  await writeJsonAtomic(runtimePath, runtime);
+  await chmod(runtimePath, 0o600);
 }
 
 async function createSymlink(source: string, destination: string, directory: boolean): Promise<void> {
@@ -338,18 +427,23 @@ async function buildClaudeView(
   const links = await linkSkills(root, packages);
 
   const sourceState = originalClaudeStatePath(sourceHome);
+  const baseline = parseJsonObject(await readOptional(sourceState), sourceState);
   const currentState = await readOptional(currentStatePath);
-  const state = parseJsonObject(currentState ?? await readOptional(sourceState), currentState === null ? sourceState : currentStatePath);
-  const mcpServers = objectAt(state, "mcpServers", sourceState);
+  const current = parseJsonObject(currentState ?? JSON.stringify(baseline), currentState === null ? sourceState : currentStatePath);
+  const baselineMcpServers = objectAt(baseline, "mcpServers", sourceState);
+  const currentMcpServers = objectAt(current, "mcpServers", currentStatePath);
+  const mcpServers = { ...baselineMcpServers, ...currentMcpServers };
   for (const serverName of previousManagedServers) delete mcpServers[serverName];
   for (const { server } of collectServers(packages, "claude")) {
     const desired = claudeValue(server);
-    const existing = mcpServers[server.name];
-    if (existing !== undefined && !equal(existing, desired)) {
+    const baselineExisting = baselineMcpServers[server.name];
+    if (baselineExisting !== undefined && !equal(baselineExisting, desired)) {
       throw new Error(`Refusing to overwrite Claude MCP server ${server.name} from ${sourceState}`);
     }
     mcpServers[server.name] = desired;
   }
+  const state = await readSharedClaudeRuntime(sourceHome);
+  if (Object.keys(mcpServers).length > 0) state.mcpServers = mcpServers;
   const stateDestination = path.join(root, ".claude.json");
   await writeJsonAtomic(stateDestination, state);
   await chmod(stateDestination, 0o600);
@@ -371,19 +465,20 @@ export function environmentViewPath(name: string): string {
 }
 
 async function transferClaudeRuntimeState(sourceEnvironment: string, targetEnvironment: string): Promise<void> {
-  if (sourceEnvironment === targetEnvironment) return;
   const sourcePath = path.join(environmentViewPath(sourceEnvironment), "claude", ".claude.json");
   const targetRoot = path.join(environmentViewPath(targetEnvironment), "claude");
   const targetPath = path.join(targetRoot, ".claude.json");
+  let runtime = await readSharedClaudeRuntime(sourceAgentHome("claude"));
+  if (await pathExists(path.join(environmentViewPath(sourceEnvironment), "claude", "skills"))) {
+    const source = parseJsonObject(await readOptional(sourcePath), sourcePath);
+    runtime = withoutMcpServers(source);
+    await writeSharedClaudeRuntime(runtime);
+  }
   if (!(await pathExists(path.join(targetRoot, "skills")))) return;
-  const source = parseJsonObject(await readOptional(sourcePath), sourcePath);
   const target = parseJsonObject(await readOptional(targetPath), targetPath);
   const targetMcpServers = target.mcpServers;
-  const runtime = { ...source };
-  delete runtime.mcpServers;
-  const merged = { ...target, ...runtime };
-  if (targetMcpServers === undefined) delete merged.mcpServers;
-  else merged.mcpServers = targetMcpServers;
+  const merged = { ...runtime };
+  if (targetMcpServers !== undefined) merged.mcpServers = targetMcpServers;
   await writeTextPreservingFile(targetPath, `${JSON.stringify(merged, null, 2)}\n`);
   await chmod(targetPath, 0o600);
 }
@@ -392,36 +487,23 @@ export async function reconcileRuntimeState(environmentName: string, targetEnvir
   environmentViewPath(environmentName);
   environmentViewPath(targetEnvironmentName);
   for (const platform of ["codex", "claude"] as const) {
+    await preflightRuntimeState(platform, path.join(environmentViewPath(environmentName), platform));
+  }
+  await preflightClaudeRuntimeTransfer(environmentName, targetEnvironmentName);
+  for (const platform of ["codex", "claude"] as const) {
     const viewRoot = path.join(environmentViewPath(environmentName), platform);
     if (!(await pathExists(path.join(viewRoot, "skills")))) continue;
     await withRuntimeLock(platform, async () => {
-      const sharedRoot = path.join(harnessHome(), "runtime", platform);
-      await mkdir(sharedRoot, { recursive: true, mode: 0o700 });
-      for (const name of RUNTIME_FILES[platform]) {
-        const viewPath = path.join(viewRoot, name);
-        const sharedPath = path.join(sharedRoot, name);
-        const viewInfo = await lstat(viewPath).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return undefined;
-          throw error;
-        });
-        if (!viewInfo) {
-          await createSymlink(sharedPath, viewPath, false);
-          continue;
-        }
-        if (viewInfo.isSymbolicLink()) continue;
-        if (!viewInfo.isFile()) throw new Error(`Unsupported runtime path at ${viewPath}`);
-        await writeTextPreservingFile(sharedPath, await readFile(viewPath, "utf8"));
-        await rm(viewPath, { force: true });
-        await createSymlink(sharedPath, viewPath, false);
-      }
-      if (platform === "claude") await transferClaudeRuntimeState(environmentName, targetEnvironmentName);
+      await adoptRuntimeState(platform, viewRoot);
     });
   }
+  await withRuntimeLock("claude", () => transferClaudeRuntimeState(environmentName, targetEnvironmentName));
 }
 
 interface ViewMetadata {
   viewVersion?: unknown;
   targets?: unknown;
+  skills?: unknown;
   resources?: { codexMcpServers?: unknown; claudeMcpServers?: unknown } | undefined;
 }
 
@@ -433,73 +515,38 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : [];
 }
 
-async function replaceManagedPaths(
-  temporary: string,
-  destination: string,
-  targets: Platform[],
-  hooks: ViewInstallHooks,
-): Promise<void> {
-  await mkdir(destination, { recursive: true, mode: 0o700 });
-  for (const target of targets) {
-    const targetRoot = path.join(destination, target);
-    await mkdir(targetRoot, { recursive: true, mode: 0o700 });
-    await withRuntimeLock(target, () =>
-      linkRuntimeState(
-        target,
-        sourceAgentHome(target),
-        targetRoot,
-        target === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES,
-      ),
-    );
+async function publishViewGeneration(generation: string, destination: string, hooks: ViewInstallHooks): Promise<void> {
+  const parent = path.dirname(destination);
+  const current = await lstat(destination).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (current && !current.isSymbolicLink()) {
+    throw new Error(`Environment view must be a symbolic link: ${destination}`);
   }
-
-  const managed = [
-    "view.json",
-    "codex/skills",
-    "codex/config.toml",
-    "codex/hooks.json",
-    "claude/skills",
-    "claude/.claude.json",
-    "claude/settings.json",
-  ];
-  const backup = path.join(path.dirname(destination), `.view.backup-${process.pid}-${randomUUID()}`);
-  await mkdir(backup, { recursive: true, mode: 0o700 });
-  const movedOld: { relative: string; backup: string }[] = [];
-  const movedNew: string[] = [];
+  const previousTarget = current ? await readlink(destination) : undefined;
+  const nextLink = path.join(parent, `.view.link-${process.pid}-${randomUUID()}`);
+  await symlink(path.basename(generation), nextLink, process.platform === "win32" ? "junction" : undefined);
+  await rename(nextLink, destination);
   try {
-    for (const [index, relative] of managed.entries()) {
-      const current = path.join(destination, relative);
-      const currentExists = await lstat(current).then(() => true, () => false);
-      if (currentExists) {
-        const saved = path.join(backup, String(index));
-        await mkdir(path.dirname(saved), { recursive: true });
-        await rename(current, saved);
-        movedOld.push({ relative, backup: saved });
-      }
-      const next = path.join(temporary, relative);
-      const nextExists = await lstat(next).then(() => true, () => false);
-      if (nextExists) {
-        await mkdir(path.dirname(current), { recursive: true, mode: 0o700 });
-        await rename(next, current);
-        movedNew.push(relative);
-      }
-    }
     await hooks.afterSwap?.();
   } catch (error) {
-    const rollbackErrors: unknown[] = [];
-    for (const relative of [...movedNew].reverse()) {
-      await rm(path.join(destination, relative), { recursive: true, force: true }).catch((rollbackError) => rollbackErrors.push(rollbackError));
-    }
-    for (const item of [...movedOld].reverse()) {
-      await mkdir(path.dirname(path.join(destination, item.relative)), { recursive: true });
-      await rename(item.backup, path.join(destination, item.relative)).catch((rollbackError) => rollbackErrors.push(rollbackError));
-    }
-    if (rollbackErrors.length > 0) {
-      throw new AggregateError([error, ...rollbackErrors], "Environment view update failed and rollback could not restore every managed path");
+    try {
+      if (previousTarget) {
+        const rollbackLink = path.join(parent, `.view.rollback-${process.pid}-${randomUUID()}`);
+        await symlink(previousTarget, rollbackLink, process.platform === "win32" ? "junction" : undefined);
+        await rename(rollbackLink, destination);
+      } else {
+        await rm(destination, { force: true });
+      }
+    } catch (rollbackError) {
+      throw new AggregateError([error, rollbackError], "Environment view publication failed and rollback could not restore the previous view");
     }
     throw error;
-  } finally {
-    await rm(backup, { recursive: true, force: true });
+  }
+  if (previousTarget && previousTarget !== path.basename(generation) && /^\.view\.gen-[a-z0-9-]+$/.test(previousTarget)) {
+    // Publication is already committed; an orphaned old generation is safer than reporting a false rollback.
+    await rm(path.join(parent, previousTarget), { recursive: true, force: true }).catch(() => undefined);
   }
 }
 
@@ -512,11 +559,26 @@ export async function materializeEnvironmentView(
   const destination = environmentViewPath(name);
   const parent = path.dirname(destination);
   await mkdir(parent, { recursive: true, mode: 0o700 });
-  const temporary = path.join(parent, `.view.tmp-${process.pid}-${randomUUID()}`);
+  const temporary = path.join(parent, `.view.gen-${randomUUID()}`);
   await mkdir(temporary, { recursive: true, mode: 0o700 });
   try {
     const previousMetadata = await previousViewMetadata(destination);
-    const previousClaudeMcpServers = stringArray(previousMetadata.resources?.claudeMcpServers);
+    for (const target of environment.spec.targets) {
+      await withRuntimeLock(target, async () => {
+        await adoptRuntimeState(target, path.join(destination, target));
+        if (
+          target === "claude" &&
+          process.env.HARNESS_ENV === environment.metadata.name &&
+          (await pathExists(path.join(destination, "claude", "skills")))
+        ) {
+          const currentStatePath = path.join(destination, "claude", ".claude.json");
+          const currentState = parseJsonObject(await readOptional(currentStatePath), currentStatePath);
+          await writeSharedClaudeRuntime(withoutMcpServers(currentState));
+        }
+      });
+    }
+    const previousClaudeMcpServers = new Set(stringArray(previousMetadata.resources?.claudeMcpServers));
+    for (const { server } of collectServers(hooks.previousPackages ?? [], "claude")) previousClaudeMcpServers.add(server.name);
     const skillLinks: Partial<Record<Platform, Record<string, string>>> = {};
     if (environment.spec.targets.includes("codex")) skillLinks.codex = await buildCodexView(path.join(temporary, "codex"), packages);
     if (environment.spec.targets.includes("claude")) {
@@ -525,7 +587,7 @@ export async function materializeEnvironmentView(
           path.join(temporary, "claude"),
           packages,
           path.join(destination, "claude", ".claude.json"),
-          previousClaudeMcpServers,
+          [...previousClaudeMcpServers],
         ),
       );
     }
@@ -543,9 +605,20 @@ export async function materializeEnvironmentView(
       skills: skillLinks,
       resources: { codexMcpServers, claudeMcpServers },
     });
-    await replaceManagedPaths(temporary, destination, environment.spec.targets, hooks);
-  } finally {
+    for (const target of environment.spec.targets) {
+      await withRuntimeLock(target, async () => {
+        await linkRuntimeState(
+          target,
+          sourceAgentHome(target),
+          path.join(temporary, target),
+          target === "codex" ? MANAGED_CODEX_ENTRIES : MANAGED_CLAUDE_ENTRIES,
+        );
+      });
+    }
+    await publishViewGeneration(temporary, destination, hooks);
+  } catch (error) {
     await rm(temporary, { recursive: true, force: true });
+    throw error;
   }
 }
 
@@ -563,6 +636,7 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
     throw new Error(`Environment view is missing or stale at ${root}; run harness sync --name ${environment.metadata.name}`);
   }
   for (const target of environment.spec.targets) {
+    const expectedSkills: Record<string, string> = {};
     for (const pkg of packages) {
       for (const skill of pkg.manifest.spec.skills) {
         const link = path.join(root, target, "skills", skill.name);
@@ -571,7 +645,21 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
         const expected = await realpath(path.resolve(pkg.root, skill.path));
         const actual = await realpath(link).catch(() => undefined);
         if (actual !== expected) throw new Error(`Environment Skill link has an unexpected target: ${link}`);
+        expectedSkills[skill.name] = path.resolve(pkg.root, skill.path);
       }
+    }
+    const skillsRoot = path.join(root, target, "skills");
+    const actualSkillNames = (await readdir(skillsRoot).catch(() => [])).sort();
+    const expectedSkillNames = Object.keys(expectedSkills).sort();
+    if (!equal(actualSkillNames, expectedSkillNames)) {
+      throw new Error(`Environment Skill visibility differs from the lock at ${skillsRoot}`);
+    }
+    const metadataSkills = metadata.skills;
+    if (!metadataSkills || typeof metadataSkills !== "object" || Array.isArray(metadataSkills)) {
+      throw new Error(`Environment Skill ownership metadata is missing from ${metadataPath}`);
+    }
+    if (!equal((metadataSkills as Record<string, unknown>)[target], expectedSkills)) {
+      throw new Error(`Environment Skill ownership metadata is stale for ${target} in ${metadataPath}`);
     }
     if (target === "codex") {
       const configPath = path.join(root, "codex", "config.toml");

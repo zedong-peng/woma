@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import { removeTestTree } from "./helpers.js";
 
 interface CommandResult {
   code: number;
@@ -106,7 +107,7 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
     assert.notEqual(removed.code, 0);
     assert.match(removed.stderr, /unknown command ['"]bind['"]/);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -163,7 +164,7 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     const deactivate = await runCli(["--project", project, "deactivate"], nested, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -183,7 +184,7 @@ test("CLI uses the exact working directory instead of a parent Project Memory", 
     await assert.rejects(access(path.join(project, ".harness", "state.json")));
     assert.equal(await readFile(parentMemory, "utf8"), "# Parent Memory\n");
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -221,7 +222,7 @@ test("CLI always includes foundational packages and rejects the removed without-
       /meta-skill/i,
     );
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -305,7 +306,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
 
@@ -337,6 +338,6 @@ test("CLI atomically switches environments", { concurrency: false }, async () =>
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
-    await rm(root, { recursive: true, force: true });
+    await removeTestTree(root);
   }
 });
