@@ -1,6 +1,6 @@
-import { readFile, rm } from "node:fs/promises";
+import { lstat, readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { writeTextAtomic } from "./fs.js";
+import { writeTextPreservingFile } from "./fs.js";
 import type { Action, Platform } from "./types.js";
 
 const markerStart = "<!-- >>> harness-conda:project-memory -->";
@@ -24,14 +24,11 @@ export interface PreparedMemoryBootstrapTransition {
   apply: () => Promise<() => Promise<void>>;
 }
 
-function discoveryBlock(platform: Platform): string {
-  const skillPath = platform === "codex"
-    ? ".agents/skills/harness-project-memory/SKILL.md"
-    : ".claude/skills/harness-project-memory/SKILL.md";
+function discoveryBlock(_platform: Platform): string {
   return `${markerStart}
 ## Harness Project Memory
 
-At the beginning of the session, read and follow \`${skillPath}\`. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.
+At the beginning of the session, use the installed \`harness-project-memory\` Skill. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.
 ${markerEnd}`;
 }
 
@@ -41,7 +38,18 @@ function instructionPath(projectRoot: string, platform: Platform): string {
 
 async function readOptional(filePath: string): Promise<string | null> {
   return readFile(filePath, "utf8").catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return null;
+    if (error.code === "ENOENT") {
+      return lstat(filePath).then(
+        (info) => {
+          if (info.isSymbolicLink()) throw new Error(`${path.basename(filePath)} is a dangling symbolic link`);
+          return null;
+        },
+        (statError: NodeJS.ErrnoException) => {
+          if (statError.code === "ENOENT") return null;
+          throw statError;
+        },
+      );
+    }
     throw error;
   });
 }
@@ -75,14 +83,7 @@ function reconcileBlock(
     const prefix = content.endsWith("\n") ? content : `${content}\n`;
     return `${prefix}\n${block}\n`;
   }
-  if (include) return original;
-
-  let before = content.slice(0, blockAt);
-  let after = content.slice(blockAt + block.length);
-  if (before.endsWith("\n\n")) before = before.slice(0, -1);
-  if (after.startsWith("\n")) after = after.slice(1);
-  const result = `${before}${after}`;
-  return result || null;
+  return original;
 }
 
 function actionFor(file: PreparedFile): Action | undefined {
@@ -129,7 +130,7 @@ export async function prepareMemoryBootstrapTransition(
         for (const file of [...written].reverse()) {
           try {
             if (file.original === null) await rm(file.path, { force: true });
-            else await writeTextAtomic(file.path, file.original);
+            else await writeTextPreservingFile(file.path, file.original);
           } catch (error) {
             errors.push(error);
           }
@@ -143,7 +144,7 @@ export async function prepareMemoryBootstrapTransition(
             throw new Error(`${file.display} changed while the Environment transition was in progress; retry`);
           }
           if (file.desired === null) await rm(file.path, { force: true });
-          else await writeTextAtomic(file.path, file.desired);
+          else await writeTextPreservingFile(file.path, file.desired);
           written.push(file);
         }
       } catch (error) {

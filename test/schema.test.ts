@@ -71,6 +71,52 @@ spec:
   );
 });
 
+test("manifest parser accepts complete SemVer and rejects malformed versions", () => {
+  const manifest = parseManifest(`
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: versioned
+  version: 1.2.3-rc.1+build.7
+  description: Version fixture.
+spec:
+  skills: []
+`);
+  assert.equal(manifest.metadata.version, "1.2.3-rc.1+build.7");
+  assert.throws(
+    () =>
+      parseManifest(`
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: versioned
+  version: 1.2.3-..
+  description: Version fixture.
+spec:
+  skills: []
+`),
+    /must be valid SemVer/,
+  );
+});
+
+test("manifest parser rejects duplicate platform declarations", () => {
+  assert.throws(
+    () =>
+      parseManifest(`
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: duplicate-platform
+  version: 1.0.0
+  description: Platform fixture.
+spec:
+  platforms: [codex, codex]
+  skills: []
+`),
+    /must not contain duplicates/,
+  );
+});
+
 test("manifest parser rejects legacy command bindings", () => {
   assert.throws(
     () =>

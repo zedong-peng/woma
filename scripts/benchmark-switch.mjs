@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { performance } from "node:perf_hooks";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -14,6 +14,17 @@ const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-benchmark
 const project = path.join(root, "project");
 const previousHome = process.env.HARNESS_HOME;
 process.env.HARNESS_HOME = path.join(root, "home");
+
+async function makeWritable(directory) {
+  const info = await lstat(directory).catch(() => undefined);
+  if (!info || info.isSymbolicLink()) return;
+  if (info.isDirectory()) {
+    await chmod(directory, 0o700);
+    for (const entry of await readdir(directory)) await makeWritable(path.join(directory, entry));
+  } else if (info.isFile()) {
+    await chmod(directory, 0o600);
+  }
+}
 
 try {
   await mkdir(project, { recursive: true });
@@ -56,5 +67,6 @@ try {
 } finally {
   if (previousHome === undefined) delete process.env.HARNESS_HOME;
   else process.env.HARNESS_HOME = previousHome;
+  await makeWritable(root);
   await rm(root, { recursive: true, force: true });
 }

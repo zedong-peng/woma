@@ -1,12 +1,23 @@
 # harness-conda
 
-Create, reproduce, and switch isolated Agent environments.
+Conda-style package and Environment management for Agent engineering tools.
 
-Harness Conda manages versioned packages containing Skills, meta-skills, MCP servers, and hooks. A meta-skill is an ordinary Skill whose natural-language method composes other Skills; package dependencies make the complete method installable and reproducible without turning it into a workflow DAG.
+Harness Conda packages Skills, meta-skills, MCP servers, and hooks into reusable Environments. Package contents and Environment locks are stored globally; repository-specific knowledge stays in Project Memory.
 
-## Install from source
+> Status: early development. The package is not published to the npm Registry.
 
-Harness Conda is not published to the npm Registry yet. Install the current CLI from this repository:
+## Highlights
+
+- Global, content-addressed Package storage.
+- Named Environments with independent roots, dependency closures, locks, and Agent targets.
+- An implicit, non-removable `base` Environment.
+- `harness-project-memory` and `meta-skill-builder` in every Environment.
+- Recursive Package dependencies for installable meta-skills.
+- Atomically published per-Environment Codex and Claude Code views built from read-only Store symlinks.
+- Atomic Environment view updates and installation rollback on ordinary errors.
+- Direct `codex` and `claude` launches after shell activation; no Agent command proxy.
+
+## Install
 
 ```bash
 git clone https://github.com/zedong-peng/harness-conda.git
@@ -17,259 +28,79 @@ npm link
 harness --version
 ```
 
-`npm link` exposes the locally built `harness` and `harness-conda` binaries. To avoid a global link, replace `harness` in the examples below with:
+Recommended: add the shell hook to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-node /path/to/harness-conda/dist/src/cli.js
+eval "$(harness shell hook)"
 ```
 
-Enable the Conda-style active Environment prefix for the current shell:
+Open a new shell or reload the startup file. The hook selects the active global Agent view and shows it in the prompt, for example `(harness:base)` or `(harness:performance)`.
+
+## Quick Start
+
+`base` is created automatically on first use:
 
 ```bash
-# zsh
-eval "$(harness shell hook zsh)"
-
-# bash
-eval "$(harness shell hook bash)"
-```
-
-Add the matching `eval` line to `~/.zshrc` or `~/.bashrc` to enable it in future shells. When no shell name is supplied, `harness shell hook` detects bash or zsh from `$SHELL`.
-
-## Quick start
-
-```bash
-harness env create --target codex
+harness env list
 harness install builtin:auto-research
 harness activate
-
-# The prompt now starts with (harness:base).
 codex
-
-harness deactivate
 ```
 
-`install` uses the active Environment when `--name` is omitted, then falls back to `base`. `env create` without a name creates `base`, and `activate` without a name switches to it, matching Conda. New Environments contain the ordinary `harness-project-memory` package by default; pass `--without-memory` to opt out. Installing `auto-research` recursively installs and locks its component packages. Activation makes the complete dependency closure available to the selected Agent in dependency-first order.
-
-Only one Environment is active in a project. Activating another Environment atomically removes packages unique to the old Environment, preserves identical shared packages, activates the new closure, and rolls back if the transition fails.
-
-## Mental model
-
-```text
-Package
-  = versioned distribution unit containing Skills, MCP, hooks, or scripts
-
-Meta-Skill
-  = ordinary Skill with a natural-language method and Package dependencies
-
-Environment
-  = root Packages + recursive dependency closure + targets + lock
-
-Project Memory
-  = natural-language repository knowledge shared globally or isolated by Package
-
-Base Environment
-  = conventional default Environment with Project Memory enabled
-```
-
-Harness Conda does not decide what phase a task is in, advance workflow steps, require handoffs, or record outcomes. The user and Agent define and execute the method; Harness Conda installs, isolates, locks, activates, migrates, and shares it.
-
-## Environments
+Create and use a named Environment:
 
 ```bash
-harness env create cpp-performance --target codex
-harness env list
-harness env show cpp-performance
-harness env remove cpp-performance
-```
-
-The `base` fallback makes the common case shorter while preserving named Environment isolation:
-
-```bash
-harness env create --target codex       # creates base
-harness install builtin:paper-search    # installs into base
-harness activate                        # activates base
-```
-
-Use explicit names whenever a project needs multiple combinations:
-
-```bash
-harness env create research --target codex
 harness env create performance --target codex
-harness activate research
-harness activate performance            # atomic switch
-```
-
-With a named Environment active, omitted `--name` values select that Environment. Packages update it directly:
-
-```bash
-# prompt: (harness:research)
-harness install builtin:paper-search     # installs and activates in research
-```
-
-Active installation resolves and validates the complete next closure before updating the project. Harness snapshots the recipe, lock, activation state, Skills, MCP configuration, and hooks; it applies the package delta in dependency order and restores the snapshot if any ordinary error occurs. Installing into an inactive Environment continues to update only its recipe and lock.
-
-With the shell hook enabled, the prompt shows `(harness:base)`, `(harness:research)`, or `(harness:performance)`. The `harness:` namespace remains unambiguous when a Python Conda Environment is also active, for example `(py310) (harness:research)`. The hook searches parent directories for the nearest `.harness`, so the prefix and CLI continue to use the same project from nested directories. The prefix disappears after `harness deactivate` or after leaving the project tree.
-
-Environment state is project-local:
-
-```text
-.harness/
-├── environments/
-│   └── cpp-performance.yaml
-├── locks/
-│   └── cpp-performance.lock.json
-├── memory/
-│   ├── project.md
-│   └── packages/
-└── state.json
-```
-
-The YAML recipe records root packages and Agent targets. The lock records the exact source, Git revision, integrity, cache key, and dependency edges for the full closure. `memory/` contains portable natural-language project adaptation, while `state.json` and `local/` are machine-local and must not be committed.
-
-## Packages and meta-skills
-
-Install an atomic capability:
-
-```bash
-harness install -n research builtin:paper-search
-```
-
-Install a complete method:
-
-```bash
-harness install -n research builtin:auto-research
-```
-
-Example meta-skill manifest:
-
-```yaml
-apiVersion: harness.conda/v1
-kind: Harness
-metadata:
-  name: auto-research
-  version: 1.0.0
-  description: Turn related work into a defensible experiment plan.
-spec:
-  platforms: [codex, claude]
-  dependencies:
-    - name: paper-search
-      version: ^1.0.0
-      source: builtin:paper-search
-    - name: idea-gen
-      version: ^1.0.0
-      source: builtin:idea-gen
-    - name: exp-design
-      version: ^1.0.0
-      source: builtin:exp-design
-  entrypoints:
-    - name: research
-      skill: auto-research
-      description: Produce an evidence-backed, falsifiable experiment plan.
-  skills:
-    - name: auto-research
-      path: ./skills/auto-research
-```
-
-The `auto-research/SKILL.md` file describes how and when to use the component Skills, including branching, retry, interruption recovery, stopping conditions, and expected outputs. Harness Conda reads only the package graph; the Agent interprets the method.
-
-The four packages above are real built-ins shipped with the source distribution, so the Quick Start runs without a package Registry. Until a Registry exists, other dependencies include an explicit local, built-in, GitHub, HTTPS Git, or SSH Git source. Published packages should use immutable Git tags or revisions.
-
-### Create a meta-skill with the Agent
-
-Install the built-in authoring assistant when you want to turn your own multi-Skill method into a portable package:
-
-```bash
-harness env create authoring --target codex
-harness install -n authoring builtin:meta-skill-builder
-harness activate authoring
-
+harness install -n performance builtin:performance-engineering
+harness activate performance
 codex
 ```
 
-Describe the component Skill sources, intended outcome, normal ordering, feedback loops, branches, interruption recovery, stopping conditions, and output contract in natural language. The assistant generates an ordinary `harness.yaml` plus one coordinating `SKILL.md`, declares the component packages as dependencies, and validates the complete result with `harness inspect`.
+`harness deactivate` returns the current shell to `base`. Every Environment includes the Project Memory manager and meta-skill authoring assistant.
 
-The assistant authors the method; Harness Conda remains neutral about its execution. It does not turn the method into a DAG or add workflow phases to the core.
-
-## Project Memory
-
-Portable Skills should not hard-code one repository's build, test, benchmark, or operational conventions. Users describe those details naturally to the Agent, which records stable, verified knowledge in isolated Project Memory:
+## Model
 
 ```text
-.harness/memory/project.md                         shared repository knowledge
-.harness/memory/packages/performance-engineering.md  package-specific adaptation
-.harness/local/memory.md                           machine-specific, git-ignored context
+~/.harness-conda/
+├── packages/                    immutable, content-addressed Package contents
+├── runtime/                     shared Agent authentication and session state
+├── locks/                       cross-process Environment, Package, runtime, and project locks
+└── environments/<name>/
+    ├── environment.yaml         root Packages and Agent targets
+    ├── lock.json                exact recursive dependency closure
+    ├── view -> .view.gen-<id>    atomic pointer to one complete generation
+    └── .view.gen-<id>/
+        ├── codex/               Codex Skills, MCP, Hooks, and shared-state links
+        └── claude/              Claude Skills, MCP, Hooks, and shared-state links
+
+<project>/.harness/
+├── memory/                      portable project and Package knowledge
+└── local/                       machine-local Memory
 ```
 
-`harness-project-memory` is a normal built-in package, versioned and locked like `meta-skill-builder` or any third-party package. It is projected to `.agents/skills/` or `.claude/skills/` with the other active Skills. When it is active, Harness installs a small managed pointer in `AGENTS.md` or `CLAUDE.md` that tells the Agent to read its `SKILL.md` at session start. The Skill runs `harness current --json` to discover the current package-to-Skill and package-to-Memory mapping dynamically. Third-party Skills require no Harness-specific changes.
-
-When the user states a durable project fact, the Agent records it automatically in shared, package-scoped, or local Memory even if the user does not explicitly say “remember this.” Temporary, speculative, current-task-only, or secret information is not persisted. Harness does not interpret the prose, execute commands from it, or manage workflow progress. See [the Project Memory specification](docs/project-memory.md).
-
-## Reproduction
-
-Commit Environment recipes and locks:
-
-```bash
-git add .harness/environments .harness/locks
-git commit -m "Define Agent environments"
-```
-
-On another machine:
-
-```bash
-git pull
-harness sync -n research
-harness doctor -n research
-harness activate research
-```
-
-`sync` restores exact locked package snapshots into the content-addressed cache and rejects source drift. Manifests declare environment-variable names but never credential values.
-
-## Commands
-
-| Command | Purpose |
-| --- | --- |
-| `harness env create [name] [--without-memory]` | Create an Environment; defaults to `base` with Project Memory |
-| `harness env list` | List Environments and mark the active one |
-| `harness env show <name>` | Show roots, resolved packages, and targets |
-| `harness env remove <name>` | Remove an inactive Environment |
-| `harness install [-n <env>] <source>` | Install a Package and recursive dependencies; defaults to active, then `base` |
-| `harness activate [env]` | Atomically activate or switch an Environment; defaults to `base` |
-| `harness deactivate` | Deactivate the complete active Environment |
-| `harness current [--json]` | Show the active Environment; JSON includes package, Skill, and Memory mappings |
-| `harness shell hook [bash\|zsh]` | Print shell integration for the active-Environment prompt |
-| `harness sync [-n <env>]` | Restore exact locked packages |
-| `harness doctor [-n <env>]` | Verify lock, requirements, and activation |
-| `harness init [directory]` | Scaffold a Package or meta-skill |
-| `harness inspect <source>` | Inspect a Package manifest without installing it |
-| `harness capture <directory>` | Capture Agent resources as a Package |
-
-## Removed workflow commands
-
-Version 0.6 removes `onboard`, `project`, `profile`, `switch`, `leave`, `enter`, `handoff`, `outcome`, `stats`, `use`, and `eval` from the core CLI. These commands encoded a research-specific phase model that does not belong in a neutral environment manager.
-
-Migration mapping:
+Each Skill in a view is a symbolic link into a read-only Package Store entry. Installing into an Environment builds a complete immutable view generation and publishes it with one atomic `view` symlink replacement, so every project and new Agent process observes either the old or new dependency closure, never a path-by-path mixture:
 
 ```text
-profile add / install --profile  -> install -n <environment>
-switch <profile>                 -> activate <environment>
-leave                            -> deactivate
-project init / onboard           -> env create
-enter <profile>                  -> activate <environment>, then launch the Agent
+project/shell -> Environment view -> Package Store
 ```
 
-Handoffs, outcome tracking, workflow evaluation, and other execution policies can be distributed as optional Skills or separate tools.
+The shell hook exports an Environment view only for targets that Environment supports and restores the original Agent home for unsupported targets. Authentication, logs, and session directories use stable links through the shared runtime root; existing state is adopted from the user's original Agent configuration root. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
 
-If a project still has an active v0.5 profile or low-level package activation, run the new `harness deactivate` once before creating or activating Environments. This cleanup path is retained for migration even though the old commands are no longer exposed.
+## Documentation
 
-## Safety
+- [Command reference](docs/commands.md)
+- [Architecture and isolation model](docs/design.md)
+- [Package manifest](docs/manifest.md)
+- [Project Memory](docs/project-memory.md)
+- [Security](SECURITY.md)
+- [Changelog](CHANGELOG.md)
 
-- Package cache entries are content-addressed and integrity-checked.
-- Environment lock updates validate the entire dependency graph before writing.
-- Activation refuses conflicting Skills and MCP entries.
-- Environment switching checks managed-file drift before changing active state.
-- Active installation updates the lock, materialized resources, and activation state together and restores the previous snapshot on error.
-- Deactivation removes only unchanged resources owned by the Environment.
-- Git and built-in packages cannot use local dependency paths to read installation-machine files.
-- Captured MCP configuration contains environment-variable names, never literal secret values.
+## Development
 
-See [the package manifest reference](docs/manifest.md) for the complete package schema.
+```bash
+npm run check
+npm test
+bash scripts/demo.sh
+```
+
+Node.js 20 or newer is required.

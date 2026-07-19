@@ -1,54 +1,41 @@
 #!/usr/bin/env node
-import { statSync } from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { captureHarness } from "./capture.js";
 import {
   activateEnvironment,
   createEnvironment,
-  currentEnvironmentContext,
+  environmentInfo,
+  environmentSnapshot,
   deactivateEnvironment,
   doctorEnvironment,
   DEFAULT_ENVIRONMENT,
   environmentLockPath,
   environmentPath,
+  ensureBaseEnvironment,
+  FOUNDATIONAL_PACKAGES,
   installIntoEnvironment,
   listEnvironments,
-  readEnvironment,
   readEnvironmentLock,
   removeEnvironment,
   syncEnvironment,
   type EnvironmentCheck,
 } from "./environment.js";
 import { installPackageSource, loadCachedPackage } from "./package.js";
-import { PROJECT_MEMORY_PACKAGE, projectMemoryPath } from "./memory.js";
 import { scaffoldHarness } from "./scaffold.js";
 import { renderShellHook, resolveShell } from "./shell.js";
-import { readState } from "./store.js";
 import type { Action, Platform } from "./types.js";
 
 const program = new Command();
 
 function projectRoot(command: Command): string {
   const configured = command.optsWithGlobals<{ project?: string }>().project;
-  if (configured) return path.resolve(configured);
-  let current = path.resolve(process.cwd());
-  while (true) {
-    try {
-      if (statSync(path.join(current, ".harness")).isDirectory()) return current;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-    }
-    const parent = path.dirname(current);
-    if (parent === current) return path.resolve(process.cwd());
-    current = parent;
-  }
+  return path.resolve(configured ?? process.cwd());
 }
 
-async function selectedEnvironment(project: string, requested?: string): Promise<string> {
+function selectedEnvironment(requested?: string): string {
   if (requested) return requested;
-  return (await readState(project)).activeEnvironment?.name ?? DEFAULT_ENVIRONMENT;
+  return process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT;
 }
 
 function targets(input: string): Platform[] {
@@ -80,7 +67,7 @@ program
   .description("Create, reproduce, and switch isolated Agent environments")
   .version("0.6.0")
   .enablePositionalOptions()
-  .option("-p, --project <directory>", "project whose Agent environment is managed; defaults to the nearest parent with .harness");
+  .option("-p, --project <directory>", "project whose Memory is managed; defaults to the current directory");
 
 program
   .command("init [directory]")
@@ -94,29 +81,17 @@ program
 const envCommand = program.command("env").description("manage isolated Agent environments");
 
 envCommand
-  .command("create [name]")
-  .description("create a named environment with Project Memory; defaults to base")
+  .command("create <name>")
+  .description("create a global named environment with the foundational packages")
   .option("-t, --target <target>", "codex, claude, both, or a comma-separated list", "both")
-  .option("--without-memory", "do not install the default Project Memory package")
-  .action(async (name: string | undefined, options: { target: string; withoutMemory: boolean }, command: Command) => {
+  .action(async (name: string, options: { target: string }, command: Command) => {
     const project = projectRoot(command);
-    const environmentName = name ?? DEFAULT_ENVIRONMENT;
-    const environment = await createEnvironment(project, environmentName, targets(options.target));
-    let memoryVersion: string | undefined;
-    if (!options.withoutMemory) {
-      try {
-        const installed = await installIntoEnvironment(project, environmentName, `builtin:${PROJECT_MEMORY_PACKAGE}`);
-        memoryVersion = installed.root.lock.version;
-      } catch (error) {
-        await removeEnvironment(project, environmentName).catch(() => undefined);
-        throw error;
-      }
-    }
-    console.log(`Created environment ${environmentName}`);
-    console.log(`  recipe  ${environmentPath(project, environmentName)}`);
-    console.log(`  lock    ${environmentLockPath(project, environmentName)}`);
-    console.log(`  memory  ${projectMemoryPath(project)}`);
-    if (memoryVersion) console.log(`  package ${PROJECT_MEMORY_PACKAGE}@${memoryVersion}`);
+    const environment = await createEnvironment(project, name, targets(options.target));
+    const lock = await readEnvironmentLock(project, name);
+    console.log(`Created global environment ${name}`);
+    console.log(`  recipe  ${environmentPath(project, name)}`);
+    console.log(`  lock    ${environmentLockPath(project, name)}`);
+    console.log(`  foundational ${FOUNDATIONAL_PACKAGES.map((packageName) => `${packageName}@${lock.packages[packageName]?.version}`).join(", ")}`);
     console.log(`  targets ${environment.spec.targets.join(", ")}`);
   });
 
@@ -126,12 +101,9 @@ envCommand
   .description("list named environments")
   .action(async (_options: unknown, command: Command) => {
     const project = projectRoot(command);
-    const [names, state] = await Promise.all([listEnvironments(project), readState(project)]);
-    if (names.length === 0) {
-      console.log("No environments.");
-      return;
-    }
-    for (const name of names) console.log(`${state.activeEnvironment?.name === name ? "*" : " "} ${name}`);
+    const names = await listEnvironments(project);
+    const active = selectedEnvironment();
+    for (const name of names) console.log(`${active === name ? "*" : " "} ${name}`);
   });
 
 envCommand
@@ -139,12 +111,8 @@ envCommand
   .description("show an environment recipe and resolved package closure")
   .action(async (name: string, _options: unknown, command: Command) => {
     const project = projectRoot(command);
-    const [environment, lock, state] = await Promise.all([
-      readEnvironment(project, name),
-      readEnvironmentLock(project, name),
-      readState(project),
-    ]);
-    console.log(`Environment: ${name}${state.activeEnvironment?.name === name ? " (active)" : ""}`);
+    const [{ environment, lock }, active] = await Promise.all([environmentSnapshot(project, name), selectedEnvironment()]);
+    console.log(`Environment: ${name}${active === name ? " (active)" : ""}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
     console.log(`  packages  ${Object.values(lock.packages).map((pkg) => `${pkg.name}@${pkg.version}`).join(", ") || "none"}`);
@@ -164,7 +132,7 @@ program
   .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
   .action(async (source: string, options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
-    const environmentName = await selectedEnvironment(project, options.name);
+    const environmentName = selectedEnvironment(options.name);
     const result = await installIntoEnvironment(project, environmentName, source, process.cwd());
     console.log(`Installed ${result.root.lock.name}@${result.root.lock.version} into ${environmentName}`);
     console.log(`  source        ${result.root.lock.source}`);
@@ -187,51 +155,40 @@ program
 
 program
   .command("deactivate")
-  .description("deactivate the complete active environment")
+  .description("leave the selected environment and return to base")
   .action(async (_options: unknown, command: Command) => {
     const project = projectRoot(command);
-    const state = await readState(project);
-    const previous = state.activeEnvironment?.name ?? (state.profile ? `legacy profile ${state.profile.name}` : undefined);
+    const previous = selectedEnvironment();
     const result = await deactivateEnvironment(project);
     printActions(result.actions);
-    console.log(`Deactivated environment ${previous}`);
+    console.log(`Deactivated environment ${previous ?? DEFAULT_ENVIRONMENT}; using ${DEFAULT_ENVIRONMENT}`);
   });
 
 program
-  .command("current")
-  .description("show the active environment and its complete package closure")
-  .option("--name-only", "print only the active environment name for shell integrations", false)
+  .command("info")
+  .description("show Environment information and machine-readable Agent context")
   .option("--json", "print structured Environment, package, Skill, and Memory context", false)
-  .action(async (options: { nameOnly: boolean; json: boolean }, command: Command) => {
+  .action(async (options: { json: boolean }, command: Command) => {
     const project = projectRoot(command);
-    if (options.nameOnly && options.json) throw new Error("--name-only and --json cannot be used together");
     if (options.json) {
-      console.log(JSON.stringify(await currentEnvironmentContext(project), null, 2));
+      console.log(JSON.stringify(await environmentInfo(project), null, 2));
       return;
     }
-    const active = (await readState(project)).activeEnvironment;
-    if (!active) {
-      if (options.nameOnly) return;
-      console.log("No active environment.");
-      return;
-    }
-    if (options.nameOnly) {
-      console.log(active.name);
-      return;
-    }
-    const environment = await readEnvironment(project, active.name);
-    console.log(`Environment: ${active.name}`);
-    console.log(`  targets   ${active.targets.join(", ")}`);
+    const activeName = selectedEnvironment();
+    const { environment, lock } = await environmentSnapshot(project, activeName);
+    console.log(`Environment: ${activeName}`);
+    console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
-    console.log(`  packages  ${active.packages.join(", ") || "none"}`);
+    console.log(`  packages  ${Object.keys(lock.packages).join(", ") || "none"}`);
   });
 
-const shellCommand = program.command("shell").description("print shell integration code for the active-environment prompt");
+const shellCommand = program.command("shell").description("print shell integration for Environment selection and the prompt");
 
 shellCommand
   .command("hook [shell]")
   .description("print a bash or zsh hook for eval")
-  .action((shell: string | undefined) => {
+  .action(async (shell: string | undefined, _options: unknown, command: Command) => {
+    await ensureBaseEnvironment(projectRoot(command));
     process.stdout.write(renderShellHook(resolveShell(shell)));
   });
 
@@ -251,12 +208,11 @@ program
 
 program
   .command("doctor")
-  .description("verify environment recipes, locks, requirements, activation, and drift")
+  .description("verify environment recipes, locks, views, requirements, activation, and Memory discovery")
   .option("-n, --name <environment>", "environment to check")
   .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
-    const state = await readState(project);
-    const names = options.name ? [options.name] : state.activeEnvironment ? [state.activeEnvironment.name] : await listEnvironments(project);
+    const names = options.name ? [options.name] : [selectedEnvironment()];
     if (names.length === 0) throw new Error("No environments to check");
     let failed = false;
     for (const name of names) {

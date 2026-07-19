@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { access, lstat, mkdir, readFile, readlink, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { access, chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -24,6 +24,57 @@ export async function writeTextAtomic(filePath: string, content: string): Promis
   const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(tempPath, content, "utf8");
   await rename(tempPath, filePath);
+}
+
+export async function writeBufferPreservingFile(filePath: string, content: Buffer, mode?: number): Promise<void> {
+  const linkInfo = await lstat(filePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  const target = linkInfo?.isSymbolicLink()
+    ? await realpath(filePath).catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        return path.resolve(path.dirname(filePath), await readlink(filePath));
+      })
+    : filePath;
+  const targetInfo = await stat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  await mkdir(path.dirname(target), { recursive: true });
+  const tempPath = `${target}.tmp-${process.pid}-${randomUUID()}`;
+  const targetMode = mode ?? targetInfo?.mode;
+  try {
+    await writeFile(tempPath, content, targetMode === undefined ? undefined : { mode: targetMode });
+    if (targetMode !== undefined) await chmod(tempPath, targetMode);
+    await rename(tempPath, target);
+  } catch (error) {
+    await rm(tempPath, { force: true });
+    throw error;
+  }
+}
+
+export async function writeTextPreservingFile(filePath: string, content: string): Promise<void> {
+  const linkInfo = await lstat(filePath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  const target = linkInfo?.isSymbolicLink()
+    ? await realpath(filePath).catch(async (error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        const linked = await readlink(filePath);
+        return path.resolve(path.dirname(filePath), linked);
+      })
+    : filePath;
+  const targetInfo = await stat(target).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  await mkdir(path.dirname(target), { recursive: true });
+  const tempPath = `${target}.tmp-${process.pid}-${randomUUID()}`;
+  await writeFile(tempPath, content, { encoding: "utf8", ...(targetInfo ? { mode: targetInfo.mode } : {}) });
+  if (targetInfo) await chmod(tempPath, targetInfo.mode);
+  await rename(tempPath, target);
 }
 
 export async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
@@ -57,14 +108,15 @@ async function hashEntry(root: string, relative: string, hash: ReturnType<typeof
     return;
   }
   if (!info.isFile()) return;
-  hash.update(`file:${normalized}:${info.mode & 0o777}\0`);
+  // Cache publication removes write bits; integrity tracks content and executable/readable shape, not mutability.
+  hash.update(`file:${normalized}:${info.mode & 0o555}\0`);
   hash.update(await readFile(absolute));
   hash.update("\0");
 }
 
 export async function hashDirectory(root: string): Promise<string> {
   const hash = createHash("sha256");
-  await hashEntry(root, "", hash);
+  await hashEntry(await realpath(root), "", hash);
   return `sha256-${hash.digest("hex")}`;
 }
 
