@@ -1,0 +1,16 @@
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: harness-package-builder
+  version: 1.0.0
+  description: Create and update valid Harness Packages from existing resources or natural-language requirements.
+  tags: [authoring, package]
+spec:
+  platforms: [codex, claude]
+  entrypoints:
+    - name: create-package
+      skill: harness-package-builder
+      description: Create or update a validated Harness Package containing the requested resources and dependencies.
+  skills:
+    - name: harness-package-builder
+      path: ./skills/harness-package-builder

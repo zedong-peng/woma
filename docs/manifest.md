@@ -1,6 +1,6 @@
 # Harness package manifest
 
-`harness.yaml` describes one reusable domain capability. A package may expose an atomic Skill or a natural-language meta-skill that depends on other packages. It contains no credential values and no project-specific build commands.
+`harness.yaml` describes one reusable Package. A Package may provide any combination of Skills, MCP servers, hooks, requirements, dependencies, and user-facing Skill entrypoints. It contains no credential values and no project-specific build commands.
 
 ```yaml
 apiVersion: harness.conda/v1
@@ -46,7 +46,7 @@ spec:
       platforms: [codex, claude]
 ```
 
-## Dependencies and meta-skills
+## Dependencies and coordinating Skills
 
 `dependencies` declares other Harness packages required by this package. Installation recursively resolves dependencies before their parent, validates package identity and SemVer constraints, rejects cycles and conflicting resolutions, and writes the complete dependency closure to the global Environment lock atomically.
 
@@ -61,15 +61,15 @@ dependencies:
 
 Local sources are useful during development but are not portable across machines. For security, packages installed from Git or the built-in catalog cannot declare local dependency sources; their dependencies must also use Git or built-in sources. Published packages should use immutable Git tags or revisions until registry-backed resolution is available.
 
-`entrypoints` identifies the package's user-facing starting Skills. It does not define workflow steps or create a DAG. A meta-skill keeps its coordination method, branching rules, interruption behavior, and expected output in its ordinary `SKILL.md`; Harness Conda only manages the packages needed to make that method available.
+`entrypoints` identifies a Package's user-facing starting Skills. It does not define workflow steps or create a DAG. When a Package teaches an end-to-end method, an ordinary coordinating Skill keeps its ordering, branching rules, interruption behavior, and expected output in `SKILL.md`; Harness Conda only manages the Packages needed to make that method available.
 
-For example, an `auto-research` package can expose one `auto-research` Skill while depending on independently versioned `paper-search`, `idea-gen`, and `exp-design` packages. Installing the meta-skill installs and locks all four packages:
+For example, an `auto-research` Package can expose one coordinating `auto-research` Skill while depending on independently versioned `paper-search`, `idea-gen`, and `exp-design` Packages. Installing `auto-research` installs and locks all four Packages:
 
 ```bash
 harness install ./auto-research
 ```
 
-The same component packages can still be installed individually and composed into another meta-skill by an Agent.
+The same component Packages can still be installed individually or composed into another ordinary Package by the `harness-package-builder` Agent Skill. A dependency-only aggregation Package may omit Skills and entrypoints entirely. These are structural variations of one Package model, not separate Package types.
 
 Remote MCP headers map HTTP header names to environment variable names:
 

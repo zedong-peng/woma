@@ -9,7 +9,7 @@ harness env show <name>
 harness env remove <name>
 ```
 
-`base` is initialized automatically and cannot be explicitly created or removed. Every Environment contains `harness-project-memory` and `meta-skill-builder` as foundational root Packages. Environment initialization never scans or imports ordinary Skills from existing Agent homes.
+`base` is initialized automatically and cannot be explicitly created or removed. Every Environment contains `harness-project-memory` and `harness-package-builder` as foundational root Packages. Environment initialization never scans or imports ordinary Skills from existing Agent homes.
 
 Environment recipes and locks are stored under `$HARNESS_HOME/environments/`. `HARNESS_HOME` defaults to `~/.harness-conda`.
 
@@ -101,7 +101,7 @@ harness inspect <source>
 harness capture <directory> --from codex|claude [--name <name>]
 ```
 
-`init` scaffolds a Package or meta-skill into a new or empty destination and refuses non-empty destinations. `capture` exports supported resources from an existing Agent project configuration without copying literal credential values; its output directory must not already exist. Both commands stage and validate their output before publication and leave no partial package after a normal failure.
+`init` scaffolds a Package into a new or empty destination and refuses non-empty destinations. `capture` exports supported resources from an existing Agent project configuration without copying literal credential values; its output directory must not already exist. Both commands stage and validate their output before publication and leave no partial Package after a normal failure. The foundational `harness-package-builder` Skill can wrap existing Skills and Agent resources, update a Package, aggregate dependencies, or author an optional coordinating entrypoint Skill before validating the result with `inspect`.
 
 ## Shell integration
 

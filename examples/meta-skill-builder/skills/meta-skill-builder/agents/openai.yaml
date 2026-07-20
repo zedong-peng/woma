@@ -1,4 +1,0 @@
-interface:
-  display_name: "Meta-Skill Builder"
-  short_description: "Create installable multi-Skill methods"
-  default_prompt: "Use $meta-skill-builder to turn my multi-Skill process into an installable Harness package."

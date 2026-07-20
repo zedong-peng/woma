@@ -73,7 +73,7 @@ program
 
 program
   .command("init [directory]")
-  .description("scaffold a new Harness package or meta-skill")
+  .description("scaffold a new Harness package")
   .option("--name <name>", "package name")
   .action(async (directory: string | undefined, options: { name?: string }) => {
     const result = await scaffoldHarness(directory ?? ".", options.name);
@@ -185,7 +185,7 @@ envCommand
 
 program
   .command("install <source>")
-  .description("install a package or meta-skill and its dependencies into an environment")
+  .description("install a package and its dependencies into an environment")
   .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
   .action(async (source: string, options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
