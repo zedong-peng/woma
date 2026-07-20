@@ -92,6 +92,38 @@ test("built CLI entrypoint is executable", async () => {
   await access(path.resolve("dist/src/cli.js"), constants.X_OK);
 });
 
+test("CLI exports and imports a portable Environment bundle", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-bundle-"));
+  const project = path.join(root, "project");
+  const homeA = path.join(root, "home-a");
+  const homeB = path.join(root, "home-b");
+  const bundle = path.join(root, "portable.harness-env");
+  try {
+    const pkg = await packageFixture(root, "portable-skill");
+    assert.equal((await runCli(["--project", project, "env", "create", "portable", "--target", "codex"], root, homeA)).code, 0);
+    assert.equal((await runCli(["--project", project, "install", "-n", "portable", pkg], root, homeA)).code, 0);
+    const exported = await runCli(
+      ["--project", project, "env", "export", "--name", "portable", "--output", bundle],
+      root,
+      homeA,
+    );
+    assert.equal(exported.code, 0, exported.stderr);
+    assert.match(exported.stdout, /Exported environment portable/);
+    await rm(pkg, { recursive: true, force: true });
+    await removeTestTree(homeA);
+
+    const imported = await runCli(["--project", project, "env", "import", bundle, "--name", "restored"], root, homeB);
+    assert.equal(imported.code, 0, imported.stderr);
+    assert.match(imported.stdout, /Imported environment restored/);
+    assert.match(
+      await readFile(path.join(homeB, "environments", "restored", "view", "codex", "skills", "portable-skill", "SKILL.md"), "utf8"),
+      /portable-skill/,
+    );
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("CLI exposes environment commands and removes workflow phase commands", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-help-"));
   try {

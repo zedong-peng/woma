@@ -226,7 +226,7 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
   }
 }
 
-function cacheKey(source: string, resolved: string, integrity: string): string {
+export function packageCacheKey(source: string, resolved: string, integrity: string): string {
   return createHash("sha256").update(`${source}\0${resolved}\0${integrity}`).digest("hex").slice(0, 20);
 }
 
@@ -309,7 +309,7 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
   await validatePackage(materialized.root, manifest);
   const integrity = await hashDirectory(materialized.root);
   const resolved = materialized.resolved === "local" || materialized.resolved === "builtin" ? integrity : materialized.resolved;
-  const key = cacheKey(materialized.source, resolved, integrity);
+  const key = packageCacheKey(materialized.source, resolved, integrity);
   const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
   await withPackageLock(manifest.metadata.name, key, async () => {
     if (await pathExists(cacheRoot)) {
@@ -438,6 +438,69 @@ async function loadCachedPackageUnlocked(lock: LockedPackage): Promise<Installed
 
 export function loadCachedPackage(lock: LockedPackage): Promise<InstalledPackage> {
   return withPackageLock(lock.name, lock.cacheKey, () => loadCachedPackageUnlocked(lock));
+}
+
+export async function validateLockedPackageDirectory(lock: LockedPackage, root: string): Promise<HarnessManifest> {
+  if (packageCacheKey(lock.source, lock.resolved, lock.integrity) !== lock.cacheKey) {
+    throw new Error(`Package ${lock.name} has a cache key that does not match its locked source and integrity`);
+  }
+  const integrity = await hashDirectory(root);
+  if (integrity !== lock.integrity) {
+    throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
+  }
+  const manifest = await loadManifest(root);
+  await validatePackage(root, manifest);
+  if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
+    throw new Error(
+      `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
+    );
+  }
+  const dependencies = manifest.spec.dependencies.map((dependency) => dependency.name);
+  if (JSON.stringify(dependencies) !== JSON.stringify(lock.dependencies)) {
+    throw new Error(`Locked dependency edges for ${lock.name} do not match its bundled manifest`);
+  }
+  return manifest;
+}
+
+export async function importLockedPackage(lock: LockedPackage, sourceRoot: string): Promise<InstalledPackage> {
+  const manifest = await validateLockedPackageDirectory(lock, sourceRoot);
+  const cacheRoot = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
+  await withPackageLock(lock.name, lock.cacheKey, async () => {
+    if (await pathExists(cacheRoot)) {
+      try {
+        return await loadCachedPackageUnlocked(lock);
+      } catch {}
+    }
+    await populateCache(sourceRoot, cacheRoot, manifest, lock.integrity);
+    await verifyCache(cacheRoot, manifest, lock.integrity);
+  });
+  return { manifest, root: cacheRoot, lock };
+}
+
+export async function validateBuiltinPackageLock(lock: LockedPackage): Promise<void> {
+  const source = `builtin:${lock.name}`;
+  if (lock.source !== source) throw new Error(`Foundational Package ${lock.name} must resolve from ${source}`);
+  const root = builtinPath(lock.name);
+  const manifest = await loadManifest(root);
+  await validatePackage(root, manifest);
+  const integrity = await hashDirectory(root);
+  const expected = {
+    name: manifest.metadata.name,
+    version: manifest.metadata.version,
+    source,
+    resolved: integrity,
+    integrity,
+    cacheKey: packageCacheKey(source, integrity, integrity),
+    dependencies: manifest.spec.dependencies.map((dependency) => dependency.name),
+  };
+  for (const key of ["name", "version", "source", "resolved", "integrity", "cacheKey"] as const) {
+    if (lock[key] !== expected[key]) {
+      throw new Error(`Bundled foundational Package ${lock.name} does not match the installed ${source}`);
+    }
+  }
+  if (JSON.stringify(lock.dependencies) !== JSON.stringify(expected.dependencies)) {
+    throw new Error(`Bundled foundational Package ${lock.name} dependencies do not match the installed ${source}`);
+  }
 }
 
 function sourceAtRevision(source: string, resolved: string): string {
