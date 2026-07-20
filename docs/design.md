@@ -9,7 +9,7 @@ Harness Conda separates reusable Agent capabilities from repository knowledge.
 | Immutable Package contents | User-global | `$HARNESS_HOME/packages/` |
 | Environment recipes and locks | User-global | `$HARNESS_HOME/environments/<name>/` |
 | Codex and Claude Environment views | User-global | `$HARNESS_HOME/environments/<name>/view/` |
-| Authentication and session runtime | User-global, shared | `$HARNESS_HOME/runtime/<agent>/` |
+| Opaque Agent state | Per Environment | `$HARNESS_HOME/environments/<name>/home/<agent>/` |
 | Explicit Skill migration snapshots | User-global | `$HARNESS_HOME/migrations/skills/<content-hash>/` |
 | Mutation locks | User-global | `$HARNESS_HOME/locks/` |
 | Environment selection | Current shell | `HARNESS_ENV` (defaults to `base`) |
@@ -28,7 +28,7 @@ A `.harness-env` file is a versioned, gzip-compressed JSON document containing o
 
 Import limits compressed, decompressed, file-count, and decoded payload sizes. It rejects unsafe or duplicate paths, symbolic and special files, writable bundled modes, malformed Base64, duplicate or missing Packages, cache-key drift, Package identity or integrity drift, invalid dependency graphs, foundational Package spoofing, unsupported targets, `base`, and existing destination names. Bundled foundational Packages must exactly match the builtins shipped with the importing Harness Conda installation. All Package trees are materialized and validated in temporary storage before Package Store publication. The Environment recipe, lock, and view are then published through the ordinary Environment transaction, so a normal failure leaves no partially visible Environment.
 
-Bundles deliberately exclude `$HARNESS_HOME/runtime`, project files, Project Memory, machine-local Memory, and actual environment-variable values. Source strings and Package content are retained for provenance and offline restoration; a bundle should therefore be treated as executable Package input, not as a credential or session backup.
+Bundles deliberately exclude per-Environment Agent homes, project files, Project Memory, machine-local Memory, and actual environment-variable values. Source strings and Package content are retained for provenance and offline restoration; a bundle should therefore be treated as executable Package input, not as a credential or session backup.
 
 ## Activation and direct Agent launch
 
@@ -41,10 +41,10 @@ global Environment recipe and lock
 content-addressed Package store
         |
         v
-global Codex/Claude Environment view
+atomic Codex/Claude managed-resource view
         |
         v
-shell-selected CODEX_HOME / CLAUDE_CONFIG_DIR
+stable per-Environment CODEX_HOME / CLAUDE_CONFIG_DIR
         |
         v
 direct codex or claude
@@ -52,9 +52,9 @@ direct codex or claude
 
 Package Store replacements are copied into read-only immutable generations and fully validated before an atomic cache-key symlink switch. Skill directories in every view resolve through that stable cache pointer, so repair readers see either the old or new Package and never a missing entry. Every Environment update builds a complete `.view.gen-<id>` directory and atomically replaces the stable `view` symlink, so direct Agent readers never observe mixed Skill, MCP, and Hook generations. Recipe and lock metadata commit under the Environment lock before the view pointer changes and roll back if publication fails.
 
-Non-Harness authentication and session paths are linked through a stable shared runtime root, seeded from the user's original Agent configuration roots. Codex `skills/.system` uses the same model: every Codex Environment contains one validated `.system` link to `$HARNESS_HOME/runtime/codex/skills/.system`, while Package Skill ownership metadata and exact visibility checks cover the remaining entries. Codex can therefore update system Skills without mutating an Environment closure.
+Each Environment has stable Codex and Claude homes that are never generation-swapped. Harness-owned and Environment-specific configuration links through the Environment `view`: Codex `auth.json`, `config.toml`, `hooks.json`, and `skills`; Claude `.credentials.json`, `settings.json`, and `skills`. Credentials and provider settings are seeded from the original Agent home only when an Environment is first built, then inherited from the current generation so user edits through `$CODEX_HOME` or `$CLAUDE_CONFIG_DIR` survive later publication. Harness strips and regenerates its marked Codex MCP blocks and exact Claude Hook entries while preserving user-owned provider settings. Claude `.claude.json` remains in the stable home, where Harness transactionally updates only Package-managed `mcpServers`. Codex `skills/.system` points to a stable Environment-specific directory outside the generation.
 
-Known first-use paths are linked before they exist, arbitrary runtime files are adopted byte-for-byte, and runtime links must target their exact shared path. Retired view generations remain available to running Agents and are reconciled during later operations in the selected Environment. Updating an inactive Environment reads shared runtime state but never contributes its own stale state. Claude non-`mcpServers` fields use one authoritative shared snapshot; switching replaces that snapshot exactly, including field deletion, while the target Environment retains only its own and user-baseline MCP definitions.
+Every other path is opaque Agent-owned state. Harness does not enumerate, inspect, copy, merge, adopt, or relink unknown files, including SQLite main, WAL, and SHM files. Retired generations contain only managed resources and remain available to processes that still have those files open. This boundary avoids depending on private Agent filenames and prevents Environment operations from constructing inconsistent database snapshots.
 
 The shell hook saves the original Agent configuration roots and wraps both installed CLI names, `harness` and `harness-conda`. It validates that the selected Environment and complete view exist before changing the parent shell, falls back to `base` for a stale inherited selection, and parses only a real top-level `activate` or `deactivate` command. Help requests and unrelated arguments never change Environment state. For unsupported targets it restores the original Agent configuration root. It never proxies `codex` or `claude`.
 
@@ -70,7 +70,8 @@ The implementation provides:
 - global named Environment recipes and independent dependency locks;
 - one global target-specific view per Environment;
 - Environment-isolated Skill, MCP, and Hook visibility;
-- direct Agent launch through shell-selected configuration roots;
+- direct Agent launch through stable shell-selected per-Environment homes;
+- Environment-isolated opaque Agent state;
 - project-local Memory independent of Environment storage.
 
 Updating an Environment transactionally refreshes the managed paths in its global view. All projects and newly started Agent processes selecting that Environment therefore observe the same package closure without reactivation. Already-running Agent processes may retain startup-time Skill discovery and should be restarted after an Environment change.
@@ -79,4 +80,4 @@ Harness does not yet bind Agent session IDs to Environments. A resumed session u
 
 ## Transaction boundary
 
-Environment mutations are serialized with filesystem-backed per-Environment locks. Activation holds the target lock through project and runtime commit, preventing concurrent install, sync, or removal from invalidating the selected generation. Project locks are keyed by canonical real paths so symlink aliases serialize together. Recipes and locks are re-read inside the lock, and multi-file inspection uses the same locked snapshot. Package cache publication, reads, permission changes, corruption repair, and verification use per-Package locks. Package resolution and validation complete before one complete view generation is atomically published. Recipe and lock commit remains inside the ordinary-error rollback boundary; failures restore the previous view pointer and metadata. Activation applies project changes before runtime reconciliation, preflights all logical runtime changes, and rolls project changes back when reconciliation fails. Abrupt process termination and unanticipated filesystem failure remain outside the guarantee because there is no persistent transaction journal.
+Environment mutations are serialized with filesystem-backed per-Environment locks. Activation holds the target lock through the project transition, preventing concurrent install, sync, or removal from invalidating the selected generation. Project locks are keyed by canonical real paths so symlink aliases serialize together. Recipes and locks are re-read inside the lock, and multi-file inspection uses the same locked snapshot. Package cache publication, reads, permission changes, corruption repair, and verification use per-Package locks. Package resolution and validation complete before one complete view generation is atomically published. Recipe, lock, stable managed-home links, and Package-managed Claude MCP fields remain inside the ordinary-error rollback boundary. Opaque Agent state is outside the transaction because Harness never mutates it. Abrupt process termination and unanticipated filesystem failure remain outside the guarantee because there is no persistent transaction journal.

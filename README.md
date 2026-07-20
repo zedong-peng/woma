@@ -86,28 +86,31 @@ Use `--name performance-copy` during import to choose a different Environment na
 ~/.harness-conda/
 ├── packages/                    immutable, content-addressed Package contents
 ├── migrations/                  content-addressed snapshots of explicitly migrated Skills
-├── runtime/                     shared Agent system Skills, authentication, and sessions
-├── locks/                       cross-process Environment, Package, runtime, and project locks
+├── locks/                       cross-process Environment, Package, and project locks
 └── environments/<name>/
     ├── environment.yaml         root Packages and Agent targets
     ├── lock.json                exact recursive dependency closure
+    ├── home/
+    │   ├── codex/               stable, opaque Codex state and managed view links
+    │   ├── claude/              stable, opaque Claude state and managed view links
+    │   └── codex-system-skills/ stable Codex-managed system Skills
     ├── view -> .view.gen-<id>    atomic pointer to one complete generation
     └── .view.gen-<id>/
-        ├── codex/               Codex Skills, MCP, Hooks, and shared-state links
-        └── claude/              Claude Skills, MCP, Hooks, and shared-state links
+        ├── codex/               Harness-managed Codex Skills, MCP, and Hooks
+        └── claude/              Harness-managed Claude Skills and Hooks
 
 <project>/.harness/
 ├── memory/                      portable project and Package knowledge
 └── local/                       machine-local Memory
 ```
 
-Each ordinary Skill in a view is a symbolic link into a read-only Package Store entry. Codex-managed `skills/.system` is instead linked through the shared runtime root so Codex can update its own system Skills without changing an Environment lock. Installing into an Environment builds a complete immutable view generation and publishes it with one atomic `view` symlink replacement, so every project and new Agent process observes either the old or new dependency closure, never a path-by-path mixture:
+Each ordinary Skill in a view is a symbolic link into a read-only Package Store entry. Installing into an Environment builds a complete immutable managed-resource generation and publishes it with one atomic `view` symlink replacement. Stable Agent homes link only Harness-owned entries through that pointer, so every project and new Agent process observes either the old or new dependency closure, never a path-by-path mixture:
 
 ```text
-project/shell -> Environment view -> Package Store
+project/shell -> stable Environment Agent home -> Environment view -> Package Store
 ```
 
-The shell hook exports an Environment view only for targets that Environment supports and restores the original Agent home for unsupported targets. Authentication, logs, sessions, and Codex system Skills use stable links through the shared runtime root; existing state is adopted from the user's original Agent configuration root. Ordinary existing Skills are never scanned during Environment initialization. `harness migrate skills` explicitly copies them into a content-addressed Package snapshot and atomically installs that Package into the selected Environment without modifying the originals. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
+The shell hook exports the selected Environment's stable Agent home for supported targets and restores the original Agent home for unsupported targets. Authentication and provider configuration are Environment-specific: edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml` for Codex, and `$CLAUDE_CONFIG_DIR/settings.json` for Claude endpoint/API-key settings. Claude OAuth login uses `$CLAUDE_CONFIG_DIR/.credentials.json` when that file is created. Do not edit the corresponding files under `~/.codex` or `~/.claude` after an Environment has been initialized; they are only first-use seeds. Other Agent-created files, including sessions, caches, and databases, stay opaque and isolated in the stable Environment home. Harness never copies unknown state from active or retired view generations. Existing ordinary Skills remain untouched until `harness migrate skills` explicitly snapshots them. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
 
 ## Documentation
 

@@ -15,7 +15,10 @@ async function fakeEnvironment(home: string, name: string, targets: ("codex" | "
   await mkdir(path.join(root, "view"), { recursive: true });
   await writeFile(path.join(root, "environment.yaml"), `metadata:\n  name: ${name}\n`, "utf8");
   await writeFile(path.join(root, "view", "view.json"), "{}\n", "utf8");
-  for (const target of targets) await mkdir(path.join(root, "view", target, "skills"), { recursive: true });
+  for (const target of targets) {
+    await mkdir(path.join(root, "view", target, "skills"), { recursive: true });
+    await mkdir(path.join(root, "home", target), { recursive: true });
+  }
 }
 
 test("shell resolution supports explicit and login-shell bash or zsh", () => {
@@ -39,14 +42,14 @@ test("bash hook keeps the shell Environment across project directories", async (
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested], options);
     assert.equal(
       stdout,
-      `(harness:research) |research|${path.join(root, "home", "environments", "research", "view", "codex")}|${path.join(root, "home", "environments", "research", "view", "claude")}`,
+      `(harness:research) |research|${path.join(root, "home", "environments", "research", "home", "codex")}|${path.join(root, "home", "environments", "research", "home", "claude")}`,
     );
 
     await mkdir(path.join(nested, ".harness"));
     const inner = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested], options);
     assert.equal(
       inner.stdout,
-      `(harness:research) |research|${path.join(root, "home", "environments", "research", "view", "codex")}|${path.join(root, "home", "environments", "research", "view", "claude")}`,
+      `(harness:research) |research|${path.join(root, "home", "environments", "research", "home", "codex")}|${path.join(root, "home", "environments", "research", "home", "claude")}`,
     );
   } finally {
     await removeTestTree(root);
@@ -60,7 +63,7 @@ test("zsh hook installs an idempotent precmd prompt prefix", () => {
   assert.match(hook, /PROMPT='\$\{HARNESS_PROMPT_PREFIX\}'/);
   assert.match(hook, /HARNESS_SHELL_HOOK_INSTALLED/);
   assert.match(hook, /HARNESS_ORIGINAL_CODEX_HOME/);
-  assert.match(hook, /CLAUDE_CONFIG_DIR=.*environments.*view\/claude/);
+  assert.match(hook, /CLAUDE_CONFIG_DIR=.*environments.*home\/claude/);
 });
 
 test("bash hook updates the parent shell after activate and deactivate", async () => {
@@ -89,7 +92,7 @@ test("bash hook updates the parent shell after activate and deactivate", async (
     );
     assert.equal(
       stdout,
-      `research|${path.join(harnessHome, "environments", "research", "view", "codex")}\nbase|${path.join(harnessHome, "environments", "base", "view", "claude")}\n`,
+      `research|${path.join(harnessHome, "environments", "research", "home", "codex")}\nbase|${path.join(harnessHome, "environments", "base", "home", "claude")}\n`,
     );
   } finally {
     await removeTestTree(root);
@@ -112,7 +115,7 @@ test("harness-conda alias also updates the parent shell", async () => {
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
       env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome },
     });
-    assert.equal(stdout, `research|${path.join(harnessHome, "environments", "research", "view", "codex")}`);
+    assert.equal(stdout, `research|${path.join(harnessHome, "environments", "research", "home", "codex")}`);
   } finally {
     await removeTestTree(root);
   }
@@ -143,7 +146,7 @@ test("shell hook restores the original Agent home for an unsupported target", as
         },
       },
     );
-    assert.equal(stdout, `${path.join(home, "environments", "codex-only", "view", "codex")}|${originalClaude}`);
+    assert.equal(stdout, `${path.join(home, "environments", "codex-only", "home", "codex")}|${originalClaude}`);
   } finally {
     await removeTestTree(root);
   }

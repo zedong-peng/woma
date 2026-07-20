@@ -15,7 +15,7 @@ import {
   projectMemoryPath,
 } from "./memory.js";
 import { prepareMemoryBootstrapTransition } from "./memory-bootstrap.js";
-import { environmentViewPath, materializeEnvironmentView, reconcileRuntimeState, validateEnvironmentView } from "./view.js";
+import { environmentViewPath, materializeEnvironmentView, validateEnvironmentView } from "./view.js";
 import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
 
 const environmentName = z
@@ -328,7 +328,13 @@ export function ensureBaseEnvironment(projectRoot = process.cwd()): Promise<Harn
       const environment = await readEnvironmentFile(projectRoot, DEFAULT_ENVIRONMENT);
       const lock = await readEnvironmentLockFile(projectRoot, DEFAULT_ENVIRONMENT);
       const loaded = await loadEnvironmentSnapshot(environment, lock);
-      await validateEnvironmentView(environment, loaded.names.map((name) => loaded.packages.get(name)!));
+      const packages = loaded.names.map((name) => loaded.packages.get(name)!);
+      try {
+        await validateEnvironmentView(environment, packages);
+      } catch {
+        await materializeEnvironmentView(environment, packages, { previousPackages: packages });
+        await validateEnvironmentView(environment, packages);
+      }
       return environment;
     } catch (error) {
       throw new Error(`The base Environment is incomplete or corrupt: ${(error as Error).message}`);
@@ -671,7 +677,6 @@ export async function activateEnvironment(
       const applied = await transition.apply();
       try {
         await hooks.onProjectApplied?.();
-        await reconcileRuntimeState(process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT, name);
         return applied.result;
       } catch (error) {
         try {

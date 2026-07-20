@@ -4,5 +4,8 @@ dist/
 .harness/state.json
 .harness/local/
 .harness/cache/
+.harness/memory/
+AGENTS.md
+CLAUDE.md
 *.log
 talk.txt

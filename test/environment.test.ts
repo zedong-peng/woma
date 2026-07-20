@@ -20,7 +20,7 @@ import {
   removeEnvironment,
   syncEnvironment,
 } from "../src/environment.js";
-import { environmentViewPath } from "../src/view.js";
+import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 import { migrateExistingSkills } from "../src/migrate-skills.js";
@@ -143,10 +143,14 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     assert.equal((await lstat(system)).isSymbolicLink(), true);
     assert.equal(
       path.resolve(path.dirname(system), await readlink(system)),
-      path.join(home, "runtime", "codex", "skills", ".system"),
+      path.join(home, "environments", "base", "home", "codex-system-skills"),
     );
     await writeFile(path.join(system, "updated-by-codex"), "updated\n");
-    assert.equal(await readFile(path.join(codex, "skills", ".system", "updated-by-codex"), "utf8"), "updated\n");
+    assert.equal(
+      await readFile(path.join(home, "environments", "base", "home", "codex-system-skills", "updated-by-codex"), "utf8"),
+      "updated\n",
+    );
+    await assert.rejects(readFile(path.join(codex, "skills", ".system", "updated-by-codex")), /ENOENT/);
 
     await createEnvironment(root, "clean", ["codex"]);
     const planned = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both", dryRun: true });
@@ -499,7 +503,7 @@ test("activation validates an Environment before creating project files", { conc
   }
 });
 
-test("activation rejects an invalid current Environment before runtime or project mutation", { concurrency: false }, async () => {
+test("activation depends only on the validated target Environment", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-invalid-current-"));
   const project = path.join(root, "project");
   const previousEnvironment = process.env.HARNESS_ENV;
@@ -509,15 +513,12 @@ test("activation rejects an invalid current Environment before runtime or projec
   try {
     await mkdir(project, { recursive: true });
     await createEnvironment(project, "tools", ["codex"]);
-    const sharedAuth = path.join(process.env.HARNESS_HOME, "runtime", "codex", "auth.json");
-    await writeFile(sharedAuth, '{"auth":"keep"}\n', "utf8");
     process.env.HARNESS_ENV = "../../victim";
 
-    await assert.rejects(activateEnvironment(project, "tools"), /Invalid Environment name/);
+    await activateEnvironment(project, "tools");
 
-    assert.equal(await readFile(sharedAuth, "utf8"), '{"auth":"keep"}\n');
-    await assert.rejects(access(path.join(project, ".harness")));
-    await assert.rejects(access(path.join(project, ".gitignore")));
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /Harness Project Memory/);
+    assert.equal((await lstat(environmentAgentHomePath("tools", "codex"))).isDirectory(), true);
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
@@ -527,7 +528,7 @@ test("activation rejects an invalid current Environment before runtime or projec
   }
 });
 
-test("unknown target activation does not reconcile the current runtime", { concurrency: false }, async () => {
+test("unknown target activation does not touch the current stable Agent home", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-runtime-preflight-"));
   const project = path.join(root, "project");
   const previousEnvironment = process.env.HARNESS_ENV;
@@ -537,18 +538,13 @@ test("unknown target activation does not reconcile the current runtime", { concu
   try {
     await mkdir(project, { recursive: true });
     await createEnvironment(project, "current", ["codex"]);
-    const viewAuth = path.join(environmentViewPath("current"), "codex", "auth.json");
-    const sharedAuth = path.join(process.env.HARNESS_HOME, "runtime", "codex", "auth.json");
-    await writeFile(viewAuth, '{"auth":"shared-old"}\n', "utf8");
-    await rm(viewAuth);
-    await writeFile(viewAuth, '{"auth":"unreconciled-new"}\n', "utf8");
+    const opaque = path.join(environmentAgentHomePath("current", "codex"), "future.sqlite");
+    await writeFile(opaque, "opaque-current-state\n", "utf8");
     process.env.HARNESS_ENV = "current";
 
     await assert.rejects(activateEnvironment(project, "missing"), /Unknown environment: missing/);
 
-    assert.equal(await readFile(sharedAuth, "utf8"), '{"auth":"shared-old"}\n');
-    assert.equal((await lstat(viewAuth)).isSymbolicLink(), false);
-    assert.equal(await readFile(viewAuth, "utf8"), '{"auth":"unreconciled-new"}\n');
+    assert.equal(await readFile(opaque, "utf8"), "opaque-current-state\n");
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
@@ -663,6 +659,32 @@ test("existing base initialization rejects missing lock and view state", { concu
 
     await assert.rejects(ensureBaseEnvironment(root), /base Environment is incomplete or corrupt/i);
   } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("existing base initialization upgrades a legacy view containing Agent state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-legacy-view-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  try {
+    await mkdir(process.env.HARNESS_ORIGINAL_CODEX_HOME, { recursive: true });
+    await writeFile(path.join(process.env.HARNESS_ORIGINAL_CODEX_HOME, "auth.json"), '{"api_key":"latest"}\n', "utf8");
+    await ensureBaseEnvironment(root);
+    const legacyState = path.join(environmentViewPath("base"), "codex", "goals_1.sqlite");
+    await writeFile(legacyState, "legacy runtime state\n", "utf8");
+
+    await ensureBaseEnvironment(root);
+
+    await assert.rejects(access(path.join(environmentViewPath("base"), "codex", "goals_1.sqlite")), /ENOENT/);
+    assert.equal(
+      await readFile(path.join(environmentAgentHomePath("base", "codex"), "auth.json"), "utf8"),
+      '{"api_key":"latest"}\n',
+    );
+  } finally {
+    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
     await removeTestTree(root);
   }
 });
@@ -1118,7 +1140,7 @@ test("activation holds the target Environment lock through the project transitio
   }
 });
 
-test("project initialization failure happens before runtime reconciliation", { concurrency: false }, async () => {
+test("project initialization failure leaves stable Agent state unchanged", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-activation-runtime-rollback-"));
   const project = path.join(root, "project");
   process.env.HARNESS_HOME = path.join(root, "home");
@@ -1131,16 +1153,12 @@ test("project initialization failure happens before runtime reconciliation", { c
     await createEnvironment(project, "tools", ["codex"]);
     await mkdir(project, { recursive: true });
     await writeFile(path.join(project, ".harness"), "blocks memory initialization\n", "utf8");
-    const baseAuth = path.join(environmentViewPath("base"), "codex", "auth.json");
-    const sharedAuth = path.join(process.env.HARNESS_HOME, "runtime", "codex", "auth.json");
-    await writeFile(sharedAuth, "old\n", "utf8");
-    await rm(baseAuth, { force: true });
-    await writeFile(baseAuth, "new-but-not-reconciled\n", "utf8");
+    const opaque = path.join(environmentAgentHomePath("base", "codex"), "opaque.sqlite");
+    await writeFile(opaque, "stable\n", "utf8");
 
     await assert.rejects(activateEnvironment(project, "tools"), /ENOTDIR|not a directory/);
 
-    assert.equal(await readFile(sharedAuth, "utf8"), "old\n");
-    assert.equal((await lstat(baseAuth)).isSymbolicLink(), false);
+    assert.equal(await readFile(opaque, "utf8"), "stable\n");
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
@@ -1150,7 +1168,7 @@ test("project initialization failure happens before runtime reconciliation", { c
   }
 });
 
-test("runtime preflight failure rolls back project activation before runtime mutation", { concurrency: false }, async () => {
+test("managed Agent home drift is rejected before project activation", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-runtime-preflight-rollback-"));
   const project = path.join(root, "project");
   process.env.HARNESS_HOME = path.join(root, "home");
@@ -1164,19 +1182,15 @@ test("runtime preflight failure rolls back project activation before runtime mut
     await mkdir(project, { recursive: true });
     await ensureBaseEnvironment(project);
     await createEnvironment(project, "tools", ["codex", "claude"]);
-    const baseAuth = path.join(environmentViewPath("base"), "codex", "auth.json");
-    const sharedAuth = path.join(process.env.HARNESS_HOME, "runtime", "codex", "auth.json");
-    await writeFile(sharedAuth, "old\n", "utf8");
-    await rm(baseAuth, { force: true });
-    await writeFile(baseAuth, "new-but-not-reconciled\n", "utf8");
-    const projects = path.join(environmentViewPath("base"), "claude", "projects");
-    await rm(projects, { force: true });
-    await mkdir(projects);
+    const baseOpaque = path.join(environmentAgentHomePath("base", "codex"), "opaque.sqlite");
+    await writeFile(baseOpaque, "stable\n", "utf8");
+    const toolsSkills = path.join(environmentAgentHomePath("tools", "claude"), "skills");
+    await rm(toolsSkills, { force: true });
+    await mkdir(toolsSkills);
 
-    await assert.rejects(activateEnvironment(project, "tools"), /Unsupported runtime path/);
+    await assert.rejects(activateEnvironment(project, "tools"), /Managed Agent home link is missing/);
 
-    assert.equal(await readFile(sharedAuth, "utf8"), "old\n");
-    assert.equal((await lstat(baseAuth)).isSymbolicLink(), false);
+    assert.equal(await readFile(baseOpaque, "utf8"), "stable\n");
     await assert.rejects(access(path.join(project, ".harness")));
     await assert.rejects(access(path.join(project, "AGENTS.md")));
     await assert.rejects(access(path.join(project, "CLAUDE.md")));
