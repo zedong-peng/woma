@@ -130,17 +130,6 @@ export async function withProjectLock<T>(projectRoot: string, operation: () => P
   }
 }
 
-export async function withRuntimeLock<T>(platform: string, operation: () => Promise<T>): Promise<T> {
-  if (platform !== "codex" && platform !== "claude") throw new Error(`Invalid runtime lock platform: ${platform}`);
-  const directory = path.join(harnessHome(), "locks", "runtime", `${platform}.lock`);
-  const release = await acquire(directory, `${platform} runtime`);
-  try {
-    return await operation();
-  } finally {
-    await release();
-  }
-}
-
 export async function withPackageLock<T>(name: string, cacheKey: string, operation: () => Promise<T>): Promise<T> {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error(`Invalid Package lock name: ${name}`);
   if (!/^[a-f0-9]{20}$/.test(cacheKey)) throw new Error(`Invalid Package cache key: ${cacheKey}`);

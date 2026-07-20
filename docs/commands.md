@@ -36,7 +36,7 @@ harness env import <file.harness-env> [--name <new-environment>]
 
 `env import` validates the complete bundle before publishing a new global Environment. The exported name is used by default; `--name` selects another name. Import refuses `base` and every existing destination instead of merging or overwriting them.
 
-Bundles contain Package files, Skills, MCP definitions, Hooks, source provenance, and integrity metadata. They do not contain shared Agent runtime, authentication, sessions, environment-variable values, Project Memory, machine-local Memory, `AGENTS.md`, or `CLAUDE.md`. Package instructions and Hooks are executable trust input, so inspect bundles received from another person before activation.
+Bundles contain Package files, Skills, MCP definitions, Hooks, source provenance, and integrity metadata. They do not contain per-Environment Agent homes, authentication, sessions, databases, environment-variable values, Project Memory, machine-local Memory, `AGENTS.md`, or `CLAUDE.md`. Package instructions and Hooks are executable trust input, so inspect bundles received from another person before activation.
 
 ## Package installation
 
@@ -65,7 +65,7 @@ harness activate [environment]
 harness deactivate
 ```
 
-`activate` defaults to `base`. With the recommended shell hook installed, it selects each supported Agent view in the parent shell and leaves unsupported Agents on their original configuration homes. It atomically initializes Project Memory and stable discovery pointers for both Agents in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
+`activate` defaults to `base`. With the recommended shell hook installed, it selects each supported Environment's stable Agent home in the parent shell and leaves unsupported Agents on their original configuration homes. It atomically initializes Project Memory and stable discovery pointers for both Agents in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
 
 The project defaults to the exact current working directory. Harness does not search parent directories for `.harness` or `.git`, so Git and non-Git projects follow the same rule. Run commands from the intended project root or pass the global `--project <directory>` option explicitly when working from a subdirectory.
 
