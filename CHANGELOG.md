@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Replaced shared runtime adoption with stable per-Environment Agent homes so unknown state and SQLite databases are never copied across view generations.
+- Replaced shared runtime adoption with stable per-Environment Agent homes and inherited Environment-specific credentials/provider settings, so unknown state and SQLite databases are never copied across view generations.
 - Replaced the foundational authoring assistant with a general `harness-package-builder` for wrapping resources and creating dependency-based Packages with optional coordinating Skills.
 - Added explicit migration of existing Agent Skills into a selected Environment and stable per-Environment Codex system Skills.
 - Added deterministic, offline-capable Environment bundle export/import with complete Package closures and atomic destination publication.

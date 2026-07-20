@@ -1,17 +1,17 @@
-import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, stat, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
-import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
+import { harnessHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import type { HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
 const MANAGED_HOME_LINKS: Record<Platform, string[]> = {
-  codex: ["config.toml", "hooks.json", "skills"],
-  claude: ["settings.json", "skills"],
+  codex: ["auth.json", "config.toml", "hooks.json", "skills"],
+  claude: [".credentials.json", "settings.json", "skills"],
 };
 
-const SHARED_CREDENTIAL_FILES: Record<Platform, string[]> = {
+const CREDENTIAL_FILES: Record<Platform, string[]> = {
   codex: ["auth.json"],
   claude: [".credentials.json"],
 };
@@ -147,6 +147,48 @@ function codexBlock(packageName: string, server: McpServer): string {
   return lines.join("\n");
 }
 
+function withoutHarnessCodexBlocks(content: string, filePath: string): string {
+  const lines = content.split(/\r?\n/);
+  const kept: string[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = /^# >>> harness-conda:(.+:mcp:.+)$/.exec(lines[index]!);
+    if (!match) {
+      kept.push(lines[index]!);
+      continue;
+    }
+    const end = `# <<< harness-conda:${match[1]}`;
+    while (index < lines.length && lines[index] !== end) index += 1;
+    if (index === lines.length) throw new Error(`Cannot merge ${filePath}: unterminated Harness-managed Codex block`);
+  }
+  return kept.join("\n").trimEnd();
+}
+
+function renderCodexConfig(input: string | null, filePath: string, packages: InstalledPackage[]): string {
+  const baseline = withoutHarnessCodexBlocks(input ?? "", filePath);
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = (baseline ? parseToml(baseline) : {}) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`Cannot merge ${filePath}: ${(error as Error).message}`);
+  }
+  const existingServers = parsed.mcp_servers ?? {};
+  if (!existingServers || typeof existingServers !== "object" || Array.isArray(existingServers)) {
+    throw new Error(`Cannot merge ${filePath}: mcp_servers must be a table`);
+  }
+  const blocks: string[] = [];
+  for (const { packageName, server } of collectServers(packages, "codex")) {
+    const existing = (existingServers as Record<string, unknown>)[server.name];
+    const desired = codexValue(server);
+    if (existing !== undefined && !equal(existing, desired)) {
+      throw new Error(`Refusing to overwrite Codex MCP server ${server.name} from ${filePath}`);
+    }
+    if (existing === undefined) blocks.push(codexBlock(packageName, server));
+  }
+  const prefix = baseline ? `${baseline}\n\n` : "";
+  const suffix = blocks.length > 0 ? `${blocks.join("\n\n")}\n` : "";
+  return `${prefix}${suffix}`;
+}
+
 function defaultAgentHome(platform: Platform): string {
   if (platform === "codex") {
     return path.resolve(process.env.HARNESS_ORIGINAL_CODEX_HOME ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
@@ -196,6 +238,16 @@ async function createSymlink(source: string, destination: string, directory: boo
   }
 }
 
+async function replaceSymlink(source: string, destination: string, directory: boolean): Promise<void> {
+  const temporary = `${destination}.link-${process.pid}-${randomUUID()}`;
+  try {
+    await symlink(source, temporary, process.platform === "win32" ? (directory ? "junction" : "file") : undefined);
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
 async function linkSkills(
   destinationRoot: string,
   packages: InstalledPackage[],
@@ -215,6 +267,24 @@ async function linkSkills(
     }
   }
   return links;
+}
+
+async function copyAgentCredential(environmentName: string, platform: Platform, root: string, name: string): Promise<void> {
+  const homeCredential = path.join(environmentAgentHomePath(environmentName, platform), name);
+  const currentCredential = path.join(environmentViewPath(environmentName), platform, name);
+  const originalCredential = path.join(sourceAgentHome(platform), name);
+  const source = (await pathExists(homeCredential))
+    ? homeCredential
+    : (await pathExists(currentCredential))
+      ? currentCredential
+      : originalCredential;
+  const content = await readFile(source).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!content) return;
+  const mode = await stat(source).then((info) => info.mode);
+  await writeBufferPreservingFile(path.join(root, name), content, mode);
 }
 
 function collectServers(packages: InstalledPackage[], platform: Platform): { packageName: string; server: McpServer }[] {
@@ -256,38 +326,33 @@ async function mergeHooks(filePath: string, root: Record<string, unknown>, addit
   }
 }
 
+function removeHooks(filePath: string, root: Record<string, unknown>, removals: HookSpec[]): void {
+  if (removals.length === 0 || root.hooks === undefined) return;
+  const hooks = objectAt(root, "hooks", filePath);
+  for (const hook of removals) {
+    const existing = hooks[hook.event];
+    if (existing === undefined) continue;
+    if (!Array.isArray(existing)) throw new Error(`Cannot merge ${filePath}: hooks.${hook.event} must be an array`);
+    const retained = existing.filter((value) => !equal(value, hookValue(hook)));
+    if (retained.length > 0) hooks[hook.event] = retained;
+    else delete hooks[hook.event];
+  }
+  if (Object.keys(hooks).length === 0) delete root.hooks;
+}
+
 async function buildCodexView(environmentName: string, root: string, packages: InstalledPackage[]): Promise<Record<string, string>> {
   await mkdir(root, { recursive: true, mode: 0o700 });
   const sourceHome = sourceAgentHome("codex");
   const links = await linkSkills(root, packages);
   await linkCodexSystemSkills(environmentName, root);
 
-  const sourceConfig = path.join(sourceHome, "config.toml");
-  const original = await readOptional(sourceConfig);
-  let parsed: Record<string, unknown> = {};
-  try {
-    parsed = (original ? parseToml(original) : {}) as Record<string, unknown>;
-  } catch (error) {
-    throw new Error(`Cannot merge ${sourceConfig}: ${(error as Error).message}`);
-  }
-  const existingServers = parsed.mcp_servers ?? {};
-  if (!existingServers || typeof existingServers !== "object" || Array.isArray(existingServers)) {
-    throw new Error(`Cannot merge ${sourceConfig}: mcp_servers must be a table`);
-  }
-  const blocks: string[] = [];
-  for (const { packageName, server } of collectServers(packages, "codex")) {
-    const existing = (existingServers as Record<string, unknown>)[server.name];
-    const desired = codexValue(server);
-    if (existing !== undefined && !equal(existing, desired)) {
-      throw new Error(`Refusing to overwrite Codex MCP server ${server.name} from ${sourceConfig}`);
-    }
-    if (existing === undefined) blocks.push(codexBlock(packageName, server));
-  }
-  const prefix = original?.trimEnd() ? `${original.trimEnd()}\n\n` : "";
-  const suffix = blocks.length > 0 ? `${blocks.join("\n\n")}\n` : "";
+  const currentConfig = path.join(environmentViewPath(environmentName), "codex", "config.toml");
+  const sourceConfig = await pathExists(currentConfig) ? currentConfig : path.join(sourceHome, "config.toml");
   const configDestination = path.join(root, "config.toml");
-  await writeTextAtomic(configDestination, `${prefix}${suffix}`);
+  await writeTextAtomic(configDestination, renderCodexConfig(await readOptional(sourceConfig), sourceConfig, packages));
   await chmod(configDestination, 0o600);
+
+  await copyAgentCredential(environmentName, "codex", root, "auth.json");
 
   const sourceHooks = path.join(sourceHome, "hooks.json");
   const hooksRoot = parseJsonObject(await readOptional(sourceHooks), sourceHooks);
@@ -299,15 +364,20 @@ async function buildCodexView(environmentName: string, root: string, packages: I
 }
 
 async function buildClaudeView(
+  environmentName: string,
   root: string,
   packages: InstalledPackage[],
+  previousPackages: InstalledPackage[],
 ): Promise<Record<string, string>> {
   await mkdir(root, { recursive: true, mode: 0o700 });
   const sourceHome = sourceAgentHome("claude");
   const links = await linkSkills(root, packages);
+  await copyAgentCredential(environmentName, "claude", root, ".credentials.json");
 
-  const sourceSettings = path.join(sourceHome, "settings.json");
+  const currentSettings = path.join(environmentViewPath(environmentName), "claude", "settings.json");
+  const sourceSettings = await pathExists(currentSettings) ? currentSettings : path.join(sourceHome, "settings.json");
   const settings = parseJsonObject(await readOptional(sourceSettings), sourceSettings);
+  removeHooks(sourceSettings, settings, collectHooks(previousPackages, "claude"));
   await mergeHooks(sourceSettings, settings, collectHooks(packages, "claude"));
   const settingsDestination = path.join(root, "settings.json");
   await writeJsonAtomic(settingsDestination, settings);
@@ -345,7 +415,13 @@ async function prepareStableHomeTransition(
   previousMetadata: ViewMetadata,
   previousPackages: InstalledPackage[],
 ): Promise<StableHomeTransition> {
-  const links: { destination: string; source: string; directory: boolean; create: boolean }[] = [];
+  const links: {
+    destination: string;
+    source: string;
+    directory: boolean;
+    action: "create" | "keep" | "replace";
+    previous?: { target?: string; content?: Buffer; mode?: number };
+  }[] = [];
   for (const platform of environment.spec.targets) {
     const home = environmentAgentHomePath(environment.metadata.name, platform);
     for (const name of MANAGED_HOME_LINKS[platform]) {
@@ -356,26 +432,33 @@ async function prepareStableHomeTransition(
         throw error;
       });
       if (!info) {
-        links.push({ destination, source, directory: name === "skills", create: true });
+        links.push({ destination, source, directory: name === "skills", action: "create" });
         continue;
       }
-      if (!info.isSymbolicLink()) throw new Error(`Managed Agent home path must be a symbolic link: ${destination}`);
-      const actual = path.resolve(path.dirname(destination), await readlink(destination));
-      if (actual !== source) throw new Error(`Managed Agent home link has an unexpected target: ${destination}`);
-      links.push({ destination, source, directory: name === "skills", create: false });
-    }
-    for (const name of SHARED_CREDENTIAL_FILES[platform]) {
-      const destination = path.join(home, name);
-      const source = path.join(sourceAgentHome(platform), name);
-      const info = await lstat(destination).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      });
-      if (!info) links.push({ destination, source, directory: false, create: true });
-      else if (info.isSymbolicLink()) {
-        const actual = path.resolve(path.dirname(destination), await readlink(destination));
-        if (actual !== source) throw new Error(`Shared Agent credential link has an unexpected target: ${destination}`);
+      if (info.isSymbolicLink()) {
+        const target = await readlink(destination);
+        const actual = path.resolve(path.dirname(destination), target);
+        if (actual === source) {
+          links.push({ destination, source, directory: name === "skills", action: "keep" });
+          continue;
+        }
+        if (CREDENTIAL_FILES[platform].includes(name) && actual === path.join(sourceAgentHome(platform), name)) {
+          links.push({ destination, source, directory: false, action: "replace", previous: { target } });
+          continue;
+        }
+        throw new Error(`Managed Agent home link has an unexpected target: ${destination}`);
       }
+      if (CREDENTIAL_FILES[platform].includes(name) && info.isFile()) {
+        links.push({
+          destination,
+          source,
+          directory: false,
+          action: "replace",
+          previous: { content: await readFile(destination), mode: info.mode },
+        });
+        continue;
+      }
+      throw new Error(`Managed Agent home path must be a symbolic link: ${destination}`);
     }
   }
 
@@ -416,10 +499,21 @@ async function prepareStableHomeTransition(
     apply: async () => {
       const rollbacks: (() => Promise<void>)[] = [];
       try {
-        for (const link of links.filter((item) => item.create)) {
+        for (const link of links.filter((item) => item.action === "create")) {
           await mkdir(path.dirname(link.destination), { recursive: true, mode: 0o700 });
           await createSymlink(link.source, link.destination, link.directory);
           rollbacks.push(() => rm(link.destination, { force: true }));
+        }
+        for (const link of links.filter((item) => item.action === "replace")) {
+          await replaceSymlink(link.source, link.destination, link.directory);
+          rollbacks.push(async () => {
+            if (link.previous?.target !== undefined) {
+              await replaceSymlink(link.previous.target, link.destination, link.directory);
+            } else if (link.previous?.content !== undefined) {
+              await rm(link.destination, { force: true });
+              await writeBufferPreservingFile(link.destination, link.previous.content, link.previous.mode);
+            }
+          });
         }
         if (claudeState?.changed) {
           await writeTextAtomic(claudeState.path, claudeState.output);
@@ -515,7 +609,12 @@ export async function materializeEnvironmentView(
       skillLinks.codex = await buildCodexView(name, path.join(temporary, "codex"), packages);
     }
     if (environment.spec.targets.includes("claude")) {
-      skillLinks.claude = await buildClaudeView(path.join(temporary, "claude"), packages);
+      skillLinks.claude = await buildClaudeView(
+        name,
+        path.join(temporary, "claude"),
+        packages,
+        hooks.previousPackages ?? [],
+      );
     }
     const codexMcpServers = environment.spec.targets.includes("codex")
       ? collectServers(packages, "codex").map(({ server }) => server.name)
@@ -601,14 +700,6 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
       const actual = path.resolve(path.dirname(link), await readlink(link));
       if (actual !== expected) throw new Error(`Managed Agent home link has an unexpected target: ${link}`);
     }
-    for (const name of SHARED_CREDENTIAL_FILES[target]) {
-      const credential = path.join(home, name);
-      const info = await lstat(credential).catch(() => undefined);
-      if (!info?.isSymbolicLink()) continue;
-      const expected = path.join(sourceAgentHome(target), name);
-      const actual = path.resolve(path.dirname(credential), await readlink(credential));
-      if (actual !== expected) throw new Error(`Shared Agent credential link has an unexpected target: ${credential}`);
-    }
     const unexpectedViewEntries = (await readdir(path.join(root, target))).filter(
       (name) => !MANAGED_HOME_LINKS[target].includes(name),
     );
@@ -652,28 +743,7 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
     if (target === "codex") {
       const configPath = path.join(root, "codex", "config.toml");
       const configInput = await readOptional(configPath);
-      let config: Record<string, unknown> = {};
-      try {
-        config = (configInput ? parseToml(configInput) : {}) as Record<string, unknown>;
-      } catch (error) {
-        throw new Error(`Cannot validate ${configPath}: ${(error as Error).message}`);
-      }
-      const sourceConfigPath = path.join(sourceAgentHome("codex"), "config.toml");
-      const sourceConfigInput = await readOptional(sourceConfigPath);
-      const expectedConfig = (sourceConfigInput ? parseToml(sourceConfigInput) : {}) as Record<string, unknown>;
-      const baselineServers = expectedConfig.mcp_servers;
-      if (baselineServers !== undefined && (!baselineServers || typeof baselineServers !== "object" || Array.isArray(baselineServers))) {
-        throw new Error(`Cannot validate ${sourceConfigPath}: mcp_servers must be a table`);
-      }
-      const expectedServers = { ...((baselineServers as Record<string, unknown> | undefined) ?? {}) };
-      for (const { server } of collectServers(packages, "codex")) {
-        expectedServers[server.name] = codexValue(server);
-      }
-      const actualServers = config.mcp_servers;
-      if (actualServers !== undefined && (!actualServers || typeof actualServers !== "object" || Array.isArray(actualServers))) {
-        throw new Error(`Cannot validate ${configPath}: mcp_servers must be a table`);
-      }
-      if (!equal((actualServers as Record<string, unknown> | undefined) ?? {}, expectedServers)) {
+      if (configInput !== renderCodexConfig(configInput, configPath, packages)) {
         throw new Error(`Codex MCP configuration differs from the Environment closure in ${configPath}`);
       }
       const hooksPath = path.join(root, "codex", "hooks.json");
@@ -693,9 +763,9 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
       }
       const settingsPath = path.join(root, "claude", "settings.json");
       const settings = parseJsonObject(await readOptional(settingsPath), settingsPath);
-      const sourceSettingsPath = path.join(sourceAgentHome("claude"), "settings.json");
-      const expectedSettings = parseJsonObject(await readOptional(sourceSettingsPath), sourceSettingsPath);
-      await mergeHooks(sourceSettingsPath, expectedSettings, collectHooks(packages, "claude"));
+      const expectedSettings = parseJsonObject(await readOptional(settingsPath), settingsPath);
+      removeHooks(settingsPath, expectedSettings, collectHooks(packages, "claude"));
+      await mergeHooks(settingsPath, expectedSettings, collectHooks(packages, "claude"));
       if (!equal(settings, expectedSettings)) throw new Error(`Claude Hooks differ from the Environment closure in ${settingsPath}`);
     }
   }

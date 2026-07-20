@@ -67,6 +67,8 @@ harness deactivate
 
 `activate` defaults to `base`. With the recommended shell hook installed, it selects each supported Environment's stable Agent home in the parent shell and leaves unsupported Agents on their original configuration homes. It atomically initializes Project Memory and stable discovery pointers for both Agents in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
 
+Authentication and provider configuration belong to the selected Environment. For Codex, edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. For Claude endpoint and API-key settings, edit `$CLAUDE_CONFIG_DIR/settings.json`; Claude OAuth login may additionally create `$CLAUDE_CONFIG_DIR/.credentials.json`. Files under the original `~/.codex` and `~/.claude` homes seed a new Environment only and do not update existing Environments.
+
 The project defaults to the exact current working directory. Harness does not search parent directories for `.harness` or `.git`, so Git and non-Git projects follow the same rule. Run commands from the intended project root or pass the global `--project <directory>` option explicitly when working from a subdirectory.
 
 ```bash

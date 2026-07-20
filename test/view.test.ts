@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -69,7 +69,10 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     await write(path.join(originalCodex, "auth.json"), '{"api_key":"first"}\n');
     await write(path.join(originalCodex, "hooks.json"), '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"true"}]}]}}\n');
     await write(path.join(originalClaude, ".credentials.json"), '{"oauth":"first"}\n');
-    await write(path.join(originalClaude, "settings.json"), '{"permissions":{"allow":["Read"]}}\n');
+    await write(
+      path.join(originalClaude, "settings.json"),
+      '{"env":{"ANTHROPIC_BASE_URL":"https://first.invalid","ANTHROPIC_AUTH_TOKEN":"first"},"permissions":{"allow":["Read"]}}\n',
+    );
     await write(
       path.join(path.dirname(originalClaude), ".claude.json"),
       '{"runtimeMarker":"original","mcpServers":{"existing":{"type":"stdio","command":"keep","args":[],"env":{}}}}\n',
@@ -86,13 +89,23 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     const claudeHome = environmentAgentHomePath("tools", "claude");
     assert.equal((await lstat(codexHome)).isDirectory(), true);
     assert.equal((await lstat(claudeHome)).isDirectory(), true);
-    assert.equal(await realpath(path.join(codexHome, "auth.json")), path.join(originalCodex, "auth.json"));
-    assert.equal(await realpath(path.join(claudeHome, ".credentials.json")), path.join(originalClaude, ".credentials.json"));
+    assert.equal(
+      await realpath(path.join(codexHome, "auth.json")),
+      await realpath(path.join(toolsView, "codex", "auth.json")),
+    );
+    assert.equal(
+      await realpath(path.join(claudeHome, ".credentials.json")),
+      await realpath(path.join(toolsView, "claude", ".credentials.json")),
+    );
     await write(path.join(originalCodex, "auth.json"), '{"api_key":"latest"}\n');
-    assert.equal(await readFile(path.join(codexHome, "auth.json"), "utf8"), '{"api_key":"latest"}\n');
+    await write(path.join(originalClaude, ".credentials.json"), '{"oauth":"latest"}\n');
+    assert.equal(await readFile(path.join(codexHome, "auth.json"), "utf8"), '{"api_key":"first"}\n');
+    assert.equal(await readFile(path.join(claudeHome, ".credentials.json"), "utf8"), '{"oauth":"first"}\n');
+    await writeFile(path.join(codexHome, "auth.json"), '{"api_key":"environment"}\n');
+    await writeFile(path.join(claudeHome, ".credentials.json"), '{"oauth":"environment"}\n');
     for (const [platform, names] of [
-      ["codex", ["config.toml", "hooks.json", "skills"]],
-      ["claude", ["settings.json", "skills"]],
+      ["codex", ["auth.json", "config.toml", "hooks.json", "skills"]],
+      ["claude", [".credentials.json", "settings.json", "skills"]],
     ] as const) {
       for (const name of names) {
         const link = path.join(environmentAgentHomePath("tools", platform), name);
@@ -107,6 +120,26 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     const codexConfig = parseToml(await readFile(path.join(codexHome, "config.toml"), "utf8")) as Record<string, any>;
     assert.equal(codexConfig.model, "gpt-test");
     assert.equal(codexConfig.mcp_servers["view-server"].command, "node");
+    await writeFile(
+      path.join(codexHome, "config.toml"),
+      `model_provider = "custom"\n[model_providers.custom]\nname = "Custom"\nbase_url = "https://example.invalid/v1"\n\n${await readFile(path.join(codexHome, "config.toml"), "utf8")}`,
+    );
+    const claudeSettingsPath = path.join(claudeHome, "settings.json");
+    const claudeSettings = JSON.parse(await readFile(claudeSettingsPath, "utf8")) as Record<string, any>;
+    assert.equal(claudeSettings.env.ANTHROPIC_BASE_URL, "https://first.invalid");
+    await write(
+      path.join(originalClaude, "settings.json"),
+      '{"env":{"ANTHROPIC_BASE_URL":"https://latest.invalid","ANTHROPIC_AUTH_TOKEN":"latest"}}\n',
+    );
+    assert.equal(
+      JSON.parse(await readFile(claudeSettingsPath, "utf8")).env.ANTHROPIC_BASE_URL,
+      "https://first.invalid",
+    );
+    claudeSettings.env = {
+      ANTHROPIC_BASE_URL: "https://environment.invalid",
+      ANTHROPIC_AUTH_TOKEN: "environment",
+    };
+    await writeFile(claudeSettingsPath, `${JSON.stringify(claudeSettings, null, 2)}\n`);
     assert.match(await readFile(path.join(codexHome, "skills", "view-skill", "SKILL.md"), "utf8"), /Stable home fixture/);
     assert.equal(
       await realpath(path.join(codexHome, "skills", ".system")),
@@ -138,6 +171,16 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     await packageFixture(root, "2.0.0", false);
     await installIntoEnvironment(root, "tools", packageRoot);
     assert.notEqual(await readlink(toolsView), firstGeneration);
+    assert.equal(await readFile(path.join(codexHome, "auth.json"), "utf8"), '{"api_key":"environment"}\n');
+    assert.equal(await readFile(path.join(claudeHome, ".credentials.json"), "utf8"), '{"oauth":"environment"}\n');
+    const updatedCodexConfig = parseToml(await readFile(path.join(codexHome, "config.toml"), "utf8")) as Record<string, any>;
+    assert.equal(updatedCodexConfig.model_provider, "custom");
+    assert.equal(updatedCodexConfig.model_providers.custom.base_url, "https://example.invalid/v1");
+    assert.equal(updatedCodexConfig.mcp_servers?.["view-server"], undefined);
+    const updatedClaudeSettings = JSON.parse(await readFile(claudeSettingsPath, "utf8")) as Record<string, any>;
+    assert.equal(updatedClaudeSettings.env.ANTHROPIC_BASE_URL, "https://environment.invalid");
+    assert.equal(updatedClaudeSettings.env.ANTHROPIC_AUTH_TOKEN, "environment");
+    assert.equal(updatedClaudeSettings.hooks.PostToolUse[0].hooks[0].command, "git diff --check");
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite")), sqlite);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-wal")), wal);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-shm")), shm);
@@ -216,6 +259,52 @@ test("failed publication rolls stable Agent home metadata back without touching 
     assert.deepEqual(await readFile(claudeStatePath), beforeClaude);
     assert.deepEqual(await readFile(path.join(home, "opaque.db")), state);
   } finally {
+    if (previousClaude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaude;
+    await removeTestTree(root);
+  }
+});
+
+test("shared credential links migrate into Environment views", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-credential-link-migration-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  const previousCodex = process.env.HARNESS_ORIGINAL_CODEX_HOME;
+  const previousClaude = process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+  const originalCodex = path.join(root, "original-codex");
+  const originalClaude = path.join(root, "original-claude");
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = originalCodex;
+  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
+  try {
+    await write(path.join(originalCodex, "auth.json"), '{"api_key":"legacy"}\n');
+    await write(path.join(originalClaude, ".credentials.json"), '{"oauth":"legacy"}\n');
+    await createEnvironment(root, "tools", ["codex", "claude"]);
+
+    const codexCredential = path.join(environmentAgentHomePath("tools", "codex"), "auth.json");
+    const claudeCredential = path.join(environmentAgentHomePath("tools", "claude"), ".credentials.json");
+    await rm(codexCredential, { force: true });
+    await rm(claudeCredential, { force: true });
+    await symlink(path.join(originalCodex, "auth.json"), codexCredential);
+    await symlink(path.join(originalClaude, ".credentials.json"), claudeCredential);
+
+    await syncEnvironment(root, "tools");
+
+    assert.equal(
+      path.resolve(path.dirname(codexCredential), await readlink(codexCredential)),
+      path.join(environmentViewPath("tools"), "codex", "auth.json"),
+    );
+    assert.equal(
+      path.resolve(path.dirname(claudeCredential), await readlink(claudeCredential)),
+      path.join(environmentViewPath("tools"), "claude", ".credentials.json"),
+    );
+    assert.equal(await readFile(codexCredential, "utf8"), '{"api_key":"legacy"}\n');
+    assert.equal(await readFile(claudeCredential, "utf8"), '{"oauth":"legacy"}\n');
+    await write(path.join(originalCodex, "auth.json"), '{"api_key":"original-updated"}\n');
+    await write(path.join(originalClaude, ".credentials.json"), '{"oauth":"original-updated"}\n');
+    assert.equal(await readFile(codexCredential, "utf8"), '{"api_key":"legacy"}\n');
+    assert.equal(await readFile(claudeCredential, "utf8"), '{"oauth":"legacy"}\n');
+  } finally {
+    if (previousCodex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodex;
     if (previousClaude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
     else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaude;
     await removeTestTree(root);
