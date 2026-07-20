@@ -11,6 +11,7 @@ Harness Conda packages Skills, meta-skills, MCP servers, and hooks into reusable
 - Global, content-addressed Package storage.
 - Named Environments with independent roots, dependency closures, locks, and Agent targets.
 - An implicit, non-removable `base` Environment.
+- Explicit migration of existing Codex and Claude Skills into the selected Environment.
 - `harness-project-memory` and `meta-skill-builder` in every Environment.
 - Recursive Package dependencies for installable meta-skills.
 - Portable, deterministic Environment bundles for offline migration between machines.
@@ -39,13 +40,20 @@ Open a new shell or reload the startup file. The hook selects the active global 
 
 ## Quick Start
 
-`base` is created automatically on first use:
+`base` is created automatically on first use with only the foundational Packages:
 
 ```bash
 harness env list
 harness install builtin:auto-research
 harness activate
 codex
+```
+
+Existing ordinary Codex and Claude Skills remain untouched until the user explicitly migrates them into the active Environment:
+
+```bash
+harness migrate skills --dry-run
+harness migrate skills
 ```
 
 Create and use a named Environment:
@@ -77,7 +85,8 @@ Use `--name performance-copy` during import to choose a different Environment na
 ```text
 ~/.harness-conda/
 ├── packages/                    immutable, content-addressed Package contents
-├── runtime/                     shared Agent authentication and session state
+├── migrations/                  content-addressed snapshots of explicitly migrated Skills
+├── runtime/                     shared Agent system Skills, authentication, and sessions
 ├── locks/                       cross-process Environment, Package, runtime, and project locks
 └── environments/<name>/
     ├── environment.yaml         root Packages and Agent targets
@@ -92,13 +101,13 @@ Use `--name performance-copy` during import to choose a different Environment na
 └── local/                       machine-local Memory
 ```
 
-Each Skill in a view is a symbolic link into a read-only Package Store entry. Installing into an Environment builds a complete immutable view generation and publishes it with one atomic `view` symlink replacement, so every project and new Agent process observes either the old or new dependency closure, never a path-by-path mixture:
+Each ordinary Skill in a view is a symbolic link into a read-only Package Store entry. Codex-managed `skills/.system` is instead linked through the shared runtime root so Codex can update its own system Skills without changing an Environment lock. Installing into an Environment builds a complete immutable view generation and publishes it with one atomic `view` symlink replacement, so every project and new Agent process observes either the old or new dependency closure, never a path-by-path mixture:
 
 ```text
 project/shell -> Environment view -> Package Store
 ```
 
-The shell hook exports an Environment view only for targets that Environment supports and restores the original Agent home for unsupported targets. Authentication, logs, and session directories use stable links through the shared runtime root; existing state is adopted from the user's original Agent configuration root. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
+The shell hook exports an Environment view only for targets that Environment supports and restores the original Agent home for unsupported targets. Authentication, logs, sessions, and Codex system Skills use stable links through the shared runtime root; existing state is adopted from the user's original Agent configuration root. Ordinary existing Skills are never scanned during Environment initialization. `harness migrate skills` explicitly copies them into a content-addressed Package snapshot and atomically installs that Package into the selected Environment without modifying the originals. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
 
 ## Documentation
 

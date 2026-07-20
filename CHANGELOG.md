@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added explicit migration of existing Agent Skills into a selected Environment and shared Codex system Skills through runtime links.
 - Added deterministic, offline-capable Environment bundle export/import with complete Package closures and atomic destination publication.
 - Added global, content-addressed Package storage and user-global named Environment recipes and locks.
 - Added atomic global per-Environment Codex and Claude views backed by Package Store symlinks.

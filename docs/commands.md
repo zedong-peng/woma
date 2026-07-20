@@ -9,9 +9,21 @@ harness env show <name>
 harness env remove <name>
 ```
 
-`base` is initialized automatically and cannot be explicitly created or removed. Every Environment contains `harness-project-memory` and `meta-skill-builder` as foundational root Packages.
+`base` is initialized automatically and cannot be explicitly created or removed. Every Environment contains `harness-project-memory` and `meta-skill-builder` as foundational root Packages. Environment initialization never scans or imports ordinary Skills from existing Agent homes.
 
 Environment recipes and locks are stored under `$HARNESS_HOME/environments/`. `HARNESS_HOME` defaults to `~/.harness-conda`.
+
+## Existing Skill migration
+
+```bash
+harness migrate skills [--from codex|claude|both] [-n <environment>] [--dry-run]
+```
+
+`migrate skills` explicitly snapshots ordinary Skills from the original Codex and Claude `skills/` directories and atomically installs one `migrated-agent-skills` Package into the requested Environment. Without `--name`, it uses the active Environment and falls back to `base`. `--from` defaults to `both`. `--dry-run` copies, normalizes, and validates a temporary Package and checks target conflicts without publishing a snapshot, Package, or Environment change.
+
+Hidden Agent-managed entries such as Codex `.system` are excluded. Identical cross-Agent Skills are deduplicated; different same-name contents fail with instructions to select one source. Existing Skills provided by another Package in the target Environment also fail instead of being overwritten. The root Package name `migrated-agent-skills` is reserved for this command. Root symlinks are copied as self-contained content, safely normalizable legacy frontmatter is corrected only in the snapshot, and original Agent files remain unchanged.
+
+Published sources are read-only and content-addressed under `$HARNESS_HOME/migrations/skills/`. Repeating an unchanged migration is a no-op. When source Skills change, a new snapshot atomically replaces the previous `migrated-agent-skills` root only in the selected Environment; old snapshots remain available to other locked Environments.
 
 ## Environment migration
 

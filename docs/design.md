@@ -10,6 +10,7 @@ Harness Conda separates reusable Agent capabilities from repository knowledge.
 | Environment recipes and locks | User-global | `$HARNESS_HOME/environments/<name>/` |
 | Codex and Claude Environment views | User-global | `$HARNESS_HOME/environments/<name>/view/` |
 | Authentication and session runtime | User-global, shared | `$HARNESS_HOME/runtime/<agent>/` |
+| Explicit Skill migration snapshots | User-global | `$HARNESS_HOME/migrations/skills/<content-hash>/` |
 | Mutation locks | User-global | `$HARNESS_HOME/locks/` |
 | Environment selection | Current shell | `HARNESS_ENV` (defaults to `base`) |
 | Shared and Package-specific Memory | Project-local | `<project>/.harness/memory/` |
@@ -17,7 +18,9 @@ Harness Conda separates reusable Agent capabilities from repository knowledge.
 
 An Environment recipe records root Packages and Agent targets. Its lock records the exact recursive dependency closure. Multiple Environments referencing the same Package resolution share one immutable cache entry.
 
-`base` is lazily initialized on first use and cannot be removed. Every Environment must contain the built-in `harness-project-memory` and `meta-skill-builder` roots; those identities and sources are reserved. An existing `base` is accepted only after its recipe, lock, Package closure, and complete Agent view validate successfully. `harness sync -n base` deliberately bypasses the healthy-view precondition so a parseable recipe and lock can repair missing Package entries and rebuild the view.
+`base` is lazily initialized on first use and cannot be removed. Initialization is deterministic and never scans ordinary Skills from the original Agent homes. Every Environment must contain the built-in `harness-project-memory` and `meta-skill-builder` roots; those identities and sources are reserved. An existing `base` is accepted only after its recipe, lock, Package closure, and complete Agent view validate successfully. `harness sync -n base` deliberately bypasses the healthy-view precondition so a parseable recipe and lock can repair missing Package entries and rebuild the view.
+
+Existing ordinary Agent Skills enter Harness only through explicit `harness migrate skills`. Migration discovers the selected Codex and Claude sources, validates a complete temporary Package, checks Skill ownership against a locked target snapshot, and publishes a read-only source directory keyed by a deterministic hash of Skill names, contents, and origins. It then delegates to the normal Package installation transaction. A repeated identical migration is a no-op; changed sources create a new immutable snapshot and replace the migration root only in the selected Environment. Dry runs never publish the source snapshot or mutate the Package Store or Environment.
 
 ## Portable Environment bundles
 
@@ -49,7 +52,9 @@ direct codex or claude
 
 Package Store replacements are copied into read-only immutable generations and fully validated before an atomic cache-key symlink switch. Skill directories in every view resolve through that stable cache pointer, so repair readers see either the old or new Package and never a missing entry. Every Environment update builds a complete `.view.gen-<id>` directory and atomically replaces the stable `view` symlink, so direct Agent readers never observe mixed Skill, MCP, and Hook generations. Recipe and lock metadata commit under the Environment lock before the view pointer changes and roll back if publication fails.
 
-Non-Harness authentication and session paths are linked through a stable shared runtime root, seeded from the user's original Agent configuration roots. Known first-use paths are linked before they exist, arbitrary runtime files are adopted byte-for-byte, and runtime links must target their exact shared path. Retired view generations remain available to running Agents and are reconciled during later operations in the selected Environment. Updating an inactive Environment reads shared runtime state but never contributes its own stale state. Claude non-`mcpServers` fields use one authoritative shared snapshot; switching replaces that snapshot exactly, including field deletion, while the target Environment retains only its own and user-baseline MCP definitions.
+Non-Harness authentication and session paths are linked through a stable shared runtime root, seeded from the user's original Agent configuration roots. Codex `skills/.system` uses the same model: every Codex Environment contains one validated `.system` link to `$HARNESS_HOME/runtime/codex/skills/.system`, while Package Skill ownership metadata and exact visibility checks cover the remaining entries. Codex can therefore update system Skills without mutating an Environment closure.
+
+Known first-use paths are linked before they exist, arbitrary runtime files are adopted byte-for-byte, and runtime links must target their exact shared path. Retired view generations remain available to running Agents and are reconciled during later operations in the selected Environment. Updating an inactive Environment reads shared runtime state but never contributes its own stale state. Claude non-`mcpServers` fields use one authoritative shared snapshot; switching replaces that snapshot exactly, including field deletion, while the target Environment retains only its own and user-baseline MCP definitions.
 
 The shell hook saves the original Agent configuration roots and wraps both installed CLI names, `harness` and `harness-conda`. It validates that the selected Environment and complete view exist before changing the parent shell, falls back to `base` for a stale inherited selection, and parses only a real top-level `activate` or `deactivate` command. Help requests and unrelated arguments never change Environment state. For unsupported targets it restores the original Agent configuration root. It never proxies `codex` or `claude`.
 

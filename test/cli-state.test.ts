@@ -129,7 +129,7 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
   try {
     const result = await runCli(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
-    for (const command of ["env", "install", "activate", "deactivate", "info", "sync", "doctor", "shell"]) {
+    for (const command of ["env", "migrate", "install", "activate", "deactivate", "info", "sync", "doctor", "shell"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
     }
     for (const command of ["bind", "current", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
