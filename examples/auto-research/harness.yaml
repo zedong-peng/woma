@@ -4,7 +4,7 @@ metadata:
   name: auto-research
   version: 1.0.0
   description: Compose evidence search, idea generation, and experiment design into a reusable research loop.
-  tags: [research, meta-skill]
+  tags: [research, method]
 spec:
   platforms: [codex, claude]
   dependencies:

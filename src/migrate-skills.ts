@@ -12,7 +12,7 @@ import type { HarnessManifest, Platform, SkillSpec } from "./types.js";
 
 const MIGRATED_PACKAGE = "migrated-agent-skills";
 const EXCLUDED_NAMES = new Set([".git", ".harness", "node_modules", ".DS_Store"]);
-const FOUNDATIONAL_SKILLS = new Set(["harness-project-memory", "meta-skill-builder"]);
+const FOUNDATIONAL_SKILLS = new Set(["harness-project-memory", "harness-package-builder"]);
 
 export type SkillMigrationSource = Platform | "both";
 

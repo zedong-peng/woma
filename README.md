@@ -2,7 +2,7 @@
 
 Conda-style package and Environment management for Agent engineering tools.
 
-Harness Conda packages Skills, meta-skills, MCP servers, and hooks into reusable Environments. Package contents and Environment locks are stored globally; repository-specific knowledge stays in Project Memory.
+Harness Conda packages Skills, MCP servers, hooks, and dependency-based methods into reusable Environments. Package contents and Environment locks are stored globally; repository-specific knowledge stays in Project Memory.
 
 > Status: early development. The package is not published to the npm Registry.
 
@@ -12,8 +12,8 @@ Harness Conda packages Skills, meta-skills, MCP servers, and hooks into reusable
 - Named Environments with independent roots, dependency closures, locks, and Agent targets.
 - An implicit, non-removable `base` Environment.
 - Explicit migration of existing Codex and Claude Skills into the selected Environment.
-- `harness-project-memory` and `meta-skill-builder` in every Environment.
-- Recursive Package dependencies for installable meta-skills.
+- `harness-project-memory` and `harness-package-builder` in every Environment.
+- Recursive Package dependencies for reusable capability sets and end-to-end methods.
 - Portable, deterministic Environment bundles for offline migration between machines.
 - Atomically published per-Environment Codex and Claude Code views built from read-only Store symlinks.
 - Atomic Environment view updates and installation rollback on ordinary errors.
@@ -65,7 +65,7 @@ harness activate performance
 codex
 ```
 
-`harness deactivate` returns the current shell to `base`. Every Environment includes the Project Memory manager and meta-skill authoring assistant.
+`harness deactivate` returns the current shell to `base`. Every Environment includes the Project Memory manager and the general Harness Package authoring assistant.
 
 Move the complete Environment, including local `file:` Packages, to another machine without copying credentials or project state:
 

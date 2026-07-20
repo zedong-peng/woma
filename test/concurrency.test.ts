@@ -28,7 +28,7 @@ test("concurrent installs serialize and preserve both successful updates", async
     };
     assert.deepEqual(new Set(Object.keys(lock.packages)), new Set([
       "harness-project-memory",
-      "meta-skill-builder",
+      "harness-package-builder",
       "paper-search",
       "idea-gen",
     ]));
@@ -74,7 +74,7 @@ test("concurrent first use initializes base exactly once across processes", asyn
       const lock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
         packages: Record<string, unknown>;
       };
-      assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "meta-skill-builder"]);
+      assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
     } finally {
       await removeTestTree(root);
     }

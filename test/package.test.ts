@@ -76,8 +76,8 @@ ${dependencyYaml}  entrypoints:
   return packageRoot;
 }
 
-test("the built-in auto-research meta-skill installs its documented component Skills", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-meta-"));
+test("the built-in auto-research Package installs its documented component Skills", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-method-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     const installation = await installPackageTree("builtin:auto-research");
@@ -93,25 +93,39 @@ test("the built-in auto-research meta-skill installs its documented component Sk
   }
 });
 
-test("the built-in meta-skill builder is a valid installable authoring package", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-meta-builder-"));
+test("the built-in Harness Package Builder is a valid general authoring Package", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-package-builder-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
-    const installation = await installPackageTree("builtin:meta-skill-builder");
-    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["meta-skill-builder"]);
+    const installation = await installPackageTree("builtin:harness-package-builder");
+    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["harness-package-builder"]);
     assert.deepEqual(installation.root.lock.dependencies, []);
     assert.deepEqual(installation.root.manifest.spec.requirements.commands, []);
     assert.deepEqual(installation.root.manifest.spec.entrypoints, [
       {
-        name: "create-meta-skill",
-        skill: "meta-skill-builder",
-        description: "Create and validate an installable meta-skill from a user's method and component Skills.",
+        name: "create-package",
+        skill: "harness-package-builder",
+        description: "Create or update a validated Harness Package containing the requested resources and dependencies.",
       },
     ]);
-    const instructions = await readFile(path.join(installation.root.root, "skills", "meta-skill-builder", "SKILL.md"), "utf8");
+    const instructions = await readFile(path.join(installation.root.root, "skills", "harness-package-builder", "SKILL.md"), "utf8");
     assert.match(instructions, /harness inspect <source>/);
-    assert.match(instructions, /interruption checkpoints/);
-    assert.match(instructions, /Do not introduce a DAG/);
+    assert.match(instructions, /wrap existing Skills, MCP definitions, or hooks/);
+    assert.match(instructions, /dependency Packages/);
+    assert.match(instructions, /coordinating Skill only when/);
+    assert.match(instructions, /Package as the only distribution type/);
+    const reference = await readFile(
+      path.join(installation.root.root, "skills", "harness-package-builder", "references", "package-format.md"),
+      "utf8",
+    );
+    assert.match(reference, /A dependency-only Package may omit Skills and entrypoints/);
+    assert.match(reference, /For MCP servers and hooks/);
+    const agentMetadata = await readFile(
+      path.join(installation.root.root, "skills", "harness-package-builder", "agents", "openai.yaml"),
+      "utf8",
+    );
+    assert.match(agentMetadata, /display_name: "Harness Package Builder"/);
+    assert.match(agentMetadata, /\$harness-package-builder/);
   } finally {
     await removeTestTree(root);
   }
@@ -150,7 +164,7 @@ test("the built-in performance method does not require command bindings", { conc
   }
 });
 
-test("installing a meta-skill resolves transitive dependencies in dependency-first order", { concurrency: false }, async () => {
+test("installing a Package resolves transitive dependencies in dependency-first order", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
@@ -158,11 +172,11 @@ test("installing a meta-skill resolves transitive dependencies in dependency-fir
     await dependencyFixture(root, "idea-gen", "2.0.0", [
       { name: "paper-search", version: "^1.0.0", source: "../paper-search" },
     ]);
-    const meta = await dependencyFixture(root, "auto-research", "1.0.0", [
+    const methodPackage = await dependencyFixture(root, "auto-research", "1.0.0", [
       { name: "idea-gen", version: "^2.0.0", source: "../idea-gen" },
     ]);
 
-    const installation = await installPackageTree(meta);
+    const installation = await installPackageTree(methodPackage);
     assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["paper-search", "idea-gen", "auto-research"]);
     assert.deepEqual(installation.root.lock.dependencies, ["idea-gen"]);
     assert.deepEqual(installation.packages[1]?.lock.dependencies, ["paper-search"]);

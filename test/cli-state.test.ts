@@ -161,7 +161,7 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
-    assert.deepEqual(Object.keys(baseLock.packages), ["harness-project-memory", "meta-skill-builder"]);
+    assert.deepEqual(Object.keys(baseLock.packages), ["harness-project-memory", "harness-package-builder"]);
 
     const install = await runCli(["install", pkg], project, home);
     assert.equal(install.code, 0, install.stderr);
@@ -184,7 +184,7 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     };
     assert.equal(context.projectRoot, project);
     assert.equal(context.environment.name, "base");
-    assert.deepEqual(context.packages.map((pkg) => pkg.name), ["harness-project-memory", "meta-skill-builder", "base-skill"]);
+    assert.deepEqual(context.packages.map((pkg) => pkg.name), ["harness-project-memory", "harness-package-builder", "base-skill"]);
     assert.deepEqual(context.packages[0]?.skills, ["harness-project-memory"]);
     assert.match(context.packages.find((pkg) => pkg.name === "base-skill")?.memory ?? "", /\.harness\/memory\/packages\/base-skill\.md$/);
 
@@ -237,39 +237,39 @@ test("CLI always includes foundational packages and rejects the removed without-
       path.join(root, "home"),
     );
     assert.equal(create.code, 0, create.stderr);
-    assert.match(create.stdout, /foundational harness-project-memory@0\.1\.0, meta-skill-builder@1\.0\.0/);
+    assert.match(create.stdout, /foundational harness-project-memory@0\.1\.0, harness-package-builder@1\.0\.0/);
     const activate = await runCli(["--project", project, "activate", "minimal"], root, path.join(root, "home"));
     assert.equal(activate.code, 0, activate.stderr);
     assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
     const current = JSON.parse((await runCli(["--project", project, "info", "--json"], root, path.join(root, "home"))).stdout) as {
       packages: { name: string }[];
     };
-    assert.deepEqual(current.packages.map((pkg) => pkg.name), ["harness-project-memory", "meta-skill-builder"]);
+    assert.deepEqual(current.packages.map((pkg) => pkg.name), ["harness-project-memory", "harness-package-builder"]);
     assert.match(
       await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
       /Persist stable knowledge automatically/,
     );
     assert.match(
-      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "meta-skill-builder", "SKILL.md"), "utf8"),
-      /meta-skill/i,
+      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "harness-package-builder", "SKILL.md"), "utf8"),
+      /Create one ordinary Harness Package/,
     );
   } finally {
     await removeTestTree(root);
   }
 });
 
-test("CLI installs and activates a complete meta-skill dependency closure", { concurrency: false }, async () => {
+test("CLI installs and activates a complete Package dependency closure", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-environment-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   const previousEnvironment = process.env.HARNESS_ENV;
   try {
     await packageFixture(root, "paper-search");
-    const meta = await packageFixture(root, "auto-research", [{ name: "paper-search", source: "../paper-search" }]);
+    const methodPackage = await packageFixture(root, "auto-research", [{ name: "paper-search", source: "../paper-search" }]);
     const idea = await packageFixture(root, "idea-gen");
     const create = await runCli(["--project", project, "env", "create", "research", "--target", "codex"], root, home);
     assert.equal(create.code, 0, create.stderr);
-    const install = await runCli(["--project", project, "install", "-n", "research", meta], root, home);
+    const install = await runCli(["--project", project, "install", "-n", "research", methodPackage], root, home);
     assert.equal(install.code, 0, install.stderr);
     assert.match(install.stdout, /dependencies\s+paper-search@1\.0\.0/);
     const lock = JSON.parse(await readFile(path.join(home, "environments", "research", "lock.json"), "utf8")) as {
@@ -283,7 +283,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     assert.match(sync.stdout, /Synced research: 4 packages/);
     const activate = await runCli(["--project", project, "activate", "research"], root, home);
     assert.equal(activate.code, 0, activate.stderr);
-    assert.match(activate.stdout, /packages\s+harness-project-memory, meta-skill-builder, paper-search, auto-research/);
+    assert.match(activate.stdout, /packages\s+harness-project-memory, harness-package-builder, paper-search, auto-research/);
     assert.doesNotMatch(await readFile(path.join(project, ".gitignore"), "utf8"), /state\.json/);
     assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/local\//);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
@@ -298,7 +298,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     const current = await runCli(["--project", project, "info"], root, home);
     assert.equal(current.code, 0, current.stderr);
     assert.match(current.stdout, /Environment: research/);
-    assert.match(current.stdout, /roots\s+harness-project-memory, meta-skill-builder, auto-research/);
+    assert.match(current.stdout, /roots\s+harness-project-memory, harness-package-builder, auto-research/);
     const list = await runCli(["--project", project, "env", "list"], root, home);
     assert.equal(list.code, 0, list.stderr);
     assert.match(list.stdout, /\* research/);
@@ -329,7 +329,7 @@ test("CLI installs and activates a complete meta-skill dependency closure", { co
     await assert.rejects(readFile(path.join(baseSkills, "auto-research", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(baseSkills, "idea-gen", "SKILL.md")), /ENOENT/);
     assert.match(await readFile(path.join(baseSkills, "harness-project-memory", "SKILL.md"), "utf8"), /Project Memory/);
-    assert.match(await readFile(path.join(baseSkills, "meta-skill-builder", "SKILL.md"), "utf8"), /meta-skill/i);
+    assert.match(await readFile(path.join(baseSkills, "harness-package-builder", "SKILL.md"), "utf8"), /Create one ordinary Harness Package/);
     assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
     assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
     const removeEnvironment = await runCli(["--project", project, "env", "remove", "research"], root, home);

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harness Package Builder"
+  short_description: "Create and update valid Harness Packages"
+  default_prompt: "Use $harness-package-builder to turn my Agent resources or requirements into a validated Harness Package."

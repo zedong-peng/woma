@@ -26,7 +26,7 @@ const environmentName = z
 const platform = z.enum(["codex", "claude"]);
 
 export const DEFAULT_ENVIRONMENT = "base";
-export const FOUNDATIONAL_PACKAGES = ["harness-project-memory", "meta-skill-builder"] as const;
+export const FOUNDATIONAL_PACKAGES = ["harness-project-memory", "harness-package-builder"] as const;
 const FOUNDATIONAL_SOURCES = new Map(FOUNDATIONAL_PACKAGES.map((name) => [name, `builtin:${name}`]));
 const baseInitializations = new Map<string, Promise<HarnessEnvironment>>();
 

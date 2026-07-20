@@ -6,6 +6,7 @@ Harness packages can install agent instructions, MCP process definitions, and Ag
 - Pin Git sources to an immutable commit or signed release for production use.
 - Manifests declare environment variable names only. Never put credential values in a manifest.
 - `capture` rejects literal MCP environment and header values instead of exporting possible secrets.
+- `harness-package-builder` must copy only user-selected resources and environment variable names when wrapping existing Agent content. It must not copy credential values, authentication state, sessions, history, or unrelated Agent configuration into a Package.
 - Skill directories containing symbolic links are rejected so package content cannot escape its root during installation.
 - Environment initialization never scans ordinary existing Agent Skills. Explicit `harness migrate skills` validates a complete temporary snapshot before installation, leaves original directories unchanged, excludes hidden Agent-managed Skills, and fails closed on source or target ownership conflicts. Review existing Skills before migration because the resulting Package is exportable.
 - Content-addressed Package entries are published without write permission. Their Environment Skill links are read-only views; use Harness repair paths rather than editing Store contents. To remove an entire development `HARNESS_HOME` manually, restore owner write permission first with `chmod -R u+w "$HARNESS_HOME"`.

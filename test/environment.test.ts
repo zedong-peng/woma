@@ -136,7 +136,7 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
 
     const base = await ensureBaseEnvironment(root);
-    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
+    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
     const codexSkills = path.join(environmentViewPath("base"), "codex", "skills");
     await assert.rejects(readFile(path.join(codexSkills, "existing-review", "SKILL.md")), /ENOENT/);
     const system = path.join(codexSkills, ".system");
@@ -155,7 +155,7 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     assert.deepEqual(planned.skills.find((skill) => skill.name === "existing-review")?.sources, ["codex", "claude"]);
     assert.deepEqual(planned.normalized, ["existing-review"]);
     const cleanLock = await readEnvironmentLock(root, "clean");
-    assert.deepEqual(Object.keys(cleanLock.packages), ["harness-project-memory", "meta-skill-builder"]);
+    assert.deepEqual(Object.keys(cleanLock.packages), ["harness-project-memory", "harness-package-builder"]);
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
 
     const migrated = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
@@ -450,7 +450,7 @@ test("global environments are shared across projects while Project Memory remain
   try {
     await Promise.all([mkdir(firstProject, { recursive: true }), mkdir(secondProject, { recursive: true })]);
     const base = await ensureBaseEnvironment(firstProject);
-    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
+    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
     assert.equal(environmentPath(secondProject, "base"), path.join(home, "environments", "base", "environment.yaml"));
     await assert.rejects(createEnvironment(firstProject, "base", ["codex"]), /exists implicitly/);
     await assert.rejects(removeEnvironment(firstProject, "base"), /cannot be removed/);
@@ -628,10 +628,10 @@ test("global Environment reads reject missing foundational packages", { concurre
     const recipe = await readFile(recipePath, "utf8");
     await writeFile(
       recipePath,
-      recipe.replace(/    - name: meta-skill-builder\n      source: builtin:meta-skill-builder\n/, ""),
+      recipe.replace(/    - name: harness-package-builder\n      source: builtin:harness-package-builder\n/, ""),
       "utf8",
     );
-    await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package meta-skill-builder/);
+    await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package harness-package-builder/);
   } finally {
     await removeTestTree(root);
   }
@@ -646,8 +646,8 @@ test("concurrent first reads initialize the implicit base Environment once", { c
       readEnvironmentLock(root, "base"),
     ]);
     assert.equal(environment.metadata.name, "base");
-    assert.deepEqual(environment.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
-    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "meta-skill-builder"]);
+    assert.deepEqual(environment.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
   } finally {
     await removeTestTree(root);
   }
@@ -733,7 +733,7 @@ test("install can initialize and lock base as the first Harness command", { conc
     await installIntoEnvironment(root, "base", "builtin:paper-search");
     assert.deepEqual(Object.keys((await readEnvironmentLock(root, "base")).packages), [
       "harness-project-memory",
-      "meta-skill-builder",
+      "harness-package-builder",
       "paper-search",
     ]);
   } finally {
