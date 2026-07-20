@@ -25,6 +25,7 @@ import {
 import { installPackageSource, loadCachedPackage } from "./package.js";
 import { scaffoldHarness } from "./scaffold.js";
 import { renderShellHook, resolveShell } from "./shell.js";
+import { migrateExistingSkills, type SkillMigrationSource } from "./migrate-skills.js";
 import type { Action, Platform } from "./types.js";
 
 const program = new Command();
@@ -81,6 +82,13 @@ program
 
 const envCommand = program.command("env").description("manage isolated Agent environments");
 
+function migrationSource(input: string): SkillMigrationSource {
+  if (input !== "codex" && input !== "claude" && input !== "both") {
+    throw new Error("--from must be codex, claude, or both");
+  }
+  return input;
+}
+
 envCommand
   .command("create <name>")
   .description("create a global named environment with the foundational packages")
@@ -94,6 +102,31 @@ envCommand
     console.log(`  lock    ${environmentLockPath(project, name)}`);
     console.log(`  foundational ${FOUNDATIONAL_PACKAGES.map((packageName) => `${packageName}@${lock.packages[packageName]?.version}`).join(", ")}`);
     console.log(`  targets ${environment.spec.targets.join(", ")}`);
+  });
+
+const migrateCommand = program.command("migrate").description("explicitly migrate existing Agent configuration into an Environment");
+
+migrateCommand
+  .command("skills")
+  .description("snapshot existing Codex or Claude Skills and install them as one Package")
+  .option("--from <agent>", "codex, claude, or both", "both")
+  .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
+  .option("--dry-run", "validate and print the migration plan without changing files", false)
+  .action(async (options: { from: string; name?: string; dryRun: boolean }, command: Command) => {
+    const environmentName = selectedEnvironment(options.name);
+    const result = await migrateExistingSkills({
+      projectRoot: projectRoot(command),
+      environment: environmentName,
+      from: migrationSource(options.from),
+      dryRun: options.dryRun,
+    });
+    if (result.dryRun) console.log(`Skill migration plan for Environment ${environmentName}`);
+    else if (result.unchanged) console.log(`No changes. Environment ${environmentName} already contains this migrated Skill snapshot.`);
+    else console.log(`Migrated existing Agent Skills into ${environmentName}`);
+    console.log(`  package   ${result.packageName}@${result.version}`);
+    for (const skill of result.skills) console.log(`  ${skill.sources.length > 1 ? "dedupe" : "add"}     ${skill.name}  ${skill.sources.join(", ")}`);
+    for (const skill of result.normalized) console.log(`  normalize ${skill}  legacy description frontmatter`);
+    if (result.dryRun) console.log("No changes made.");
   });
 
 envCommand

@@ -159,7 +159,7 @@ function defaultAgentHome(platform: Platform): string {
   );
 }
 
-function sourceAgentHome(platform: Platform): string {
+export function sourceAgentHome(platform: Platform): string {
   const candidate = defaultAgentHome(platform);
   const environmentRoot = path.join(harnessHome(), "environments");
   const relative = path.relative(environmentRoot, candidate);
@@ -167,6 +167,21 @@ function sourceAgentHome(platform: Platform): string {
     return path.join(os.homedir(), platform === "codex" ? ".codex" : ".claude");
   }
   return candidate;
+}
+
+function codexSystemSkillsRoot(): string {
+  return path.join(harnessHome(), "runtime", "codex", "skills", ".system");
+}
+
+async function linkCodexSystemSkills(destinationRoot: string): Promise<void> {
+  const shared = codexSystemSkillsRoot();
+  if (!(await pathExists(shared))) {
+    await mkdir(path.dirname(shared), { recursive: true, mode: 0o700 });
+    const original = path.join(sourceAgentHome("codex"), "skills", ".system");
+    if (await pathExists(original)) await createSymlink(original, shared, true);
+    else await mkdir(shared, { recursive: true, mode: 0o700 });
+  }
+  await createSymlink(shared, path.join(destinationRoot, "skills", ".system"), true);
 }
 
 async function sharedRuntimeRoot(platform: Platform, originalRoot: string, excluded: Set<string>): Promise<string> {
@@ -403,6 +418,7 @@ async function buildCodexView(root: string, packages: InstalledPackage[]): Promi
   await mkdir(root, { recursive: true, mode: 0o700 });
   const sourceHome = sourceAgentHome("codex");
   const links = await linkSkills(root, packages);
+  await linkCodexSystemSkills(root);
 
   const sourceConfig = path.join(sourceHome, "config.toml");
   const original = await readOptional(sourceConfig);
@@ -713,9 +729,16 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
     }
     const skillsRoot = path.join(root, target, "skills");
     const actualSkillNames = (await readdir(skillsRoot).catch(() => [])).sort();
-    const expectedSkillNames = Object.keys(expectedSkills).sort();
+    const expectedSkillNames = Object.keys(expectedSkills).concat(target === "codex" ? [".system"] : []).sort();
     if (!equal(actualSkillNames, expectedSkillNames)) {
       throw new Error(`Environment Skill visibility differs from the lock at ${skillsRoot}`);
+    }
+    if (target === "codex") {
+      const system = path.join(skillsRoot, ".system");
+      const info = await lstat(system).catch(() => undefined);
+      if (!info?.isSymbolicLink()) throw new Error(`Codex system Skills runtime link is missing: ${system}`);
+      const actual = path.resolve(path.dirname(system), await readlink(system));
+      if (actual !== codexSystemSkillsRoot()) throw new Error(`Codex system Skills runtime link has an unexpected target: ${system}`);
     }
     const metadataSkills = metadata.skills;
     if (!metadataSkills || typeof metadataSkills !== "object" || Array.isArray(metadataSkills)) {

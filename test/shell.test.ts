@@ -136,6 +136,8 @@ test("shell hook restores the original Agent home for an unsupported target", as
           ...process.env,
           HARNESS_HOME: home,
           HARNESS_ENV: "codex-only",
+          HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
+          HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
           CODEX_HOME: originalCodex,
           CLAUDE_CONFIG_DIR: originalClaude,
         },

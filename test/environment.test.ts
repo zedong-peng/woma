@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,6 +23,7 @@ import {
 import { environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
+import { migrateExistingSkills } from "../src/migrate-skills.js";
 
 async function environmentPackageFixture(
   root: string,
@@ -60,6 +61,328 @@ ${mcpCommand ? `  mcpServers:\n    - name: occupied\n      transport: stdio\n   
 test("environment paths reject traversal names", () => {
   assert.throws(() => environmentPath("/tmp/project", "../../outside"), /must use lowercase letters/);
   assert.throws(() => environmentLockPath("/tmp/project", "../outside"), /must use lowercase letters/);
+});
+
+test("Skill migration dry-run does not initialize an absent base Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-migration-base-preview-"));
+  const previous = {
+    home: process.env.HARNESS_HOME,
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    const home = path.join(root, "home");
+    const codex = path.join(root, "codex");
+    await mkdir(path.join(codex, "skills", "preview-skill"), { recursive: true });
+    await writeFile(
+      path.join(codex, "skills", "preview-skill", "SKILL.md"),
+      "---\nname: preview-skill\ndescription: Preview Skill.\n---\nPreview.\n",
+    );
+    process.env.HARNESS_HOME = home;
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+
+    const result = await migrateExistingSkills({ projectRoot: root, environment: "base", from: "codex", dryRun: true });
+    assert.equal(result.environment, "base");
+    assert.equal(result.dryRun, true);
+    assert.deepEqual(result.skills.map((skill) => skill.name), ["preview-skill"]);
+    await assert.rejects(access(home), /ENOENT/);
+  } finally {
+    if (previous.home === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
+test("explicit Skill migration snapshots existing Skills into only the selected Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-existing-skills-"));
+  const previous = {
+    home: process.env.HARNESS_HOME,
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    const home = path.join(root, "home");
+    const codex = path.join(root, "codex");
+    const claude = path.join(root, "claude");
+    const sharedSkill = path.join(root, "shared-skill");
+    await mkdir(sharedSkill, { recursive: true });
+    const legacySkill = "---\nname: existing-review\ndescription: Existing review Skill: keep compatible.\n---\nReview.\n";
+    await writeFile(path.join(sharedSkill, "SKILL.md"), legacySkill);
+    await mkdir(path.join(codex, "skills"), { recursive: true });
+    await symlink(sharedSkill, path.join(codex, "skills", "existing-review"));
+    await mkdir(path.join(sharedSkill, ".git"), { recursive: true });
+    await writeFile(path.join(sharedSkill, ".git", "codex-only"), "ignored\n");
+    await mkdir(path.join(codex, "skills", ".system"), { recursive: true });
+    await writeFile(path.join(codex, "skills", ".system", ".codex-system-skills.marker"), "managed\n");
+    await mkdir(path.join(claude, "skills", "existing-review"), { recursive: true });
+    await writeFile(
+      path.join(claude, "skills", "existing-review", "SKILL.md"),
+      legacySkill,
+    );
+    await mkdir(path.join(claude, "skills", "existing-review", "node_modules"), { recursive: true });
+    await writeFile(path.join(claude, "skills", "existing-review", "node_modules", "claude-only"), "ignored\n");
+    await mkdir(path.join(claude, "skills", "claude-notes"), { recursive: true });
+    await writeFile(
+      path.join(claude, "skills", "claude-notes", "SKILL.md"),
+      "---\nname: claude-notes\ndescription: Existing notes Skill.\n---\nTake notes.\n",
+    );
+    process.env.HARNESS_HOME = home;
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+
+    const base = await ensureBaseEnvironment(root);
+    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "meta-skill-builder"]);
+    const codexSkills = path.join(environmentViewPath("base"), "codex", "skills");
+    await assert.rejects(readFile(path.join(codexSkills, "existing-review", "SKILL.md")), /ENOENT/);
+    const system = path.join(codexSkills, ".system");
+    assert.equal((await lstat(system)).isSymbolicLink(), true);
+    assert.equal(
+      path.resolve(path.dirname(system), await readlink(system)),
+      path.join(home, "runtime", "codex", "skills", ".system"),
+    );
+    await writeFile(path.join(system, "updated-by-codex"), "updated\n");
+    assert.equal(await readFile(path.join(codex, "skills", ".system", "updated-by-codex"), "utf8"), "updated\n");
+
+    await createEnvironment(root, "clean", ["codex"]);
+    const planned = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both", dryRun: true });
+    assert.equal(planned.dryRun, true);
+    assert.equal(planned.skills.length, 2);
+    assert.deepEqual(planned.skills.find((skill) => skill.name === "existing-review")?.sources, ["codex", "claude"]);
+    assert.deepEqual(planned.normalized, ["existing-review"]);
+    const cleanLock = await readEnvironmentLock(root, "clean");
+    assert.deepEqual(Object.keys(cleanLock.packages), ["harness-project-memory", "meta-skill-builder"]);
+    await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
+
+    const migrated = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
+    assert.equal(migrated.unchanged, false);
+    assert.ok((await readEnvironmentLock(root, "clean")).packages["migrated-agent-skills"]);
+    const snapshotRoot = migrated.source.slice("file:".length);
+    for (const snapshotPath of [
+      snapshotRoot,
+      path.join(snapshotRoot, "harness.yaml"),
+      path.join(snapshotRoot, "skills"),
+      path.join(snapshotRoot, "skills", "existing-review"),
+      path.join(snapshotRoot, "skills", "existing-review", "SKILL.md"),
+    ]) {
+      assert.equal((await lstat(snapshotPath)).mode & 0o222, 0, `${snapshotPath} must be read-only`);
+    }
+    assert.match(
+      await readFile(path.join(environmentViewPath("clean"), "codex", "skills", "existing-review", "SKILL.md"), "utf8"),
+      /description: "Existing review Skill: keep compatible\."/,
+    );
+    assert.match(
+      await readFile(path.join(environmentViewPath("clean"), "codex", "skills", "claude-notes", "SKILL.md"), "utf8"),
+      /Take notes/,
+    );
+    assert.equal(await readFile(path.join(sharedSkill, "SKILL.md"), "utf8"), legacySkill);
+    assert.equal((await lstat(path.join(codex, "skills", "existing-review"))).isSymbolicLink(), true);
+    await assert.rejects(readFile(path.join(codexSkills, "existing-review", "SKILL.md")), /ENOENT/);
+
+    const repeated = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
+    assert.equal(repeated.unchanged, true);
+    assert.equal(repeated.version, migrated.version);
+
+    await mkdir(path.join(codex, "skills", "new-codex-skill"), { recursive: true });
+    await writeFile(
+      path.join(codex, "skills", "new-codex-skill", "SKILL.md"),
+      "---\nname: new-codex-skill\ndescription: New Skill.\n---\nNew.\n",
+    );
+    const upgraded = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
+    assert.notEqual(upgraded.version, migrated.version);
+    await access(migrated.source.slice("file:".length));
+    assert.match(
+      await readFile(path.join(environmentViewPath("clean"), "codex", "skills", "new-codex-skill", "SKILL.md"), "utf8"),
+      /New Skill/,
+    );
+    assert.equal((await lstat(path.join(environmentViewPath("clean"), "codex", "skills", ".system"))).isSymbolicLink(), true);
+  } finally {
+    if (previous.home === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
+test("explicit Skill migration rejects source conflicts without changing the Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-existing-skill-conflict-"));
+  const previous = {
+    home: process.env.HARNESS_HOME,
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    const home = path.join(root, "home");
+    const codex = path.join(root, "codex");
+    const claude = path.join(root, "claude");
+    for (const [agent, body] of [[codex, "Codex"], [claude, "Claude"]] as const) {
+      const skill = path.join(agent, "skills", "review");
+      await mkdir(skill, { recursive: true });
+      await writeFile(path.join(skill, "SKILL.md"), `---\nname: review\ndescription: Review Skill.\n---\n${body}\n`);
+    }
+    process.env.HARNESS_HOME = home;
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+    await ensureBaseEnvironment(root);
+    const before = await readFile(environmentLockPath(root, "base"));
+    await assert.rejects(
+      migrateExistingSkills({ projectRoot: root, environment: "base", from: "both" }),
+      /differs between Codex and Claude/,
+    );
+    assert.deepEqual(await readFile(environmentLockPath(root, "base")), before);
+    await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
+    const codexOnly = await migrateExistingSkills({ projectRoot: root, environment: "base", from: "codex" });
+    assert.deepEqual(codexOnly.skills.map((skill) => skill.name), ["review"]);
+  } finally {
+    if (previous.home === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
+test("explicit Skill migration rejects target ownership conflicts before publishing", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-existing-skill-owner-conflict-"));
+  const previous = {
+    home: process.env.HARNESS_HOME,
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    const home = path.join(root, "home");
+    const codex = path.join(root, "codex");
+    const skill = path.join(codex, "skills", "occupied-skill");
+    await mkdir(skill, { recursive: true });
+    await writeFile(
+      path.join(skill, "SKILL.md"),
+      "---\nname: occupied-skill\ndescription: Existing Skill.\n---\nExisting.\n",
+    );
+    process.env.HARNESS_HOME = home;
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+
+    await createEnvironment(root, "tools", ["codex"]);
+    const packageRoot = path.join(root, "owner-package");
+    await mkdir(path.join(packageRoot, "skills", "occupied-skill"), { recursive: true });
+    await writeFile(
+      path.join(packageRoot, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: owner-package
+  version: 1.0.0
+  description: Target ownership conflict fixture.
+spec:
+  platforms: [codex]
+  skills:
+    - name: occupied-skill
+      path: ./skills/occupied-skill
+`,
+    );
+    await writeFile(
+      path.join(packageRoot, "skills", "occupied-skill", "SKILL.md"),
+      "---\nname: occupied-skill\ndescription: Owned Skill.\n---\nOwned.\n",
+    );
+    await installIntoEnvironment(root, "tools", packageRoot);
+    const beforeRecipe = await readFile(environmentPath(root, "tools"));
+    const beforeLock = await readFile(environmentLockPath(root, "tools"));
+    const beforeView = await readFile(
+      path.join(environmentViewPath("tools"), "codex", "skills", "occupied-skill", "SKILL.md"),
+    );
+
+    await assert.rejects(
+      migrateExistingSkills({ projectRoot: root, environment: "tools", from: "codex" }),
+      /Skill occupied-skill is already provided by Package owner-package in Environment tools/,
+    );
+    assert.deepEqual(await readFile(environmentPath(root, "tools")), beforeRecipe);
+    assert.deepEqual(await readFile(environmentLockPath(root, "tools")), beforeLock);
+    assert.deepEqual(
+      await readFile(path.join(environmentViewPath("tools"), "codex", "skills", "occupied-skill", "SKILL.md")),
+      beforeView,
+    );
+    await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
+  } finally {
+    if (previous.home === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
+test("explicit Skill migration does not replace a user Package with its reserved name", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-migration-package-name-conflict-"));
+  const previous = {
+    home: process.env.HARNESS_HOME,
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    const home = path.join(root, "home");
+    const codex = path.join(root, "codex");
+    await mkdir(path.join(codex, "skills", "incoming-skill"), { recursive: true });
+    await writeFile(
+      path.join(codex, "skills", "incoming-skill", "SKILL.md"),
+      "---\nname: incoming-skill\ndescription: Incoming Skill.\n---\nIncoming.\n",
+    );
+    process.env.HARNESS_HOME = home;
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+
+    await createEnvironment(root, "tools", ["codex"]);
+    const packageRoot = path.join(root, "reserved-name-package");
+    await mkdir(path.join(packageRoot, "skills", "unrelated-skill"), { recursive: true });
+    await writeFile(
+      path.join(packageRoot, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: migrated-agent-skills
+  version: 9.0.0
+  description: Unrelated user Package using the reserved name.
+spec:
+  platforms: [codex]
+  skills:
+    - name: unrelated-skill
+      path: ./skills/unrelated-skill
+`,
+    );
+    await writeFile(
+      path.join(packageRoot, "skills", "unrelated-skill", "SKILL.md"),
+      "---\nname: unrelated-skill\ndescription: Unrelated Skill.\n---\nUnrelated.\n",
+    );
+    await installIntoEnvironment(root, "tools", packageRoot);
+    const beforeRecipe = await readFile(environmentPath(root, "tools"));
+    const beforeLock = await readFile(environmentLockPath(root, "tools"));
+
+    await assert.rejects(
+      migrateExistingSkills({ projectRoot: root, environment: "tools", from: "codex" }),
+      /Package name migrated-agent-skills is reserved for explicit Skill migration in Environment tools/,
+    );
+    assert.deepEqual(await readFile(environmentPath(root, "tools")), beforeRecipe);
+    assert.deepEqual(await readFile(environmentLockPath(root, "tools")), beforeLock);
+    await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
+  } finally {
+    if (previous.home === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
 });
 
 test("environment recipes reject duplicate roots", () => {
