@@ -1,0 +1,11 @@
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: native-fixture
+  version: 1.2.3
+  description: Native Harness Package fixture.
+spec:
+  platforms: [codex]
+  skills:
+    - name: native-skill
+      path: ./skills/native-skill

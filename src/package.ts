@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { satisfies } from "semver";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { assertInside, harnessHome, hashDirectory, pathExists } from "./fs.js";
 import { withPackageLock } from "./environment-lock.js";
 import { loadManifest } from "./schema.js";
@@ -16,6 +16,11 @@ interface MaterializedSource {
   source: string;
   resolved: string;
   cleanup?: () => Promise<void>;
+}
+
+interface SkillMetadata {
+  name: string;
+  description: string;
 }
 
 export interface PackageInstallPlan {
@@ -127,6 +132,165 @@ async function materializeSource(source: string, cwd: string): Promise<Materiali
   }
 }
 
+function sourceDirectoryName(materialized: MaterializedSource): string {
+  if (materialized.source.startsWith("file:") || materialized.source.startsWith("builtin:")) {
+    return path.basename(materialized.root);
+  }
+  const { locator } = splitRef(materialized.source);
+  return path.basename(locator.replaceAll("\\", "/")).replace(/\.git$/i, "");
+}
+
+function implicitPackageName(input: string): string {
+  const normalized = input
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .slice(0, 80);
+  if (!normalized) throw new Error(`Cannot derive an implicit Package name from source directory: ${input}`);
+  return normalized;
+}
+
+function skillMetadata(input: string, label: string): SkillMetadata {
+  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(input);
+  if (!frontmatter?.[1]) throw new Error(`${label} has invalid or missing YAML frontmatter`);
+  let document: unknown;
+  try {
+    document = parseYaml(frontmatter[1]);
+  } catch (error) {
+    throw new Error(`${label} has invalid YAML frontmatter: ${(error as Error).message}`);
+  }
+  if (!document || typeof document !== "object" || Array.isArray(document)) {
+    throw new Error(`${label} frontmatter must be an object`);
+  }
+  const metadata = document as Record<string, unknown>;
+  if (typeof metadata.name !== "string" || metadata.name.trim() === "") {
+    throw new Error(`${label} frontmatter needs a non-empty name`);
+  }
+  if (typeof metadata.description !== "string" || metadata.description.trim() === "") {
+    throw new Error(`${label} frontmatter needs a non-empty description`);
+  }
+  return { name: metadata.name, description: metadata.description.trim() };
+}
+
+async function copyImplicitSkill(sourceRoot: string, destinationRoot: string): Promise<void> {
+  await cp(sourceRoot, destinationRoot, {
+    recursive: true,
+    errorOnExist: true,
+    verbatimSymlinks: true,
+    filter: (candidate) => candidate === sourceRoot || copyFilter(candidate),
+  });
+}
+
+async function normalizeMaterializedSource(materialized: MaterializedSource): Promise<MaterializedSource> {
+  if (await pathExists(path.join(materialized.root, "harness.yaml"))) return materialized;
+
+  const sourceInfo = await lstat(materialized.root);
+  if (sourceInfo.isSymbolicLink()) throw new Error(`Implicit Package source is an unsupported symlink: ${materialized.root}`);
+  if (!sourceInfo.isDirectory()) throw new Error(`Package source is not a directory: ${materialized.root}`);
+
+  const standaloneDocument = path.join(materialized.root, "SKILL.md");
+  let packageName: string;
+  let description: string;
+  let selected: { sourceRoot: string; targetName: string; metadata: SkillMetadata }[];
+  if (await pathExists(standaloneDocument)) {
+    const metadata = skillMetadata(await readFile(standaloneDocument, "utf8"), standaloneDocument);
+    packageName = metadata.name;
+    description = metadata.description.slice(0, 300);
+    selected = [{ sourceRoot: materialized.root, targetName: "standalone", metadata }];
+  } else {
+    const skillsRoot = path.join(materialized.root, "skills");
+    const skillsInfo = await lstat(skillsRoot).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!skillsInfo) {
+      throw new Error(
+        `Unsupported Package source layout at ${materialized.root}: expected harness.yaml, SKILL.md, or skills/*/SKILL.md`,
+      );
+    }
+    if (skillsInfo.isSymbolicLink()) throw new Error(`Implicit Package skills directory is an unsupported symlink: ${skillsRoot}`);
+    if (!skillsInfo.isDirectory()) {
+      throw new Error(
+        `Unsupported Package source layout at ${materialized.root}: expected harness.yaml, SKILL.md, or skills/*/SKILL.md`,
+      );
+    }
+    selected = [];
+    for (const entry of (await readdir(skillsRoot, { withFileTypes: true })).sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+    )) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+      const sourceRoot = path.join(skillsRoot, entry.name);
+      const document = path.join(sourceRoot, "SKILL.md");
+      if (!(await pathExists(document))) continue;
+      selected.push({
+        sourceRoot,
+        targetName: entry.name,
+        metadata: skillMetadata(await readFile(document, "utf8"), document),
+      });
+    }
+    if (selected.length === 0) {
+      throw new Error(
+        `Unsupported Package source layout at ${materialized.root}: expected harness.yaml, SKILL.md, or skills/*/SKILL.md`,
+      );
+    }
+    packageName = implicitPackageName(sourceDirectoryName(materialized));
+    description = `Implicit Harness Package containing ${selected.length} Skills from ${sourceDirectoryName(materialized)}.`.slice(0, 300);
+  }
+
+  const stagingRoot = await mkdtemp(path.join(os.tmpdir(), "harness-conda-normalized-"));
+  try {
+    const skillNames = new Set<string>();
+    for (const skill of selected) {
+      if (skillNames.has(skill.metadata.name)) throw new Error(`Duplicate skill name: ${skill.metadata.name}`);
+      skillNames.add(skill.metadata.name);
+      await copyImplicitSkill(skill.sourceRoot, path.join(stagingRoot, "skills", skill.targetName));
+    }
+    const contentHash = (await hashDirectory(stagingRoot)).slice("sha256-".length);
+    const revision = materialized.resolved === "local" ? `local.${contentHash.slice(0, 12)}` : `git.${materialized.resolved.slice(0, 12)}`;
+    const manifest: HarnessManifest = {
+      apiVersion: "harness.conda/v1",
+      kind: "Harness",
+      metadata: {
+        name: packageName,
+        version: `0.0.0+${revision}`,
+        description,
+        tags: [],
+      },
+      spec: {
+        platforms: ["codex", "claude"],
+        requirements: { env: [], commands: [] },
+        dependencies: [],
+        entrypoints: [],
+        skills: selected.map((skill) => ({ name: skill.metadata.name, path: `./skills/${skill.targetName}` })),
+        mcpServers: [],
+        hooks: [],
+      },
+    };
+    await writeFile(path.join(stagingRoot, "harness.yaml"), stringifyYaml(manifest), "utf8");
+    return {
+      ...materialized,
+      root: stagingRoot,
+      cleanup: async () => {
+        await rm(stagingRoot, { recursive: true, force: true });
+        await materialized.cleanup?.();
+      },
+    };
+  } catch (error) {
+    await rm(stagingRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function materializePackageSource(source: string, cwd: string): Promise<MaterializedSource> {
+  const materialized = await materializeSource(source, cwd);
+  try {
+    return await normalizeMaterializedSource(materialized);
+  } catch (error) {
+    await materialized.cleanup?.();
+    throw error;
+  }
+}
+
 function selectedPlatforms(manifest: HarnessManifest, itemPlatforms?: ("codex" | "claude")[]): Set<string> {
   return new Set(itemPlatforms ?? manifest.spec.platforms);
 }
@@ -150,24 +314,9 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
     if (!(await pathExists(skillDocument))) {
       throw new Error(`Skill ${skill.name} has no SKILL.md at ${skill.path}`);
     }
-    const skillInput = await readFile(skillDocument, "utf8");
-    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(skillInput);
-    if (!frontmatter?.[1]) throw new Error(`Skill ${skill.name} has invalid or missing YAML frontmatter`);
-    let skillMetadata: unknown;
-    try {
-      skillMetadata = parseYaml(frontmatter[1]);
-    } catch (error) {
-      throw new Error(`Skill ${skill.name} has invalid YAML frontmatter: ${(error as Error).message}`);
-    }
-    if (!skillMetadata || typeof skillMetadata !== "object" || Array.isArray(skillMetadata)) {
-      throw new Error(`Skill ${skill.name} frontmatter must be an object`);
-    }
-    const metadata = skillMetadata as Record<string, unknown>;
+    const metadata = skillMetadata(await readFile(skillDocument, "utf8"), `Skill ${skill.name}`);
     if (metadata.name !== skill.name) {
       throw new Error(`Skill ${skill.name} frontmatter name must match the manifest name`);
-    }
-    if (typeof metadata.description !== "string" || metadata.description.trim() === "") {
-      throw new Error(`Skill ${skill.name} frontmatter needs a non-empty description`);
     }
     const pending = [skillRoot];
     while (pending.length > 0) {
@@ -337,7 +486,7 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
 }
 
 export async function installPackageSource(source: string, cwd = process.cwd()): Promise<InstalledPackage> {
-  const materialized = await materializeSource(source, cwd);
+  const materialized = await materializePackageSource(source, cwd);
   try {
     return await cacheMaterializedPackage(materialized);
   } finally {
@@ -364,7 +513,7 @@ export async function installPackageTree(source: string, cwd = process.cwd()): P
   const ordered: InstalledPackage[] = [];
 
   async function visit(candidateSource: string, candidateCwd: string, dependency?: PackageDependency): Promise<InstalledPackage> {
-    const materialized = await materializeSource(candidateSource, candidateCwd);
+    const materialized = await materializePackageSource(candidateSource, candidateCwd);
     try {
       const pkg = await cacheMaterializedPackage(materialized);
       if (dependency) assertDependency(dependency, pkg);
@@ -518,7 +667,7 @@ export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledP
       } catch {}
     }
 
-    const materialized = await materializeSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
+    const materialized = await materializePackageSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
     try {
       const manifest = await loadManifest(materialized.root);
       await validatePackage(materialized.root, manifest);

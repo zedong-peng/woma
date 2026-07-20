@@ -9,6 +9,7 @@ Conda-style Environment and Package management for Codex and Claude Code.
 
 - **Named Environments** for Codex, Claude Code, or both.
 - **Reusable Packages** containing Skills, MCP servers, hooks, and dependencies.
+- **Direct Skill installation** from standalone and conventional multi-Skill sources.
 - **Explicit migration** of existing Skills and sessions.
 - **Portable Environment bundles** for moving complete Package closures between machines.
 - **Project Memory** and Package authoring tools in every Environment.
@@ -86,6 +87,14 @@ harness env remove performance
 ```
 
 **Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex or Claude process after switching Environments or installing Packages.
+
+## Install Skills
+
+```bash
+harness install ./downloaded-skill
+harness install gh:owner/skill-repository#v1.0.0
+harness install ./ResearchStudio/ResearchStudio-Idea
+```
 
 ## Configure Agents
 
