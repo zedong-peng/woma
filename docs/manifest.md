@@ -46,6 +46,14 @@ spec:
       platforms: [codex, claude]
 ```
 
+## Implicit Skill Packages
+
+Package authors use `harness.yaml`, but existing Skills do not need to add one before installation. When no root manifest exists, the Source Adapter accepts either one root `SKILL.md` or one conventional collection of direct `skills/*/SKILL.md` children. It generates the manifest only in temporary staging and then applies the same Package schema and validation shown in this document.
+
+Implicit Packages contain Skills only. Harness does not infer dependencies, entrypoints, MCP servers, Hooks, requirements, or workflow semantics from Skill prose. The root manifest always takes precedence when present, including over raw Skill layouts. Nested discovery is forbidden, so a repository containing multiple Package directories must be installed one Package directory at a time.
+
+The adapter derives a standalone Package name and description from Skill YAML frontmatter. For a multi-Skill source, it derives the Package name from the source directory or Git repository and includes every direct conventional Skill in deterministic directory-name order. Duplicate Skill names and malformed metadata are rejected. Local content or the resolved Git commit supplies an informational SemVer build version; the lock remains authoritative for source, exact resolution, normalized integrity, and cache identity.
+
 ## Dependencies and coordinating Skills
 
 `dependencies` declares other Harness packages required by this package. Installation recursively resolves dependencies before their parent, validates package identity and SemVer constraints, rejects cycles and conflicting resolutions, and writes the complete dependency closure to the global Environment lock atomically.

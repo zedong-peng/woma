@@ -22,6 +22,12 @@ An Environment recipe records root Packages and Agent targets. Its lock records 
 
 Existing ordinary Agent Skills enter Harness only through explicit `harness migrate skills`. Migration discovers the selected Codex and Claude sources, validates a complete temporary Package, checks Skill ownership against a locked target snapshot, and publishes a read-only source directory keyed by a deterministic hash of Skill names, contents, and origins. It then delegates to the normal Package installation transaction. A repeated identical migration is a no-op; changed sources create a new immutable snapshot and replace the migration root only in the selected Environment. Dry runs never publish the source snapshot or mutate the Package Store or Environment.
 
+## Source normalization
+
+Every installable locator is first materialized as a local directory and then passed through one Source Adapter. A root `harness.yaml` passes through unchanged. Otherwise, only a root standalone `SKILL.md` or direct conventional `skills/*/SKILL.md` children are copied into temporary staging with a deterministic generated manifest. Git metadata, Harness project state, dependency caches, and OS metadata are excluded by the same copy policy used for Package publication. The original source is never modified.
+
+The adapter is shared by direct installation, inspection, recursive dependency resolution, and lock repair. Consequently an implicit Package has the same identity and normalized bytes when installed repeatedly or reconstructed by `sync`. No recursive candidate search occurs: nested repositories, examples, vendored Skills, and Package collections cannot silently expand the ownership boundary of one install command.
+
 ## Portable Environment bundles
 
 A `.harness-env` file is a versioned, gzip-compressed JSON document containing one Environment recipe, its exact lock, and every regular file in the locked Package closure. Binary files are Base64 encoded and file read/execute modes are preserved. Stable key ordering and a deterministic gzip stream make repeated exports of an unchanged Environment byte-identical.

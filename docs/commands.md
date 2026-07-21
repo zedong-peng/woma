@@ -72,6 +72,17 @@ https://host/repository.git#<revision>
 git@host:owner/repository.git#<revision>
 ```
 
+Each materialized source resolves to exactly one Package by the following ordered rules:
+
+1. A root `harness.yaml` is a native Harness Package. Its manifest is authoritative.
+2. A root `SKILL.md` is normalized into one implicit single-Skill Package.
+3. One or more direct `skills/*/SKILL.md` files are normalized into one implicit multi-Skill Package containing all matching direct children.
+4. Every other layout is rejected.
+
+Recognition is intentionally non-recursive. A repository root containing several nested Package directories is a collection, not an installable Package; install one child directory explicitly. Harness does not invoke an Agent, infer MCP servers, Hooks, dependencies, or entrypoints, or write a generated manifest into the source.
+
+For an implicit Package, Harness parses each Skill's `name` and `description` from YAML frontmatter, copies the selected self-contained Skill directories into temporary staging, and generates a deterministic `harness.yaml` there. A standalone Package uses the Skill name as its Package name. A multi-Skill Package derives its name from the local source directory or Git repository. Its informational version is `0.0.0+local.<content>` for local content or `0.0.0+git.<commit>` for Git. The ordinary manifest, symlink, identity, ownership, cache, and Environment transaction validation then applies.
+
 Installation recursively resolves dependencies, validates Package and Skill identities and SemVer constraints, rejects cycles and source conflicts, and publishes one complete global Agent view generation atomically. Package Store entries are read-only after publication. Every project using that Environment observes the new view without reactivation; already-running Agent processes may need a restart to rediscover Skills.
 
 ## Activation
@@ -105,11 +116,11 @@ harness doctor [-n <environment>]
 harness inspect <source-or-package> [-n <environment>]
 ```
 
-`env list` marks the Environment selected in the current shell. `env show` displays one Environment's roots, targets, and locked closure.
+`env list` marks the Environment selected in the current shell. `env show` displays one Environment's roots, targets, locked Package closure, and every visible Skill with its providing Package and target platforms. If a locked Package cache is unavailable, the Package remains in the summary and its Skill details are marked unavailable; use `doctor` or `sync` to repair it.
 
 `info --json` is the stable machine-readable context interface used by `harness-project-memory`. It returns the configured project directory, selected Environment, Memory paths, Packages, Skills, and entrypoints. It replaces the redundant user-facing `current` command.
 
-`sync` restores missing or corrupt content-addressed Package entries from exact lock sources and rebuilds the global view. It can repair `base` when its recipe and lock remain parseable even if its Package cache or view is damaged. `doctor` validates dependency locks, the exact Skill visibility closure, the global view, platform support, executable and environment requirements, selected targets, and Memory discovery instructions.
+`inspect` applies the same source recognition and normalization rules as installation. `sync` restores missing or corrupt content-addressed Package entries from exact lock sources, repeats the same normalization for implicit Packages, and rebuilds the global view. It can repair `base` when its recipe and lock remain parseable even if its Package cache or view is damaged. `doctor` validates dependency locks, the exact Skill visibility closure, the global view, platform support, executable and environment requirements, selected targets, and Memory discovery instructions.
 
 ## Package authoring
 
