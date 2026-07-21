@@ -148,7 +148,10 @@ migrateCommand
     else if (result.unchanged) console.log(`No changes. Environment ${environmentName} already contains this session state.`);
     else console.log(`Migrated existing Agent sessions into ${environmentName}`);
     for (const entry of result.entries) {
-      console.log(`  ${entry.platform.padEnd(6)} ${entry.name}  ${entry.files} files, ${entry.bytes} bytes`);
+      const records = entry.recordsAdded === undefined
+        ? ""
+        : `, ${entry.recordsAdded} records added, ${entry.recordsDeduplicated} records deduplicated`;
+      console.log(`  ${entry.platform.padEnd(6)} ${entry.name}  ${entry.files} files, ${entry.bytes} bytes${records}`);
     }
     if (result.dryRun) console.log("No changes made.");
   });
