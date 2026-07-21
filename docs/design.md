@@ -10,7 +10,7 @@ Harness Conda separates reusable Agent capabilities from repository knowledge.
 | Environment recipes and locks | User-global | `$HARNESS_HOME/environments/<name>/` |
 | Codex and Claude Environment views | User-global | `$HARNESS_HOME/environments/<name>/view/` |
 | Opaque Agent state | Per Environment | `$HARNESS_HOME/environments/<name>/home/<agent>/` |
-| Explicit Skill migration snapshots | User-global | `$HARNESS_HOME/migrations/skills/<content-hash>/` |
+| Explicit Skill migration snapshots | User-global | `$HARNESS_HOME/migrations/skills/<skill-name>/<content-hash>/` |
 | Mutation locks | User-global | `$HARNESS_HOME/locks/` |
 | Environment selection | Current shell | `HARNESS_ENV` (defaults to `base`) |
 | Shared and Package-specific Memory | Project-local | `<project>/.harness/memory/` |
@@ -20,7 +20,7 @@ An Environment recipe records root Packages and Agent targets. Its lock records 
 
 `base` is lazily initialized on first use and cannot be removed. Initialization is deterministic and never scans ordinary Skills from the original Agent homes. Every Environment must contain the built-in `harness-project-memory` and `harness-package-builder` roots; those identities and sources are reserved. An existing `base` is accepted only after its recipe, lock, Package closure, and complete Agent view validate successfully. `harness sync -n base` deliberately bypasses the healthy-view precondition so a parseable recipe and lock can repair missing Package entries and rebuild the view.
 
-Existing ordinary Agent Skills enter Harness only through explicit `harness migrate skills`. Migration discovers the selected Codex and Claude sources, validates a complete temporary Package, checks Skill ownership against a locked target snapshot, and publishes a read-only source directory keyed by a deterministic hash of Skill names, contents, and origins. It then delegates to the normal Package installation transaction. A repeated identical migration is a no-op; changed sources create a new immutable snapshot and replace the migration root only in the selected Environment. Dry runs never publish the source snapshot or mutate the Package Store or Environment.
+Existing ordinary Agent Skills enter Harness only through explicit `harness migrate skills`. Migration discovers the selected Codex and Claude sources, creates one single-Skill Package per deduplicated Skill, validates every temporary Package, and checks Package and Skill ownership against a locked target snapshot. Each read-only source directory is keyed by the Skill name and a deterministic hash of its content and origins. All changed Packages enter the normal Environment installation transaction together, so the lock, recipe, and complete view publish atomically. A repeated identical migration is a no-op; changing one Skill creates a new immutable snapshot and replaces only that Package root in the selected Environment. Dry runs never publish source snapshots or mutate the Package Store or Environment.
 
 ## Source normalization
 

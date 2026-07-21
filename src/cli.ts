@@ -125,10 +125,12 @@ migrateCommand
       dryRun: options.dryRun,
     });
     if (result.dryRun) console.log(`Skill migration plan for Environment ${environmentName}`);
-    else if (result.unchanged) console.log(`No changes. Environment ${environmentName} already contains this migrated Skill snapshot.`);
+    else if (result.unchanged) console.log(`No changes. Environment ${environmentName} already contains these migrated Skills.`);
     else console.log(`Migrated existing Agent Skills into ${environmentName}`);
-    console.log(`  package   ${result.packageName}@${result.version}`);
-    for (const skill of result.skills) console.log(`  ${skill.sources.length > 1 ? "dedupe" : "add"}     ${skill.name}  ${skill.sources.join(", ")}`);
+    for (const pkg of result.packages) {
+      const action = pkg.sources.length > 1 ? "dedupe" : pkg.unchanged ? "keep" : "add";
+      console.log(`  ${action.padEnd(8)} ${pkg.name}@${pkg.version}  ${pkg.sources.join(", ")}`);
+    }
     for (const skill of result.normalized) console.log(`  normalize ${skill}  legacy description frontmatter`);
     if (result.dryRun) console.log("No changes made.");
   });

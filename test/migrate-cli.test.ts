@@ -24,6 +24,10 @@ test("CLI explicitly migrates existing Skills into the active Environment", asyn
       path.join(codex, "skills", "legacy-review", "SKILL.md"),
       "---\nname: legacy-review\ndescription: Legacy review Skill.\n---\nReview.\n",
     );
+    await write(
+      path.join(codex, "skills", "quick-notes", "SKILL.md"),
+      "---\nname: quick-notes\ndescription: Quick notes Skill.\n---\nNotes.\n",
+    );
     const cli = path.resolve("dist/src/cli.js");
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -49,9 +53,22 @@ test("CLI explicitly migrates existing Skills into the active Environment", asyn
       env,
     });
     assert.equal(migrated.stderr, "");
+    const lock = JSON.parse(await readFile(path.join(home, "environments", "tools", "lock.json"), "utf8")) as {
+      packages: Record<string, unknown>;
+    };
+    assert.deepEqual(Object.keys(lock.packages), [
+      "harness-project-memory",
+      "harness-package-builder",
+      "legacy-review",
+      "quick-notes",
+    ]);
     assert.match(
       await readFile(path.join(home, "environments", "tools", "view", "codex", "skills", "legacy-review", "SKILL.md"), "utf8"),
       /Legacy review Skill/,
+    );
+    assert.match(
+      await readFile(path.join(home, "environments", "tools", "view", "codex", "skills", "quick-notes", "SKILL.md"), "utf8"),
+      /Quick notes Skill/,
     );
     const repeated = await run(process.execPath, [cli, "--project", project, "migrate", "skills", "--from", "codex"], {
       cwd: root,
