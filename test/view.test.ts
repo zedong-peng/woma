@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
-import { createEnvironment, doctorEnvironment, ensureBaseEnvironment, installIntoEnvironment, syncEnvironment } from "../src/environment.js";
+import { createEnvironment, doctorEnvironment, installIntoEnvironment, syncEnvironment } from "../src/environment.js";
 import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 
@@ -48,78 +48,6 @@ ${mcp}  hooks:
   );
   return packageRoot;
 }
-
-test("base adopts original Agent sessions once without overwriting stable state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-state-import-"));
-  const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
-  };
-  const home = path.join(root, "harness-home");
-  const originalCodex = path.join(root, "user", ".codex");
-  const originalClaude = path.join(root, "user", ".claude");
-  process.env.HARNESS_HOME = home;
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = originalCodex;
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
-  try {
-    await write(path.join(originalCodex, "sessions", "2026", "old-session.jsonl"), "original codex session\n");
-    await write(path.join(originalCodex, "history.jsonl"), "original history\n");
-    await write(path.join(originalCodex, "config.toml"), 'model = "original"\n');
-    await symlink("sessions", path.join(originalCodex, "session-alias"));
-    const outside = path.join(root, "outside-session.jsonl");
-    await write(outside, "outside\n");
-    await symlink(outside, path.join(originalCodex, "outside-session"));
-    await write(path.join(originalClaude, "projects", "project", "old-session.jsonl"), "original claude session\n");
-    await write(path.join(originalClaude, "settings.json"), '{"permissions":{"allow":["Read"]}}\n');
-
-    await ensureBaseEnvironment(root);
-    const codexHome = environmentAgentHomePath("base", "codex");
-    const claudeHome = environmentAgentHomePath("base", "claude");
-    assert.equal(await readFile(path.join(codexHome, "sessions", "2026", "old-session.jsonl"), "utf8"), "original codex session\n");
-    assert.equal(await readFile(path.join(codexHome, "history.jsonl"), "utf8"), "original history\n");
-    assert.equal(await readFile(path.join(claudeHome, "projects", "project", "old-session.jsonl"), "utf8"), "original claude session\n");
-    assert.equal((await lstat(path.join(codexHome, "sessions"))).isSymbolicLink(), true);
-    assert.equal((await lstat(path.join(codexHome, "history.jsonl"))).isSymbolicLink(), true);
-    assert.equal((await lstat(path.join(claudeHome, "projects"))).isSymbolicLink(), true);
-    assert.equal((await lstat(path.join(codexHome, "session-alias"))).isSymbolicLink(), true);
-    assert.equal(await readlink(path.join(codexHome, "session-alias")), path.join(originalCodex, "session-alias"));
-    assert.equal((await lstat(path.join(codexHome, "outside-session"))).isSymbolicLink(), true);
-    assert.equal(await readlink(path.join(codexHome, "outside-session")), path.join(originalCodex, "outside-session"));
-    assert.equal(await readlink(path.join(originalCodex, "outside-session")), outside);
-    assert.equal((await lstat(path.join(codexHome, "config.toml"))).isSymbolicLink(), true);
-    assert.equal(await readFile(path.join(originalCodex, "history.jsonl"), "utf8"), "original history\n");
-
-    await write(path.join(originalCodex, "sessions", "2026", "late-session.jsonl"), "late original session\n");
-    await write(path.join(originalCodex, "late-top-level.bin"), "late top-level state\n");
-    await syncEnvironment(root, "base");
-    assert.equal(await readFile(path.join(codexHome, "sessions", "2026", "late-session.jsonl"), "utf8"), "late original session\n");
-    await assert.rejects(readFile(path.join(codexHome, "late-top-level.bin")), /ENOENT/);
-
-    await rm(path.join(codexHome, "history.jsonl"));
-    await write(path.join(codexHome, "history.jsonl"), "stable history\n");
-    await rm(path.join(codexHome, ".harness-original-state-adopted"));
-    await rm(path.join(claudeHome, ".harness-original-state-adopted"));
-    await ensureBaseEnvironment(root);
-    assert.equal(await readFile(path.join(codexHome, "history.jsonl"), "utf8"), "stable history\n");
-    assert.equal(await readFile(path.join(codexHome, "late-top-level.bin"), "utf8"), "late top-level state\n");
-
-    await createEnvironment(root, "isolated", ["codex", "claude"]);
-    await assert.rejects(readFile(path.join(environmentAgentHomePath("isolated", "codex"), "history.jsonl")), /ENOENT/);
-    await assert.rejects(
-      readFile(path.join(environmentAgentHomePath("isolated", "claude"), "projects", "project", "old-session.jsonl")),
-      /ENOENT/,
-    );
-  } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
-    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
-    await removeTestTree(root);
-  }
-});
 
 test("stable Agent homes isolate opaque state from atomic managed views", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-stable-home-"));

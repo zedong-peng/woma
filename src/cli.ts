@@ -26,6 +26,7 @@ import { installPackageSource, loadCachedPackage } from "./package.js";
 import { scaffoldHarness } from "./scaffold.js";
 import { renderShellHook, resolveShell } from "./shell.js";
 import { migrateExistingSkills, type SkillMigrationSource } from "./migrate-skills.js";
+import { migrateExistingSessions } from "./migrate-sessions.js";
 import type { Action, Platform } from "./types.js";
 
 const program = new Command();
@@ -126,6 +127,29 @@ migrateCommand
     console.log(`  package   ${result.packageName}@${result.version}`);
     for (const skill of result.skills) console.log(`  ${skill.sources.length > 1 ? "dedupe" : "add"}     ${skill.name}  ${skill.sources.join(", ")}`);
     for (const skill of result.normalized) console.log(`  normalize ${skill}  legacy description frontmatter`);
+    if (result.dryRun) console.log("No changes made.");
+  });
+
+migrateCommand
+  .command("sessions")
+  .description("copy existing Codex or Claude session state into an Environment-owned Agent home")
+  .option("--from <agent>", "codex, claude, or both", "both")
+  .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
+  .option("--dry-run", "validate and print the migration plan without changing files", false)
+  .action(async (options: { from: string; name?: string; dryRun: boolean }, command: Command) => {
+    const environmentName = selectedEnvironment(options.name);
+    const result = await migrateExistingSessions({
+      projectRoot: projectRoot(command),
+      environment: environmentName,
+      from: migrationSource(options.from),
+      dryRun: options.dryRun,
+    });
+    if (result.dryRun) console.log(`Session migration plan for Environment ${environmentName}`);
+    else if (result.unchanged) console.log(`No changes. Environment ${environmentName} already contains this session state.`);
+    else console.log(`Migrated existing Agent sessions into ${environmentName}`);
+    for (const entry of result.entries) {
+      console.log(`  ${entry.platform.padEnd(6)} ${entry.name}  ${entry.files} files, ${entry.bytes} bytes`);
+    }
     if (result.dryRun) console.log("No changes made.");
   });
 

@@ -9,7 +9,7 @@ harness env show <name>
 harness env remove <name>
 ```
 
-`base` is initialized automatically and cannot be explicitly created or removed. Every Environment contains `harness-project-memory` and `harness-package-builder` as foundational root Packages. Environment initialization never scans or imports ordinary Skills from existing Agent homes.
+`base` is initialized automatically and cannot be explicitly created or removed. Every Environment contains `harness-project-memory` and `harness-package-builder` as foundational root Packages. Environment initialization never scans or imports ordinary Skills or session state from existing Agent homes.
 
 Environment recipes and locks are stored under `$HARNESS_HOME/environments/`. `HARNESS_HOME` defaults to `~/.harness-conda`.
 
@@ -24,6 +24,18 @@ harness migrate skills [--from codex|claude|both] [-n <environment>] [--dry-run]
 Hidden Agent-managed entries such as Codex `.system` are excluded. Identical cross-Agent Skills are deduplicated; different same-name contents fail with instructions to select one source. Existing Skills provided by another Package in the target Environment also fail instead of being overwritten. The root Package name `migrated-agent-skills` is reserved for this command. Root symlinks are copied as self-contained content, safely normalizable legacy frontmatter is corrected only in the snapshot, and original Agent files remain unchanged.
 
 Published sources are read-only and content-addressed under `$HARNESS_HOME/migrations/skills/`. Repeating an unchanged migration is a no-op. When source Skills change, a new snapshot atomically replaces the previous `migrated-agent-skills` root only in the selected Environment; old snapshots remain available to other locked Environments.
+
+## Existing session migration
+
+```bash
+harness migrate sessions [--from codex|claude|both] [-n <environment>] [--dry-run]
+```
+
+`migrate sessions` explicitly copies known session and history state from the original Agent homes into the selected Environment's stable Agent homes. Without `--name`, it uses the active Environment and falls back to `base`. `--from` defaults to `both`, and every selected Agent must be supported by the destination Environment. `--dry-run` builds and verifies a temporary snapshot and checks target conflicts without changing the Environment.
+
+Codex migration includes `sessions`, `archived_sessions`, `history.jsonl`, `session_index.jsonl`, and `shell_snapshots`. Claude migration includes `projects`, `history.jsonl`, `file-history`, `plans`, `session-env`, `shell-snapshots`, `tasks`, and `todos`. Credentials, provider configuration, Skills, plugins, caches, telemetry, and retired view generations are excluded.
+
+The command rejects source symbolic links and special files so the destination contains only ordinary files and directories with no dependency on the original home. It verifies source fingerprints before and after copying. Missing target paths are added, identical files are a no-op, and different content at the same path fails before publication rather than being overwritten. Original Agent files remain unchanged. Stop the source and destination Agent processes before migrating so their session files remain stable throughout the snapshot and merge.
 
 ## Environment migration
 
@@ -68,8 +80,6 @@ harness deactivate
 `activate` defaults to `base`. With the recommended shell hook installed, it selects each supported Environment's stable Agent home in the parent shell and leaves unsupported Agents on their original configuration homes. It atomically initializes Project Memory and stable discovery pointers for both Agents in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
 
 Authentication and provider configuration belong to the selected Environment. For Codex, edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. For Claude endpoint and API-key settings, edit `$CLAUDE_CONFIG_DIR/settings.json`; Claude OAuth login may additionally create `$CLAUDE_CONFIG_DIR/.credentials.json`. Managed configuration files under the original `~/.codex` and `~/.claude` homes seed a new Environment only and do not update existing Environments.
-
-The first initialization or repair of `base` after adopting stable Agent homes also links missing non-managed state from the original homes, including existing sessions and history. Existing stable entries win conflicts, symbolic-link targets are not copied, and a completed adoption is not repeated. Adopted paths remain backed by the original home so mutable databases are not copied into inconsistent snapshots. Harness does not inspect retired view generations for legacy state.
 
 The project defaults to the exact current working directory. Harness does not search parent directories for `.harness` or `.git`, so Git and non-Git projects follow the same rule. Run commands from the intended project root or pass the global `--project <directory>` option explicitly when working from a subdirectory.
 

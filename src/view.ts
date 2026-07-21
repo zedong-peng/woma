@@ -16,8 +16,6 @@ const CREDENTIAL_FILES: Record<Platform, string[]> = {
   claude: [".credentials.json"],
 };
 
-const ORIGINAL_STATE_ADOPTION_MARKER = ".harness-original-state-adopted";
-
 interface ViewInstallHooks {
   beforeSwap?: () => Promise<(() => Promise<void>) | void>;
   beforePublish?: () => Promise<void> | void;
@@ -213,53 +211,6 @@ export function sourceAgentHome(platform: Platform): string {
 export function environmentAgentHomePath(environmentName: string, platform: Platform): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(environmentName)) throw new Error(`Invalid Environment name: ${environmentName}`);
   return path.join(harnessHome(), "environments", environmentName, "home", platform);
-}
-
-function originalStateAdoptionMarkerPath(environmentName: string, platform: Platform): string {
-  return path.join(environmentAgentHomePath(environmentName, platform), ORIGINAL_STATE_ADOPTION_MARKER);
-}
-
-async function adoptMissingAgentState(source: string, destination: string): Promise<void> {
-  const sourceInfo = await lstat(source);
-  const destinationInfo = await lstat(destination).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (destinationInfo) {
-    if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink() || !destinationInfo.isDirectory() || destinationInfo.isSymbolicLink()) {
-      return;
-    }
-    for (const name of (await readdir(source)).sort()) {
-      await adoptMissingAgentState(path.join(source, name), path.join(destination, name));
-    }
-    return;
-  }
-  const directory = sourceInfo.isDirectory()
-    || (process.platform === "win32" && sourceInfo.isSymbolicLink() && (await stat(source).catch(() => undefined))?.isDirectory() === true);
-  try {
-    await symlink(source, destination, process.platform === "win32" ? (directory ? "junction" : "file") : undefined);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-}
-
-async function adoptOriginalAgentState(environmentName: string, platform: Platform): Promise<void> {
-  if (environmentName !== "base") return;
-  const marker = originalStateAdoptionMarkerPath(environmentName, platform);
-  if (await pathExists(marker)) return;
-  const source = sourceAgentHome(platform);
-  const destination = environmentAgentHomePath(environmentName, platform);
-  await mkdir(destination, { recursive: true, mode: 0o700 });
-  const excluded = new Set([...MANAGED_HOME_LINKS[platform], ORIGINAL_STATE_ADOPTION_MARKER]);
-  if (platform === "claude") excluded.add(".claude.json");
-  for (const name of (await readdir(source).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return [];
-    throw error;
-  })).sort()) {
-    if (!excluded.has(name)) await adoptMissingAgentState(path.join(source, name), path.join(destination, name));
-  }
-  await writeTextAtomic(marker, "adopted\n");
-  await chmod(marker, 0o600);
 }
 
 function codexSystemSkillsRoot(environmentName: string): string {
@@ -548,9 +499,6 @@ async function prepareStableHomeTransition(
     apply: async () => {
       const rollbacks: (() => Promise<void>)[] = [];
       try {
-        for (const platform of environment.spec.targets) {
-          await adoptOriginalAgentState(environment.metadata.name, platform);
-        }
         for (const link of links.filter((item) => item.action === "create")) {
           await mkdir(path.dirname(link.destination), { recursive: true, mode: 0o700 });
           await createSymlink(link.source, link.destination, link.directory);
@@ -743,9 +691,6 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
     const homeInfo = await lstat(home).catch(() => undefined);
     if (!homeInfo?.isDirectory() || homeInfo.isSymbolicLink()) {
       throw new Error(`Stable Agent home is missing or invalid: ${home}`);
-    }
-    if (environment.metadata.name === "base" && !(await pathExists(originalStateAdoptionMarkerPath(environment.metadata.name, target)))) {
-      throw new Error(`Original Agent state has not been adopted into ${home}`);
     }
     for (const name of MANAGED_HOME_LINKS[target]) {
       const link = path.join(home, name);
