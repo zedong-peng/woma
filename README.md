@@ -49,11 +49,13 @@ harness activate
 codex
 ```
 
-Existing ordinary Codex and Claude Skills remain untouched until the user explicitly migrates them into the active Environment:
+Existing ordinary Codex and Claude Skills and sessions remain untouched until the user explicitly migrates them into the active Environment. Before running either migration, stop all Codex and Claude processes, including processes using the original Agent homes or the destination Environment. This is required for both dry runs and publication so Skills, sessions, and history remain stable while Harness snapshots and validates them.
 
 ```bash
 harness migrate skills --dry-run
 harness migrate skills
+harness migrate sessions --dry-run
+harness migrate sessions
 ```
 
 Create and use a named Environment:
