@@ -6,7 +6,7 @@ import { satisfies } from "semver";
 import { z } from "zod";
 import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
 import { withEnvironmentLock, withProjectLock } from "./environment-lock.js";
-import { installPackageTree, loadCachedPackage, syncLockedPackage } from "./package.js";
+import { installPackageTree, loadCachedPackage, syncLockedPackage, type PackageInstallPlan } from "./package.js";
 import {
   prepareProjectMemoryInitialization,
   localMemoryPath,
@@ -507,6 +507,18 @@ export async function installIntoEnvironment(
   cwd = process.cwd(),
   hooks: EnvironmentInstallHooks = {},
 ): Promise<{ environment: HarnessEnvironment; root: InstalledPackage; packages: InstalledPackage[] }> {
+  const result = await installPackagesIntoEnvironment(projectRoot, environmentNameValue, [source], cwd, hooks);
+  return { environment: result.environment, root: result.roots[0]!, packages: result.packages };
+}
+
+export async function installPackagesIntoEnvironment(
+  projectRoot: string,
+  environmentNameValue: string,
+  sources: string[],
+  cwd = process.cwd(),
+  hooks: EnvironmentInstallHooks = {},
+): Promise<{ environment: HarnessEnvironment; roots: InstalledPackage[]; packages: InstalledPackage[] }> {
+  if (sources.length === 0) throw new Error("Install at least one Package source");
   if (environmentNameValue === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
   return withEnvironmentLock(environmentNameValue, async () => {
     const [environment, currentLock] = await Promise.all([
@@ -515,13 +527,32 @@ export async function installIntoEnvironment(
     ]);
     validateEnvironmentLockGraph(environment, currentLock);
     const previous = await loadEnvironmentSnapshot(environment, currentLock);
-    const installation = await installPackageTree(source, cwd);
-    const foundationalSource = FOUNDATIONAL_SOURCES.get(installation.root.lock.name as typeof FOUNDATIONAL_PACKAGES[number]);
-    if (foundationalSource && installation.root.lock.source !== foundationalSource) {
-      throw new Error(`Foundational package ${installation.root.lock.name} can only be installed from ${foundationalSource}`);
+    const installations: PackageInstallPlan[] = [];
+    for (const source of sources) installations.push(await installPackageTree(source, cwd));
+    const resolved = new Map<string, InstalledPackage>();
+    for (const installation of installations) {
+      const foundationalSource = FOUNDATIONAL_SOURCES.get(installation.root.lock.name as typeof FOUNDATIONAL_PACKAGES[number]);
+      if (foundationalSource && installation.root.lock.source !== foundationalSource) {
+        throw new Error(`Foundational package ${installation.root.lock.name} can only be installed from ${foundationalSource}`);
+      }
+      for (const pkg of installation.packages) {
+        const existing = resolved.get(pkg.lock.name);
+        if (
+          existing &&
+          (existing.lock.version !== pkg.lock.version ||
+            existing.lock.source !== pkg.lock.source ||
+            existing.lock.resolved !== pkg.lock.resolved ||
+            existing.lock.integrity !== pkg.lock.integrity)
+        ) {
+          throw new Error(
+            `Conflicting resolutions for ${pkg.lock.name}: ${existing.lock.source}@${existing.lock.version} and ${pkg.lock.source}@${pkg.lock.version}`,
+          );
+        }
+        if (!existing) resolved.set(pkg.lock.name, pkg);
+      }
     }
     const next: LockFile = { lockfileVersion: 1, packages: { ...currentLock.packages } };
-    for (const pkg of installation.packages) {
+    for (const pkg of resolved.values()) {
       const existing = currentLock.packages[pkg.lock.name];
       const unchanged =
         existing &&
@@ -532,11 +563,14 @@ export async function installIntoEnvironment(
         existing.cacheKey === pkg.lock.cacheKey;
       next.packages[pkg.lock.name] = unchanged ? existing : pkg.lock;
     }
-    const roots = environment.spec.roots.some((root) => root.name === installation.root.lock.name)
-      ? environment.spec.roots.map((root) =>
-          root.name === installation.root.lock.name ? { name: root.name, source: installation.root.lock.source } : root,
-        )
-      : [...environment.spec.roots, { name: installation.root.lock.name, source: installation.root.lock.source }];
+    let roots = environment.spec.roots;
+    for (const installation of installations) {
+      roots = roots.some((root) => root.name === installation.root.lock.name)
+        ? roots.map((root) =>
+            root.name === installation.root.lock.name ? { name: root.name, source: installation.root.lock.source } : root,
+          )
+        : [...roots, { name: installation.root.lock.name, source: installation.root.lock.source }];
+    }
     const pruned = reachableLock(next, roots.map((root) => root.name));
     const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
     const desired = await loadEnvironmentSnapshot(updated, pruned);
@@ -559,7 +593,11 @@ export async function installIntoEnvironment(
         };
       },
     });
-    return { environment: updated, root: installation.root, packages: installation.packages };
+    return {
+      environment: updated,
+      roots: installations.map((installation) => installation.root),
+      packages: [...resolved.values()],
+    };
   });
 }
 

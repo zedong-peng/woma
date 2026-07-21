@@ -85,7 +85,7 @@ test("Skill migration dry-run does not initialize an absent base Environment", {
     const result = await migrateExistingSkills({ projectRoot: root, environment: "base", from: "codex", dryRun: true });
     assert.equal(result.environment, "base");
     assert.equal(result.dryRun, true);
-    assert.deepEqual(result.skills.map((skill) => skill.name), ["preview-skill"]);
+    assert.deepEqual(result.packages.map((pkg) => pkg.name), ["preview-skill"]);
     await assert.rejects(access(home), /ENOENT/);
   } finally {
     if (previous.home === undefined) delete process.env.HARNESS_HOME;
@@ -155,8 +155,8 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     await createEnvironment(root, "clean", ["codex"]);
     const planned = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both", dryRun: true });
     assert.equal(planned.dryRun, true);
-    assert.equal(planned.skills.length, 2);
-    assert.deepEqual(planned.skills.find((skill) => skill.name === "existing-review")?.sources, ["codex", "claude"]);
+    assert.equal(planned.packages.length, 2);
+    assert.deepEqual(planned.packages.find((pkg) => pkg.name === "existing-review")?.sources, ["codex", "claude"]);
     assert.deepEqual(planned.normalized, ["existing-review"]);
     const cleanLock = await readEnvironmentLock(root, "clean");
     assert.deepEqual(Object.keys(cleanLock.packages), ["harness-project-memory", "harness-package-builder"]);
@@ -164,8 +164,13 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
 
     const migrated = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
     assert.equal(migrated.unchanged, false);
-    assert.ok((await readEnvironmentLock(root, "clean")).packages["migrated-agent-skills"]);
-    const snapshotRoot = migrated.source.slice("file:".length);
+    assert.deepEqual(
+      Object.keys((await readEnvironmentLock(root, "clean")).packages),
+      ["harness-project-memory", "harness-package-builder", "claude-notes", "existing-review"],
+    );
+    const existingReview = migrated.packages.find((pkg) => pkg.name === "existing-review");
+    assert.ok(existingReview);
+    const snapshotRoot = existingReview.source.slice("file:".length);
     for (const snapshotPath of [
       snapshotRoot,
       path.join(snapshotRoot, "harness.yaml"),
@@ -189,7 +194,7 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
 
     const repeated = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
     assert.equal(repeated.unchanged, true);
-    assert.equal(repeated.version, migrated.version);
+    assert.deepEqual(repeated.packages, migrated.packages.map((pkg) => ({ ...pkg, unchanged: true })));
 
     await mkdir(path.join(codex, "skills", "new-codex-skill"), { recursive: true });
     await writeFile(
@@ -197,8 +202,13 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
       "---\nname: new-codex-skill\ndescription: New Skill.\n---\nNew.\n",
     );
     const upgraded = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
-    assert.notEqual(upgraded.version, migrated.version);
-    await access(migrated.source.slice("file:".length));
+    assert.equal(
+      upgraded.packages.find((pkg) => pkg.name === "existing-review")?.version,
+      existingReview.version,
+    );
+    assert.equal(upgraded.packages.find((pkg) => pkg.name === "existing-review")?.unchanged, true);
+    assert.equal(upgraded.packages.find((pkg) => pkg.name === "new-codex-skill")?.unchanged, false);
+    await access(existingReview.source.slice("file:".length));
     assert.match(
       await readFile(path.join(environmentViewPath("clean"), "codex", "skills", "new-codex-skill", "SKILL.md"), "utf8"),
       /New Skill/,
@@ -243,7 +253,7 @@ test("explicit Skill migration rejects source conflicts without changing the Env
     assert.deepEqual(await readFile(environmentLockPath(root, "base")), before);
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
     const codexOnly = await migrateExistingSkills({ projectRoot: root, environment: "base", from: "codex" });
-    assert.deepEqual(codexOnly.skills.map((skill) => skill.name), ["review"]);
+    assert.deepEqual(codexOnly.packages.map((pkg) => pkg.name), ["review"]);
   } finally {
     if (previous.home === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous.home;
@@ -326,7 +336,7 @@ spec:
   }
 });
 
-test("explicit Skill migration does not replace a user Package with its reserved name", { concurrency: false }, async () => {
+test("explicit Skill migration does not replace a user Package with the Skill name", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-migration-package-name-conflict-"));
   const previous = {
     home: process.env.HARNESS_HOME,
@@ -353,7 +363,7 @@ test("explicit Skill migration does not replace a user Package with its reserved
       `apiVersion: harness.conda/v1
 kind: Harness
 metadata:
-  name: migrated-agent-skills
+  name: incoming-skill
   version: 9.0.0
   description: Unrelated user Package using the reserved name.
 spec:
@@ -373,7 +383,7 @@ spec:
 
     await assert.rejects(
       migrateExistingSkills({ projectRoot: root, environment: "tools", from: "codex" }),
-      /Package name migrated-agent-skills is reserved for explicit Skill migration in Environment tools/,
+      /Package name incoming-skill is already installed .* in Environment tools/,
     );
     assert.deepEqual(await readFile(environmentPath(root, "tools")), beforeRecipe);
     assert.deepEqual(await readFile(environmentLockPath(root, "tools")), beforeLock);
