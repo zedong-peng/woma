@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { Command } from "commander";
+import { requireAgentMigrationConfirmation } from "./agent-processes.js";
 import { captureHarness } from "./capture.js";
 import { exportEnvironmentBundle, importEnvironmentBundle } from "./environment-bundle.js";
 import {
@@ -114,11 +115,13 @@ migrateCommand
   .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
   .option("--dry-run", "validate and print the migration plan without changing files", false)
   .action(async (options: { from: string; name?: string; dryRun: boolean }, command: Command) => {
+    const from = migrationSource(options.from);
+    await requireAgentMigrationConfirmation();
     const environmentName = selectedEnvironment(options.name);
     const result = await migrateExistingSkills({
       projectRoot: projectRoot(command),
       environment: environmentName,
-      from: migrationSource(options.from),
+      from,
       dryRun: options.dryRun,
     });
     if (result.dryRun) console.log(`Skill migration plan for Environment ${environmentName}`);
@@ -137,11 +140,13 @@ migrateCommand
   .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
   .option("--dry-run", "validate and print the migration plan without changing files", false)
   .action(async (options: { from: string; name?: string; dryRun: boolean }, command: Command) => {
+    const from = migrationSource(options.from);
+    await requireAgentMigrationConfirmation();
     const environmentName = selectedEnvironment(options.name);
     const result = await migrateExistingSessions({
       projectRoot: projectRoot(command),
       environment: environmentName,
-      from: migrationSource(options.from),
+      from,
       dryRun: options.dryRun,
     });
     if (result.dryRun) console.log(`Session migration plan for Environment ${environmentName}`);

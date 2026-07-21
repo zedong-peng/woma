@@ -1,5 +1,7 @@
 # Command reference
 
+Before `migrate skills` or `migrate sessions`, Harness checks the current user's processes for running Codex and Claude CLIs. When it finds one, it lists the PID and command and requires the user to type `yes` in an interactive terminal. Non-interactive migration fails while an Agent process is running. This check also applies to dry runs.
+
 ## Environment lifecycle
 
 ```bash

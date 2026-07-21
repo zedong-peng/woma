@@ -56,6 +56,8 @@ Use `claude` instead of `codex` to start Claude Code.
 > [!IMPORTANT]
 > **Stop all Codex and Claude processes before every migration, including dry runs.**
 
+If Harness detects a running Agent process for the current user, it lists the process and requires an interactive `yes` confirmation. Non-interactive migration stops with an error.
+
 **Run a dry run first, then repeat without `--dry-run`:**
 
 ```bash
