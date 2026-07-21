@@ -1,25 +1,25 @@
 # harness-conda
 
-Conda-style package and Environment management for Agent engineering tools.
+Conda-style Environment and Package management for Codex and Claude Code.
 
-Harness Conda packages Skills, MCP servers, hooks, and dependency-based methods into reusable Environments. Package contents and Environment locks are stored globally; repository-specific knowledge stays in Project Memory.
+> [!NOTE]
+> **This project is in early development and is not published to the npm Registry.**
 
-> Status: early development. The package is not published to the npm Registry.
+## Features
 
-## Highlights
+- **Named Environments** for Codex, Claude Code, or both.
+- **Reusable Packages** containing Skills, MCP servers, hooks, and dependencies.
+- **Explicit migration** of existing Skills and sessions.
+- **Portable Environment bundles** for moving complete Package closures between machines.
+- **Project Memory** and Package authoring tools in every Environment.
 
-- Global, content-addressed Package storage.
-- Named Environments with independent roots, dependency closures, locks, and Agent targets.
-- An implicit, non-removable `base` Environment.
-- Explicit migration of existing Codex and Claude Skills into the selected Environment.
-- `harness-project-memory` and `harness-package-builder` in every Environment.
-- Recursive Package dependencies for reusable capability sets and end-to-end methods.
-- Portable, deterministic Environment bundles for offline migration between machines.
-- Atomically published per-Environment Codex and Claude Code views built from read-only Store symlinks.
-- Atomic Environment view updates and installation rollback on ordinary errors.
-- Direct `codex` and `claude` launches after shell activation; no Agent command proxy.
+## Requirements
 
-## Install
+- **Node.js 20 or newer**
+- Codex and/or Claude Code
+- Bash or Zsh for shell activation
+
+## Installation
 
 ```bash
 git clone https://github.com/zedong-peng/harness-conda.git
@@ -30,44 +30,69 @@ npm link
 harness --version
 ```
 
-Recommended: add the shell hook to `~/.bashrc` or `~/.zshrc`:
+**Add the shell hook** to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
 eval "$(harness shell hook)"
 ```
 
-Open a new shell or reload the startup file. The hook selects the active global Agent view and shows it in the prompt, for example `(harness:base)` or `(harness:performance)`.
+Open a new shell or reload the startup file.
 
 ## Quick Start
 
-`base` is created automatically on first use with only the foundational Packages:
+The `base` Environment is created automatically:
 
 ```bash
 harness env list
 harness install builtin:auto-research
-harness activate
+harness activate base
 codex
 ```
 
-Existing ordinary Codex and Claude Skills remain untouched until the user explicitly migrates them into the active Environment:
+Use `claude` instead of `codex` to start Claude Code.
+
+### Migrate Existing State
+
+> [!IMPORTANT]
+> **Stop all Codex and Claude processes before every migration, including dry runs.**
+
+If Harness detects a running Agent process for the current user, it lists the process and requires an interactive `yes` confirmation. Non-interactive migration stops with an error.
+
+**Run a dry run first, then repeat without `--dry-run`:**
 
 ```bash
-harness migrate skills --dry-run
-harness migrate skills
+harness migrate skills --from both --name base --dry-run
+harness migrate skills --from both --name base
+
+harness migrate sessions --from both --name base --dry-run
+harness migrate sessions --from both --name base
 ```
 
-Create and use a named Environment:
+Use `--from codex` or `--from claude` to migrate one Agent only. Use `--name <environment>` to select another destination.
+
+## Manage Environments
+
+Create, inspect, activate, and remove an Environment:
 
 ```bash
 harness env create performance --target codex
-harness install -n performance builtin:performance-engineering
+harness install --name performance builtin:performance-engineering
+harness env show performance
 harness activate performance
 codex
+
+harness deactivate
+harness env remove performance
 ```
 
-`harness deactivate` returns the current shell to `base`. Every Environment includes the Project Memory manager and the general Harness Package authoring assistant.
+**Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex or Claude process after switching Environments or installing Packages.
 
-Move the complete Environment, including local `file:` Packages, to another machine without copying credentials or project state:
+## Configure Agents
+
+- **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`.
+- **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
+
+## Export and Import
 
 ```bash
 # Source machine
@@ -78,39 +103,18 @@ harness env import performance.harness-env
 harness activate performance
 ```
 
-Use `--name performance-copy` during import to choose a different Environment name. Import refuses to overwrite an existing Environment.
+Use `--name <new-environment>` during import to choose a different name.
 
-## Model
+## Inspect and Repair
 
-```text
-~/.harness-conda/
-├── packages/                    immutable, content-addressed Package contents
-├── migrations/                  content-addressed snapshots of explicitly migrated Skills
-├── locks/                       cross-process Environment, Package, and project locks
-└── environments/<name>/
-    ├── environment.yaml         root Packages and Agent targets
-    ├── lock.json                exact recursive dependency closure
-    ├── home/
-    │   ├── codex/               stable, opaque Codex state and managed view links
-    │   ├── claude/              stable, opaque Claude state and managed view links
-    │   └── codex-system-skills/ stable Codex-managed system Skills
-    ├── view -> .view.gen-<id>    atomic pointer to one complete generation
-    └── .view.gen-<id>/
-        ├── codex/               Harness-managed Codex Skills, MCP, and Hooks
-        └── claude/              Harness-managed Claude Skills and Hooks
-
-<project>/.harness/
-├── memory/                      portable project and Package knowledge
-└── local/                       machine-local Memory
+```bash
+harness info
+harness env list
+harness env show base
+harness doctor --name base
+harness sync --name base
+harness inspect builtin:auto-research
 ```
-
-Each ordinary Skill in a view is a symbolic link into a read-only Package Store entry. Installing into an Environment builds a complete immutable managed-resource generation and publishes it with one atomic `view` symlink replacement. Stable Agent homes link only Harness-owned entries through that pointer, so every project and new Agent process observes either the old or new dependency closure, never a path-by-path mixture:
-
-```text
-project/shell -> stable Environment Agent home -> Environment view -> Package Store
-```
-
-The shell hook exports the selected Environment's stable Agent home for supported targets and restores the original Agent home for unsupported targets. Authentication and provider configuration are Environment-specific: edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml` for Codex, and `$CLAUDE_CONFIG_DIR/settings.json` for Claude endpoint/API-key settings. Claude OAuth login uses `$CLAUDE_CONFIG_DIR/.credentials.json` when that file is created. Do not edit the corresponding files under `~/.codex` or `~/.claude` after an Environment has been initialized; they are only first-use seeds. Other Agent-created files, including sessions, caches, and databases, stay opaque and isolated in the stable Environment home. Harness never copies unknown state from active or retired view generations. Existing ordinary Skills remain untouched until `harness migrate skills` explicitly snapshots them. Project Memory remains local to the repository. Restart an already-running Agent after changing its Environment because Agent CLIs normally discover Skills at process startup.
 
 ## Documentation
 
@@ -128,5 +132,3 @@ npm run check
 npm test
 bash scripts/demo.sh
 ```
-
-Node.js 20 or newer is required.
