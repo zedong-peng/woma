@@ -174,14 +174,36 @@ envCommand
 
 envCommand
   .command("show <name>")
-  .description("show an environment recipe and resolved package closure")
+  .description("show an environment recipe, packages, and visible Skills")
   .action(async (name: string, _options: unknown, command: Command) => {
     const project = projectRoot(command);
     const [{ environment, lock }, active] = await Promise.all([environmentSnapshot(project, name), selectedEnvironment()]);
+    const lockedPackages = Object.values(lock.packages);
+    const packages = await Promise.all(lockedPackages.map(async (locked) => {
+      try {
+        return { status: "ok" as const, locked, pkg: await loadCachedPackage(locked) };
+      } catch (error) {
+        return { status: "error" as const, locked, error: error as Error };
+      }
+    }));
     console.log(`Environment: ${name}${active === name ? " (active)" : ""}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
-    console.log(`  packages  ${Object.values(lock.packages).map((pkg) => `${pkg.name}@${pkg.version}`).join(", ") || "none"}`);
+    console.log(`  packages  ${lockedPackages.map((pkg) => `${pkg.name}@${pkg.version}`).join(", ") || "none"}`);
+    console.log("  skills");
+    let visibleSkills = 0;
+    for (const loaded of packages) {
+      if (loaded.status === "error") {
+        console.log(`    [unavailable]  ${loaded.locked.name}@${loaded.locked.version}  ${loaded.error.message}`);
+        continue;
+      }
+      const platforms = environment.spec.targets.filter((target) => loaded.pkg.manifest.spec.platforms.includes(target));
+      for (const skill of loaded.pkg.manifest.spec.skills) {
+        console.log(`    ${skill.name}  ${loaded.locked.name}@${loaded.locked.version}  ${platforms.join(", ") || "none"}`);
+        visibleSkills += 1;
+      }
+    }
+    if (visibleSkills === 0 && packages.every((loaded) => loaded.status === "ok")) console.log("    none");
   });
 
 envCommand
