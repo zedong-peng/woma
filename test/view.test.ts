@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -143,7 +143,7 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     assert.match(await readFile(path.join(codexHome, "skills", "view-skill", "SKILL.md"), "utf8"), /Stable home fixture/);
     assert.equal(
       await realpath(path.join(codexHome, "skills", ".system")),
-      path.join(home, "environments", "tools", "home", "codex-system-skills"),
+      await realpath(path.join(home, "environments", "tools", "home", "codex-system-skills")),
     );
 
     const claudeStatePath = path.join(claudeHome, ".claude.json");
@@ -226,6 +226,52 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
     if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
     else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    await removeTestTree(root);
+  }
+});
+
+test("Pi uses a stable Agent home with only Skills managed by the Environment view", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-pi-home-"));
+  const previous = {
+    harnessHome: process.env.HARNESS_HOME,
+    piHome: process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR,
+  };
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR = path.join(root, "original-pi");
+  try {
+    await createEnvironment(root, "pi-tools", ["pi"]);
+    const home = environmentAgentHomePath("pi-tools", "pi");
+    const view = environmentViewPath("pi-tools");
+    const skills = path.join(home, "skills");
+    assert.equal((await lstat(home)).isDirectory(), true);
+    assert.equal((await lstat(skills)).isSymbolicLink(), true);
+    assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), path.join(view, "pi", "skills"));
+
+    await write(path.join(home, "settings.json"), '{"theme":"light"}\n');
+    await write(path.join(home, "auth.json"), '{"openai":{"type":"api_key","key":"environment"}}\n');
+    await write(path.join(home, "sessions", "project", "session.jsonl"), '{"type":"session"}\n');
+    const rawSkill = path.join(root, "pi-review");
+    await write(
+      path.join(rawSkill, "SKILL.md"),
+      "---\nname: pi-review\ndescription: Review code with Pi.\n---\n\nReview the code.\n",
+    );
+    await installIntoEnvironment(root, "pi-tools", rawSkill);
+
+    assert.match(await readFile(path.join(skills, "pi-review", "SKILL.md"), "utf8"), /Review code with Pi/);
+    assert.equal(await readFile(path.join(home, "settings.json"), "utf8"), '{"theme":"light"}\n');
+    assert.match(await readFile(path.join(home, "auth.json"), "utf8"), /environment/);
+    assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
+    assert.deepEqual((await readdir(path.join(view, "pi"))).sort(), ["skills"]);
+
+    await syncEnvironment(root, "pi-tools");
+    assert.equal(await readFile(path.join(home, "settings.json"), "utf8"), '{"theme":"light"}\n');
+    assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
+    assert.equal((await doctorEnvironment(root, "pi-tools")).find((check) => check.label === "view")?.status, "ok");
+  } finally {
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.piHome === undefined) delete process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR;
+    else process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR = previous.piHome;
     await removeTestTree(root);
   }
 });

@@ -10,7 +10,9 @@ test("init publishes a complete scaffold into an existing empty directory", asyn
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-scaffold-empty-"));
   try {
     await scaffoldHarness(root, "demo");
-    assert.match(await readFile(path.join(root, "harness.yaml"), "utf8"), /name: demo/);
+    const manifest = await readFile(path.join(root, "harness.yaml"), "utf8");
+    assert.match(manifest, /name: demo/);
+    assert.match(manifest, /platforms: \[codex, claude, pi\]/);
     assert.match(await readFile(path.join(root, "skills", "demo-workflow", "SKILL.md"), "utf8"), /name: demo-workflow/);
   } finally {
     await removeTestTree(root);

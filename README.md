@@ -1,13 +1,13 @@
 # harness-conda
 
-Conda-style Environment and Package management for Codex and Claude Code.
+Conda-style Environment and Package management for Codex, Claude Code, and Pi.
 
 > [!NOTE]
 > **This project is in early development and is not published to the npm Registry.**
 
 ## Features
 
-- **Named Environments** for Codex, Claude Code, or both.
+- **Named Environments** for Codex, Claude Code, Pi, or any combination.
 - **Reusable Packages** containing Skills, MCP servers, hooks, and dependencies.
 - **Direct Skill installation** from standalone and conventional multi-Skill sources.
 - **Explicit migration** of existing Skills and sessions.
@@ -17,7 +17,7 @@ Conda-style Environment and Package management for Codex and Claude Code.
 ## Requirements
 
 - **Node.js 20 or newer**
-- Codex and/or Claude Code
+- Codex, Claude Code, and/or Pi
 - Bash or Zsh for shell activation
 
 ## Installation
@@ -50,7 +50,13 @@ harness activate base
 codex
 ```
 
-Use `claude` instead of `codex` to start Claude Code.
+Use `claude` instead of `codex` to start Claude Code. Pi is opt-in because the existing `base` compatibility default targets Codex and Claude; create a Pi Environment explicitly:
+
+```bash
+harness env create pi-work --target pi
+harness activate pi-work
+pi
+```
 
 ### Migrate Existing State
 
@@ -86,7 +92,7 @@ harness deactivate
 harness env remove performance
 ```
 
-**Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex or Claude process after switching Environments or installing Packages.
+**Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex, Claude, or Pi process after switching Environments or installing Packages.
 
 ## Install Skills
 
@@ -100,6 +106,7 @@ harness install ./ResearchStudio/ResearchStudio-Idea
 
 - **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`.
 - **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
+- **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Harness manages only `$PI_CODING_AGENT_DIR/skills`; Pi owns every other file in that Environment home.
 
 ## Export and Import
 

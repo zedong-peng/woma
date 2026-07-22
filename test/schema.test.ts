@@ -99,6 +99,21 @@ spec:
   );
 });
 
+test("manifest parser accepts Pi as a Package platform", () => {
+  const manifest = parseManifest(`
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: pi-skill
+  version: 1.0.0
+  description: Pi platform fixture.
+spec:
+  platforms: [codex, claude, pi]
+  skills: []
+`);
+  assert.deepEqual(manifest.spec.platforms, ["codex", "claude", "pi"]);
+});
+
 test("manifest parser rejects duplicate platform declarations", () => {
   assert.throws(
     () =>

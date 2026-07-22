@@ -92,6 +92,7 @@ test("a root SKILL.md becomes one implicit Package without modifying its source"
     const pkg = await installPackageSource(source);
     assert.equal(pkg.manifest.metadata.name, "standalone-research");
     assert.match(pkg.manifest.metadata.version, /^0\.0\.0\+local\.[a-f0-9]{12}$/);
+    assert.deepEqual(pkg.manifest.spec.platforms, ["codex", "claude", "pi"]);
     assert.deepEqual(pkg.manifest.spec.skills, [{ name: "standalone-research", path: "./skills/standalone" }]);
     assert.equal(await pathExists(path.join(source, "harness.yaml")), false);
     assert.equal(await hashDirectory(source), before);

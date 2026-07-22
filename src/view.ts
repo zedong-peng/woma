@@ -4,16 +4,18 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
 import { harnessHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
-import type { HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
+import type { CodexClaudePlatform, HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
 const MANAGED_HOME_LINKS: Record<Platform, string[]> = {
   codex: ["auth.json", "config.toml", "hooks.json", "skills"],
   claude: [".credentials.json", "settings.json", "skills"],
+  pi: ["skills"],
 };
 
 const CREDENTIAL_FILES: Record<Platform, string[]> = {
   codex: ["auth.json"],
   claude: [".credentials.json"],
+  pi: [],
 };
 
 interface ViewInstallHooks {
@@ -193,8 +195,13 @@ function defaultAgentHome(platform: Platform): string {
   if (platform === "codex") {
     return path.resolve(process.env.HARNESS_ORIGINAL_CODEX_HOME ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
   }
+  if (platform === "claude") {
+    return path.resolve(
+      process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"),
+    );
+  }
   return path.resolve(
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"),
+    process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"),
   );
 }
 
@@ -203,7 +210,9 @@ export function sourceAgentHome(platform: Platform): string {
   const environmentRoot = path.join(harnessHome(), "environments");
   const relative = path.relative(environmentRoot, candidate);
   if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
-    return path.join(os.homedir(), platform === "codex" ? ".codex" : ".claude");
+    if (platform === "codex") return path.join(os.homedir(), ".codex");
+    if (platform === "claude") return path.join(os.homedir(), ".claude");
+    return path.join(os.homedir(), ".pi", "agent");
   }
   return candidate;
 }
@@ -269,7 +278,7 @@ async function linkSkills(
   return links;
 }
 
-async function copyAgentCredential(environmentName: string, platform: Platform, root: string, name: string): Promise<void> {
+async function copyAgentCredential(environmentName: string, platform: CodexClaudePlatform, root: string, name: string): Promise<void> {
   const homeCredential = path.join(environmentAgentHomePath(environmentName, platform), name);
   const currentCredential = path.join(environmentViewPath(environmentName), platform, name);
   const originalCredential = path.join(sourceAgentHome(platform), name);
@@ -287,7 +296,7 @@ async function copyAgentCredential(environmentName: string, platform: Platform, 
   await writeBufferPreservingFile(path.join(root, name), content, mode);
 }
 
-function collectServers(packages: InstalledPackage[], platform: Platform): { packageName: string; server: McpServer }[] {
+function collectServers(packages: InstalledPackage[], platform: CodexClaudePlatform): { packageName: string; server: McpServer }[] {
   const result: { packageName: string; server: McpServer }[] = [];
   const owners = new Map<string, { packageName: string; value: unknown }>();
   for (const pkg of packages) {
@@ -306,7 +315,7 @@ function collectServers(packages: InstalledPackage[], platform: Platform): { pac
   return result;
 }
 
-function collectHooks(packages: InstalledPackage[], platform: Platform): HookSpec[] {
+function collectHooks(packages: InstalledPackage[], platform: CodexClaudePlatform): HookSpec[] {
   const result: HookSpec[] = [];
   for (const pkg of packages) {
     for (const hook of pkg.manifest.spec.hooks.filter((item) => appliesTo(platform, item.platforms))) {
@@ -361,6 +370,11 @@ async function buildCodexView(environmentName: string, root: string, packages: I
   await writeJsonAtomic(hooksDestination, hooksRoot);
   await chmod(hooksDestination, 0o600);
   return links;
+}
+
+async function buildPiView(root: string, packages: InstalledPackage[]): Promise<Record<string, string>> {
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  return linkSkills(root, packages);
 }
 
 async function buildClaudeView(
@@ -616,6 +630,9 @@ export async function materializeEnvironmentView(
         hooks.previousPackages ?? [],
       );
     }
+    if (environment.spec.targets.includes("pi")) {
+      skillLinks.pi = await buildPiView(path.join(temporary, "pi"), packages);
+    }
     const codexMcpServers = environment.spec.targets.includes("codex")
       ? collectServers(packages, "codex").map(({ server }) => server.name)
       : [];
@@ -752,7 +769,7 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
       const expectedHooks = parseJsonObject(await readOptional(sourceHooksPath), sourceHooksPath);
       await mergeHooks(sourceHooksPath, expectedHooks, collectHooks(packages, "codex"));
       if (!equal(hooksRoot, expectedHooks)) throw new Error(`Codex Hooks differ from the Environment closure in ${hooksPath}`);
-    } else {
+    } else if (target === "claude") {
       const statePath = path.join(home, ".claude.json");
       const state = parseJsonObject(await readOptional(statePath), statePath);
       for (const { server } of collectServers(packages, "claude")) {

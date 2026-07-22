@@ -6,7 +6,7 @@ metadata:
   description: Evidence-first benchmark, profile, optimize, and regression-report loop for existing software.
   tags: [performance, benchmark, profiling]
 spec:
-  platforms: [codex, claude]
+  platforms: [codex, claude, pi]
   requirements:
     env: []
     commands: [git, node]
@@ -17,5 +17,6 @@ spec:
   hooks:
     - event: PostToolUse
       matcher: Edit|Write
+      platforms: [codex, claude]
       command: git diff --check
       timeout: 10

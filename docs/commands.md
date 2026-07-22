@@ -6,12 +6,12 @@ Before `migrate skills` or `migrate sessions`, Harness checks the current user's
 
 ```bash
 harness env list
-harness env create <name> [--target codex|claude|both]
+harness env create <name> [--target codex|claude|pi|both|all|<comma-separated-list>]
 harness env show <name>
 harness env remove <name>
 ```
 
-`base` is initialized automatically and cannot be explicitly created or removed. Every Environment contains `harness-project-memory` and `harness-package-builder` as foundational root Packages. Environment initialization never scans or imports ordinary Skills or session state from existing Agent homes.
+`base` is initialized automatically and cannot be explicitly created or removed. For backward compatibility, `base`, `both`, and an omitted `--target` select Codex and Claude. Use `--target pi`, a comma-separated combination such as `codex,pi`, or `--target all` explicitly. Every Environment contains `harness-project-memory` and `harness-package-builder` as foundational root Packages. Environment initialization never scans or imports ordinary Skills or session state from existing Agent homes.
 
 Environment recipes and locks are stored under `$HARNESS_HOME/environments/`. `HARNESS_HOME` defaults to `~/.harness-conda`.
 
@@ -81,7 +81,7 @@ Each materialized source resolves to exactly one Package by the following ordere
 
 Recognition is intentionally non-recursive. A repository root containing several nested Package directories is a collection, not an installable Package; install one child directory explicitly. Harness does not invoke an Agent, infer MCP servers, Hooks, dependencies, or entrypoints, or write a generated manifest into the source.
 
-For an implicit Package, Harness parses each Skill's `name` and `description` from YAML frontmatter, copies the selected self-contained Skill directories into temporary staging, and generates a deterministic `harness.yaml` there. A standalone Package uses the Skill name as its Package name. A multi-Skill Package derives its name from the local source directory or Git repository. Its informational version is `0.0.0+local.<content>` for local content or `0.0.0+git.<commit>` for Git. The ordinary manifest, symlink, identity, ownership, cache, and Environment transaction validation then applies.
+For an implicit Package, Harness parses each Skill's `name` and `description` from YAML frontmatter, copies the selected self-contained Skill directories into temporary staging, and generates a deterministic `harness.yaml` supporting Codex, Claude, and Pi. A standalone Package uses the Skill name as its Package name. A multi-Skill Package derives its name from the local source directory or Git repository. Its informational version is `0.0.0+local.<content>` for local content or `0.0.0+git.<commit>` for Git. The ordinary manifest, symlink, identity, ownership, cache, and Environment transaction validation then applies.
 
 Installation recursively resolves dependencies, validates Package and Skill identities and SemVer constraints, rejects cycles and source conflicts, and publishes one complete global Agent view generation atomically. Package Store entries are read-only after publication. Every project using that Environment observes the new view without reactivation; already-running Agent processes may need a restart to rediscover Skills.
 
@@ -92,18 +92,19 @@ harness activate [environment]
 harness deactivate
 ```
 
-`activate` defaults to `base`. With the recommended shell hook installed, it selects each supported Environment's stable Agent home in the parent shell and leaves unsupported Agents on their original configuration homes. It atomically initializes Project Memory and stable discovery pointers for both Agents in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
+`activate` defaults to `base`. With the recommended shell hook installed, it selects each supported Environment's stable Agent home in the parent shell and leaves unsupported Agents on their original configuration homes. Codex uses `CODEX_HOME`, Claude uses `CLAUDE_CONFIG_DIR`, and Pi uses `PI_CODING_AGENT_DIR`. It atomically initializes Project Memory discovery through `AGENTS.md` for Codex and Pi and through `CLAUDE.md` for Claude in the current project. Environment selection belongs only to the shell and is never recorded in the project. Run the Agent normally afterward:
 
-Authentication and provider configuration belong to the selected Environment. For Codex, edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. For Claude endpoint and API-key settings, edit `$CLAUDE_CONFIG_DIR/settings.json`; Claude OAuth login may additionally create `$CLAUDE_CONFIG_DIR/.credentials.json`. Managed configuration files under the original `~/.codex` and `~/.claude` homes seed a new Environment only and do not update existing Environments.
+Authentication and provider configuration belong to the selected Environment. For Codex, edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. For Claude endpoint and API-key settings, edit `$CLAUDE_CONFIG_DIR/settings.json`; Claude OAuth login may additionally create `$CLAUDE_CONFIG_DIR/.credentials.json`. Managed configuration files under the original `~/.codex` and `~/.claude` homes seed a new Environment only and do not update existing Environments. For Pi, use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Harness manages only its `skills` link; Pi owns settings, credentials, models, Pi Packages, and sessions in the stable Environment home. A new Pi Environment does not copy the original `~/.pi/agent` state.
 
 The project defaults to the exact current working directory. Harness does not search parent directories for `.harness` or `.git`, so Git and non-Git projects follow the same rule. Run commands from the intended project root or pass the global `--project <directory>` option explicitly when working from a subdirectory.
 
 ```bash
 codex
 claude
+pi
 ```
 
-`deactivate` returns to `base`. Harness does not currently associate Codex or Claude session IDs with Environments; activate the intended Environment before resuming an existing session.
+`deactivate` returns to `base`. Harness does not currently associate Codex, Claude, or Pi session IDs with Environments; activate the intended Environment before resuming an existing session.
 
 ## Inspection and repair
 
@@ -144,4 +145,4 @@ Add the following line to `~/.bashrc` or `~/.zshrc`:
 eval "$(harness shell hook)"
 ```
 
-The hook saves the original Agent configuration roots, validates the selected Environment before exporting its view, restores the original root for unsupported targets, and shows `(harness:<environment>)` in the prompt. A stale inherited selection falls back to `base` with a warning. Only a successful top-level `activate` or `deactivate` updates the parent shell; help and unrelated commands are inert. The hook does not proxy `codex` or `claude`.
+The hook saves the original Codex, Claude, and Pi configuration roots, validates the selected Environment before exporting its view, restores the original root for unsupported targets, and shows `(harness:<environment>)` in the prompt. A stale inherited selection falls back to `base` with a warning. Only a successful top-level `activate` or `deactivate` updates the parent shell; help and unrelated commands are inert. The hook does not proxy `codex`, `claude`, or `pi`.

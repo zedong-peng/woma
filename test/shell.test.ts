@@ -6,11 +6,12 @@ import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { renderShellHook, resolveShell } from "../src/shell.js";
+import type { Platform } from "../src/types.js";
 import { removeTestTree } from "./helpers.js";
 
 const run = promisify(execFile);
 
-async function fakeEnvironment(home: string, name: string, targets: ("codex" | "claude")[]): Promise<void> {
+async function fakeEnvironment(home: string, name: string, targets: Platform[]): Promise<void> {
   const root = path.join(home, "environments", name);
   await mkdir(path.join(root, "view"), { recursive: true });
   await writeFile(path.join(root, "environment.yaml"), `metadata:\n  name: ${name}\n`, "utf8");
@@ -64,6 +65,8 @@ test("zsh hook installs an idempotent precmd prompt prefix", () => {
   assert.match(hook, /HARNESS_SHELL_HOOK_INSTALLED/);
   assert.match(hook, /HARNESS_ORIGINAL_CODEX_HOME/);
   assert.match(hook, /CLAUDE_CONFIG_DIR=.*environments.*home\/claude/);
+  assert.match(hook, /HARNESS_ORIGINAL_PI_CODING_AGENT_DIR/);
+  assert.match(hook, /PI_CODING_AGENT_DIR=.*environments.*home\/pi/);
 });
 
 test("bash hook updates the parent shell after activate and deactivate", async () => {
@@ -147,6 +150,33 @@ test("shell hook restores the original Agent home for an unsupported target", as
       },
     );
     assert.equal(stdout, `${path.join(home, "environments", "codex-only", "home", "codex")}|${originalClaude}`);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("shell hook selects Pi home and restores unsupported Agent homes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-pi-target-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const home = path.join(root, "home");
+    const originalCodex = path.join(root, "original-codex");
+    const originalClaude = path.join(root, "original-claude");
+    const originalPi = path.join(root, "original-pi");
+    await fakeEnvironment(home, "pi-only", ["pi"]);
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const script = 'source "$1"\nprintf \'%s|%s|%s\' "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$PI_CODING_AGENT_DIR"';
+    const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
+      env: {
+        ...process.env,
+        HARNESS_HOME: home,
+        HARNESS_ENV: "pi-only",
+        HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
+        HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+        HARNESS_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
+      },
+    });
+    assert.equal(stdout, `${originalCodex}|${originalClaude}|${path.join(home, "environments", "pi-only", "home", "pi")}`);
   } finally {
     await removeTestTree(root);
   }

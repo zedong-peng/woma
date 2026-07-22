@@ -43,11 +43,15 @@ function selectedEnvironment(requested?: string): string {
 }
 
 function targets(input: string): Platform[] {
-  const values = input === "both" ? ["codex", "claude"] : input.split(",");
+  const values = input === "both"
+    ? ["codex", "claude"]
+    : input === "all"
+      ? ["codex", "claude", "pi"]
+      : input.split(",");
   const result: Platform[] = [];
   for (const item of values) {
     const value = item.trim();
-    if (value !== "codex" && value !== "claude") throw new Error(`Unknown target: ${value}`);
+    if (value !== "codex" && value !== "claude" && value !== "pi") throw new Error(`Unknown target: ${value}`);
     if (!result.includes(value)) result.push(value);
   }
   if (result.length === 0) throw new Error("Select at least one target");
@@ -94,7 +98,7 @@ function migrationSource(input: string): SkillMigrationSource {
 envCommand
   .command("create <name>")
   .description("create a global named environment with the foundational packages")
-  .option("-t, --target <target>", "codex, claude, both, or a comma-separated list", "both")
+  .option("-t, --target <target>", "codex, claude, pi, both, all, or a comma-separated list", "both")
   .action(async (name: string, options: { target: string }, command: Command) => {
     const project = projectRoot(command);
     const environment = await createEnvironment(project, name, targets(options.target));

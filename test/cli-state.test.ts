@@ -143,6 +143,30 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
   }
 });
 
+test("CLI creates Pi and all-target Environments", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-pi-target-"));
+  const home = path.join(root, "home");
+  try {
+    const piOnly = await runCli(["env", "create", "pi-only", "--target", "pi"], root, home);
+    assert.equal(piOnly.code, 0, piOnly.stderr);
+    assert.match(piOnly.stdout, /targets pi/);
+    assert.match(await readFile(path.join(home, "environments", "pi-only", "environment.yaml"), "utf8"), /targets:[\s\S]*- pi/);
+
+    const all = await runCli(["env", "create", "all-agents", "--target", "all"], root, home);
+    assert.equal(all.code, 0, all.stderr);
+    assert.match(all.stdout, /targets codex, claude, pi/);
+    assert.match(await readFile(path.join(home, "environments", "all-agents", "view", "view.json"), "utf8"), /"pi"/);
+
+    const bundle = path.join(root, "all-agents.harness-env");
+    assert.equal((await runCli(["env", "export", "--name", "all-agents", "--output", bundle], root, home)).code, 0);
+    const imported = await runCli(["env", "import", bundle, "--name", "all-agents-copy"], root, home);
+    assert.equal(imported.code, 0, imported.stderr);
+    assert.match(await readFile(path.join(home, "environments", "all-agents-copy", "view", "pi", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Harness Project Memory/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("CLI provides base from an explicit project when invoked in a subdirectory", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-base-"));
   const home = path.join(root, "home");

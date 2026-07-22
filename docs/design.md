@@ -8,7 +8,7 @@ Harness Conda separates reusable Agent capabilities from repository knowledge.
 | --- | --- | --- |
 | Immutable Package contents | User-global | `$HARNESS_HOME/packages/` |
 | Environment recipes and locks | User-global | `$HARNESS_HOME/environments/<name>/` |
-| Codex and Claude Environment views | User-global | `$HARNESS_HOME/environments/<name>/view/` |
+| Codex, Claude, and Pi Environment views | User-global | `$HARNESS_HOME/environments/<name>/view/` |
 | Opaque Agent state | Per Environment | `$HARNESS_HOME/environments/<name>/home/<agent>/` |
 | Explicit Skill migration snapshots | User-global | `$HARNESS_HOME/migrations/skills/<skill-name>/<content-hash>/` |
 | Mutation locks | User-global | `$HARNESS_HOME/locks/` |
@@ -47,24 +47,24 @@ global Environment recipe and lock
 content-addressed Package store
         |
         v
-atomic Codex/Claude managed-resource view
+atomic target-specific managed-resource view
         |
         v
-stable per-Environment CODEX_HOME / CLAUDE_CONFIG_DIR
+stable per-Environment CODEX_HOME / CLAUDE_CONFIG_DIR / PI_CODING_AGENT_DIR
         |
         v
-direct codex or claude
+direct codex, claude, or pi
 ```
 
 Package Store replacements are copied into read-only immutable generations and fully validated before an atomic cache-key symlink switch. Skill directories in every view resolve through that stable cache pointer, so repair readers see either the old or new Package and never a missing entry. Every Environment update builds a complete `.view.gen-<id>` directory and atomically replaces the stable `view` symlink, so direct Agent readers never observe mixed Skill, MCP, and Hook generations. Recipe and lock metadata commit under the Environment lock before the view pointer changes and roll back if publication fails.
 
-Each Environment has stable Codex and Claude homes that are never generation-swapped. Harness-owned and Environment-specific configuration links through the Environment `view`: Codex `auth.json`, `config.toml`, `hooks.json`, and `skills`; Claude `.credentials.json`, `settings.json`, and `skills`. Credentials and provider settings are seeded from the original Agent home only when an Environment is first built, then inherited from the current generation so user edits through `$CODEX_HOME` or `$CLAUDE_CONFIG_DIR` survive later publication. Harness strips and regenerates its marked Codex MCP blocks and exact Claude Hook entries while preserving user-owned provider settings. Claude `.claude.json` remains in the stable home, where Harness transactionally updates only Package-managed `mcpServers`. Codex `skills/.system` points to a stable Environment-specific directory outside the generation.
+Each Environment has stable target Agent homes that are never generation-swapped. Harness-owned and Environment-specific configuration links through the Environment `view`: Codex `auth.json`, `config.toml`, `hooks.json`, and `skills`; Claude `.credentials.json`, `settings.json`, and `skills`; Pi only `skills`. Codex and Claude credentials and provider settings are seeded from the original Agent home only when an Environment is first built, then inherited from the current generation so user edits through `$CODEX_HOME` or `$CLAUDE_CONFIG_DIR` survive later publication. Pi settings, credentials, model catalogs, Pi Packages, and sessions are ordinary Pi-owned files in the stable `$PI_CODING_AGENT_DIR`; a new Environment does not copy the original `~/.pi/agent` state. Harness strips and regenerates its marked Codex MCP blocks and exact Claude Hook entries while preserving user-owned provider settings. Claude `.claude.json` remains in the stable home, where Harness transactionally updates only Package-managed `mcpServers`. Codex `skills/.system` points to a stable Environment-specific directory outside the generation. Pi has no Harness MCP or Hook adapter, so Package validation rejects those resources when they target Pi instead of silently omitting them.
 
 Every other path is opaque Agent-owned state. Environment initialization and view publication do not enumerate, inspect, copy, merge, adopt, or relink unknown files, including SQLite main, WAL, and SHM files. `harness migrate sessions` is a separate explicit operation over documented session and history paths: it builds and verifies a link-free temporary snapshot, preflights target conflicts, structurally merges JSONL records, then publishes ordinary files into the selected stable home under the Environment lock. Structured files are atomically replaced and restored on ordinary publication failure. Retired generations contain only managed resources and remain available to processes that still have those files open.
 
-The shell hook saves the original Agent configuration roots and wraps both installed CLI names, `harness` and `harness-conda`. It validates that the selected Environment and complete view exist before changing the parent shell, falls back to `base` for a stale inherited selection, and parses only a real top-level `activate` or `deactivate` command. Help requests and unrelated arguments never change Environment state. For unsupported targets it restores the original Agent configuration root. It never proxies `codex` or `claude`.
+The shell hook saves the original Agent configuration roots and wraps both installed CLI names, `harness` and `harness-conda`. It validates that the selected Environment and complete view exist before changing the parent shell, falls back to `base` for a stale inherited selection, and parses only a real top-level `activate` or `deactivate` command. Help requests and unrelated arguments never change Environment state. For unsupported targets it restores the original Agent configuration root. It never proxies `codex`, `claude`, or `pi`.
 
-The Memory manager is available through the view like any other Skill. Harness initializes marker-delimited startup instructions in both project `AGENTS.md` and `CLAUDE.md`. These discovery pointers are stable project configuration: Environment activation may add a missing pointer but never removes one based on shell-local target selection. Existing instruction symlinks and file modes are preserved. At Agent startup, the Memory Skill calls `harness info --json`, reads project and local Memory, maps selected Skills to their Packages, and reads Package-specific Memory before use.
+The Memory manager is available through the view like any other Skill. Harness initializes marker-delimited startup instructions in project `AGENTS.md` for Codex and Pi and `CLAUDE.md` for Claude. These discovery pointers are stable project configuration: Environment activation may add a missing pointer but never removes one based on shell-local target selection. Existing instruction symlinks and file modes are preserved. At Agent startup, the Memory Skill calls `harness info --json`, reads project and local Memory, maps selected Skills to their Packages, and reads Package-specific Memory before use.
 
 Harness does not proxy Agent commands and does not maintain session-to-Environment metadata. Resuming a session under a different Environment is user-managed.
 

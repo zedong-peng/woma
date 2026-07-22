@@ -6,7 +6,7 @@ metadata:
   description: Load and maintain durable project-specific knowledge for every Skill in an active Harness Environment.
   tags: [memory, project-context]
 spec:
-  platforms: [codex, claude]
+  platforms: [codex, claude, pi]
   entrypoints:
     - name: manage-project-memory
       skill: harness-project-memory

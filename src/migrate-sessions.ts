@@ -6,18 +6,18 @@ import { environmentSnapshot } from "./environment.js";
 import { withEnvironmentLock } from "./environment-lock.js";
 import { writeBufferPreservingFile } from "./fs.js";
 import { environmentAgentHomePath, sourceAgentHome } from "./view.js";
-import type { Platform } from "./types.js";
+import type { CodexClaudePlatform } from "./types.js";
 
-const SESSION_ENTRIES: Record<Platform, string[]> = {
+const SESSION_ENTRIES: Record<CodexClaudePlatform, string[]> = {
   codex: ["archived_sessions", "history.jsonl", "session_index.jsonl", "sessions", "shell_snapshots"],
   claude: ["file-history", "history.jsonl", "plans", "projects", "session-env", "shell-snapshots", "tasks", "todos"],
 };
 const STRUCTURED_JSONL_ENTRIES = new Set(["history.jsonl", "session_index.jsonl"]);
 
-export type SessionMigrationSource = Platform | "both";
+export type SessionMigrationSource = CodexClaudePlatform | "both";
 
 interface SessionEntry {
-  platform: Platform;
+  platform: CodexClaudePlatform;
   name: string;
   source: string;
   fingerprint: string;
@@ -28,7 +28,7 @@ interface SessionEntry {
 export interface SessionMigrationResult {
   environment: string;
   from: SessionMigrationSource;
-  entries: { platform: Platform; name: string; files: number; bytes: number; recordsAdded?: number; recordsDeduplicated?: number }[];
+  entries: { platform: CodexClaudePlatform; name: string; files: number; bytes: number; recordsAdded?: number; recordsDeduplicated?: number }[];
   dryRun: boolean;
   unchanged: boolean;
 }
@@ -75,7 +75,7 @@ function canonical(value: unknown): string {
 function parseJsonl(
   input: Buffer | null,
   filePath: string,
-  platform: Platform,
+  platform: CodexClaudePlatform,
   name: string,
   orderOffset = 0,
 ): JsonlRecord[] {
@@ -174,7 +174,7 @@ async function summarizeTree(root: string): Promise<TreeSummary> {
 }
 
 async function discoverEntries(source: SessionMigrationSource): Promise<SessionEntry[]> {
-  const platforms: Platform[] = source === "both" ? ["codex", "claude"] : [source];
+  const platforms: CodexClaudePlatform[] = source === "both" ? ["codex", "claude"] : [source];
   const entries: SessionEntry[] = [];
   for (const platform of platforms) {
     const home = sourceAgentHome(platform);
@@ -427,7 +427,7 @@ export async function migrateExistingSessions(options: {
   dryRun?: boolean;
 }): Promise<SessionMigrationResult> {
   const snapshot = await environmentSnapshot(options.projectRoot, options.environment);
-  const platforms: Platform[] = options.from === "both" ? ["codex", "claude"] : [options.from];
+  const platforms: CodexClaudePlatform[] = options.from === "both" ? ["codex", "claude"] : [options.from];
   for (const platform of platforms) {
     if (!snapshot.environment.spec.targets.includes(platform)) {
       throw new Error(`Environment ${options.environment} does not support ${platform}; choose a compatible --from value`);
