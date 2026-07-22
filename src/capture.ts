@@ -4,7 +4,7 @@ import { parse as parseToml } from "smol-toml";
 import { stringify as stringifyYaml } from "yaml";
 import { pathExists, writeTextAtomic } from "./fs.js";
 import { validatePackage } from "./package.js";
-import type { HarnessManifest, HookSpec, McpServer, Platform, SkillSpec } from "./types.js";
+import type { CodexClaudePlatform, HarnessManifest, HookSpec, McpServer, SkillSpec } from "./types.js";
 
 export interface CaptureResult {
   root: string;
@@ -41,7 +41,7 @@ function envReference(value: unknown, label: string): string {
   return match[1];
 }
 
-async function captureSkills(sourceRoot: string, outputRoot: string, platform: Platform): Promise<SkillSpec[]> {
+async function captureSkills(sourceRoot: string, outputRoot: string, platform: CodexClaudePlatform): Promise<SkillSpec[]> {
   const skillRoot = path.join(sourceRoot, platform === "codex" ? ".agents/skills" : ".claude/skills");
   if (!(await pathExists(skillRoot))) return [];
   const skills: SkillSpec[] = [];
@@ -124,7 +124,7 @@ function parseClaudeServer(name: string, raw: unknown): McpServer {
   };
 }
 
-async function captureCommandHooks(settingsPath: string, warnings: string[], platform: Platform): Promise<HookSpec[]> {
+async function captureCommandHooks(settingsPath: string, warnings: string[], platform: CodexClaudePlatform): Promise<HookSpec[]> {
   const capturedHooks: HookSpec[] = [];
   if (!(await pathExists(settingsPath))) return capturedHooks;
   const settings = object(JSON.parse(await readFile(settingsPath, "utf8")) as unknown, path.basename(settingsPath));
@@ -166,7 +166,7 @@ async function captureClaudeConfig(sourceRoot: string, warnings: string[]): Prom
 export async function captureHarness(options: {
   sourceRoot: string;
   outputRoot: string;
-  platform: Platform;
+  platform: CodexClaudePlatform;
   name?: string;
 }): Promise<CaptureResult> {
   const sourceRoot = path.resolve(options.sourceRoot);

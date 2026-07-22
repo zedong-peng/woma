@@ -9,7 +9,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { assertInside, harnessHome, hashDirectory, pathExists } from "./fs.js";
 import { withPackageLock } from "./environment-lock.js";
 import { loadManifest } from "./schema.js";
-import type { HarnessManifest, InstalledPackage, LockedPackage, PackageDependency } from "./types.js";
+import type { HarnessManifest, InstalledPackage, LockedPackage, PackageDependency, Platform } from "./types.js";
 
 interface MaterializedSource {
   root: string;
@@ -257,7 +257,7 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
         tags: [],
       },
       spec: {
-        platforms: ["codex", "claude"],
+        platforms: ["codex", "claude", "pi"],
         requirements: { env: [], commands: [] },
         dependencies: [],
         entrypoints: [],
@@ -291,7 +291,7 @@ async function materializePackageSource(source: string, cwd: string): Promise<Ma
   }
 }
 
-function selectedPlatforms(manifest: HarnessManifest, itemPlatforms?: ("codex" | "claude")[]): Set<string> {
+function selectedPlatforms(manifest: HarnessManifest, itemPlatforms?: Platform[]): Set<Platform> {
   return new Set(itemPlatforms ?? manifest.spec.platforms);
 }
 
@@ -361,16 +361,24 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
         throw new Error(`MCP server ${server.name} targets ${platform}, which is not listed in spec.platforms`);
       }
     }
-    if ((server.transport === "sse" || server.transport === "ws") && selectedPlatforms(manifest, server.platforms).has("codex")) {
+    const platforms = selectedPlatforms(manifest, server.platforms);
+    if (platforms.has("pi")) {
+      throw new Error(`MCP server ${server.name} targets pi, but the Pi adapter currently supports Skills only`);
+    }
+    if ((server.transport === "sse" || server.transport === "ws") && platforms.has("codex")) {
       throw new Error(`MCP transport ${server.transport} for ${server.name} is Claude-only; set platforms: [claude]`);
     }
   }
 
   for (const hook of manifest.spec.hooks) {
-    for (const platform of hook.platforms ?? manifest.spec.platforms) {
+    const platforms = selectedPlatforms(manifest, hook.platforms);
+    for (const platform of platforms) {
       if (!manifest.spec.platforms.includes(platform)) {
         throw new Error(`Hook ${hook.event} targets ${platform}, which is not listed in spec.platforms`);
       }
+    }
+    if (platforms.has("pi")) {
+      throw new Error(`Hook ${hook.event} targets pi, but the Pi adapter currently supports Skills only`);
     }
   }
 }

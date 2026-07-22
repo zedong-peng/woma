@@ -6,7 +6,7 @@ metadata:
   description: Turn a research idea into a controlled, executable experiment specification.
   tags: [research, experiment]
 spec:
-  platforms: [codex, claude]
+  platforms: [codex, claude, pi]
   entrypoints:
     - name: design
       skill: exp-design

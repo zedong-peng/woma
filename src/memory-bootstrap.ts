@@ -32,7 +32,7 @@ At the beginning of the session, use the installed \`harness-project-memory\` Sk
 ${markerEnd}`;
 }
 
-function instructionPath(projectRoot: string, platform: Platform): string {
+function instructionPath(projectRoot: string, platform: "codex" | "claude"): string {
   return path.join(projectRoot, platform === "codex" ? "AGENTS.md" : "CLAUDE.md");
 }
 
@@ -100,23 +100,27 @@ export async function prepareMemoryBootstrapTransition(
 ): Promise<PreparedMemoryBootstrapTransition> {
   const project = path.resolve(projectRoot);
   const files: PreparedFile[] = [];
-  for (const platform of ["codex", "claude"] as const) {
-    const filePath = instructionPath(project, platform);
+  const instructionTargets: { filePlatform: "codex" | "claude"; targets: Platform[] }[] = [
+    { filePlatform: "codex", targets: ["codex", "pi"] },
+    { filePlatform: "claude", targets: ["claude"] },
+  ];
+  for (const { filePlatform, targets } of instructionTargets) {
+    const filePath = instructionPath(project, filePlatform);
     const original = await readOptional(filePath);
-    const previousIncluded = previous?.hasMemoryPackage === true && previous.targets.includes(platform);
-    const desiredIncluded = desired?.hasMemoryPackage === true && desired.targets.includes(platform);
+    const previousIncluded = previous?.hasMemoryPackage === true && targets.some((target) => previous.targets.includes(target));
+    const desiredIncluded = desired?.hasMemoryPackage === true && targets.some((target) => desired.targets.includes(target));
     files.push({
       path: filePath,
       display: path.basename(filePath),
       original,
       desired: reconcileBlock(
         original,
-        platform,
+        filePlatform,
         desiredIncluded,
         options.requirePrevious === true && previousIncluded,
         path.basename(filePath),
       ),
-      detail: `${platform} Project Memory discovery`,
+      detail: `${targets.join("/")} Project Memory discovery`,
     });
   }
 

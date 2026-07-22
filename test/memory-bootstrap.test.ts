@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { prepareMemoryBootstrapTransition, type MemoryBootstrapEnvironment } from "../src/memory-bootstrap.js";
+import type { Platform } from "../src/types.js";
 import { removeTestTree } from "./helpers.js";
 
-function environment(targets: ("codex" | "claude")[], hasMemoryPackage = true): MemoryBootstrapEnvironment {
+function environment(targets: Platform[], hasMemoryPackage = true): MemoryBootstrapEnvironment {
   return { targets, hasMemoryPackage };
 }
 
@@ -26,6 +27,17 @@ test("Memory bootstrap points to the normally activated Skill and preserves user
 
     await rollback();
     assert.equal(await readFile(agentsPath, "utf8"), original);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("Pi discovers Project Memory through AGENTS.md", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-memory-bootstrap-pi-"));
+  try {
+    await (await prepareMemoryBootstrapTransition(root, undefined, environment(["pi"]))).apply();
+    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
+    await assert.rejects(readFile(path.join(root, "CLAUDE.md"), "utf8"), /ENOENT/);
   } finally {
     await removeTestTree(root);
   }

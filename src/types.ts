@@ -1,4 +1,5 @@
-export type Platform = "codex" | "claude";
+export type Platform = "codex" | "claude" | "pi";
+export type CodexClaudePlatform = Exclude<Platform, "pi">;
 
 export interface EnvironmentRequirement {
   name: string;

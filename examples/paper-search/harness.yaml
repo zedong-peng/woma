@@ -6,7 +6,7 @@ metadata:
   description: Find and organize prior work into a traceable evidence map.
   tags: [research, literature]
 spec:
-  platforms: [codex, claude]
+  platforms: [codex, claude, pi]
   entrypoints:
     - name: search
       skill: paper-search

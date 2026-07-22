@@ -8,18 +8,18 @@ import { harnessHome, hashDirectory, pathExists, writeTextAtomic } from "./fs.js
 import { loadCachedPackage, validatePackage } from "./package.js";
 import { loadManifest } from "./schema.js";
 import { sourceAgentHome } from "./view.js";
-import type { HarnessManifest, Platform, SkillSpec } from "./types.js";
+import type { CodexClaudePlatform, HarnessManifest, SkillSpec } from "./types.js";
 
 const EXCLUDED_NAMES = new Set([".git", ".harness", "node_modules", ".DS_Store"]);
 const FOUNDATIONAL_SKILLS = new Set(["harness-project-memory", "harness-package-builder"]);
 
-export type SkillMigrationSource = Platform | "both";
+export type SkillMigrationSource = CodexClaudePlatform | "both";
 
 interface ExistingSkill {
   name: string;
   root: string;
   integrity: string;
-  sources: Platform[];
+  sources: CodexClaudePlatform[];
   normalizeFrontmatter: boolean;
 }
 
@@ -29,7 +29,7 @@ export interface SkillMigrationResult {
     name: string;
     version: string;
     source: string;
-    sources: Platform[];
+    sources: CodexClaudePlatform[];
     unchanged: boolean;
   }[];
   normalized: string[];
@@ -76,7 +76,7 @@ async function normalizeLegacyFrontmatter(filePath: string): Promise<void> {
   await writeTextAtomic(filePath, input.replace(match[1], normalized));
 }
 
-async function discoverSkills(platform: Platform): Promise<ExistingSkill[]> {
+async function discoverSkills(platform: CodexClaudePlatform): Promise<ExistingSkill[]> {
   const skillsRoot = path.join(sourceAgentHome(platform), "skills");
   if (!(await pathExists(skillsRoot))) return [];
   const skills: ExistingSkill[] = [];
@@ -104,7 +104,7 @@ async function discoverSkills(platform: Platform): Promise<ExistingSkill[]> {
 }
 
 async function existingSkills(source: SkillMigrationSource): Promise<ExistingSkill[]> {
-  const platforms: Platform[] = source === "both" ? ["codex", "claude"] : [source];
+  const platforms: CodexClaudePlatform[] = source === "both" ? ["codex", "claude"] : [source];
   const byName = new Map<string, ExistingSkill>();
   for (const platform of platforms) {
     for (const skill of await discoverSkills(platform)) {
@@ -148,7 +148,7 @@ function manifest(skill: ExistingSkill, version: string): HarnessManifest {
       tags: ["captured", "migrated"],
     },
     spec: {
-      platforms: ["codex", "claude"],
+      platforms: ["codex", "claude", "pi"],
       dependencies: [],
       entrypoints: [],
       requirements: { env: [], commands: [] },

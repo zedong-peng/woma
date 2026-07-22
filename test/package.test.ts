@@ -384,6 +384,51 @@ spec:
   }
 });
 
+test("Package validation rejects Pi MCP servers and hooks until adapters exist", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-pi-resources-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const mcpRoot = path.join(root, "pi-mcp");
+    await write(
+      path.join(mcpRoot, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: pi-mcp
+  version: 1.0.0
+  description: Unsupported Pi MCP fixture.
+spec:
+  platforms: [pi]
+  mcpServers:
+    - name: server
+      transport: stdio
+      command: node
+`,
+    );
+    await assert.rejects(installPackageSource(mcpRoot), /Pi adapter currently supports Skills only/);
+
+    const hookRoot = path.join(root, "pi-hook");
+    await write(
+      path.join(hookRoot, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: pi-hook
+  version: 1.0.0
+  description: Unsupported Pi Hook fixture.
+spec:
+  platforms: [pi]
+  hooks:
+    - event: tool_call
+      command: "true"
+`,
+    );
+    await assert.rejects(installPackageSource(hookRoot), /Pi adapter currently supports Skills only/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("cache loading rejects a lock whose package identity was changed", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
   process.env.HARNESS_HOME = path.join(root, "home");

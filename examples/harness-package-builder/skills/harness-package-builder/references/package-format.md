@@ -38,7 +38,7 @@ metadata:
   description: Review repositories with optional GitHub tools and validation hooks.
   tags: [repository, review]
 spec:
-  platforms: [codex, claude]
+  platforms: [codex, claude, pi]
   dependencies: []
   entrypoints:
     - name: review
@@ -59,6 +59,7 @@ spec:
       command: npx
       args: [-y, "@modelcontextprotocol/server-github"]
       env: [GITHUB_TOKEN]
+      platforms: [codex, claude]
   hooks:
     - event: PostToolUse
       matcher: Edit|Write
@@ -71,7 +72,7 @@ Required invariants:
 
 - Use lowercase Package, Skill, entrypoint, MCP, and dependency names containing only letters, digits, `.`, `_`, or `-`.
 - Use valid SemVer for `metadata.version` and valid SemVer ranges for dependency versions.
-- List each Agent target once. Resource-level platforms must be a subset of Package platforms.
+- List each Agent target once. Resource-level platforms must be a subset of Package platforms. Pi currently supports Skills only, so every MCP server and Hook in a Pi-capable Package must explicitly exclude `pi`.
 - Ensure every entrypoint references a Skill declared in `spec.skills`.
 - Ensure every Skill path is inside the Package and contains a `SKILL.md` whose frontmatter name matches the manifest Skill name and whose description is non-empty.
 - Declare executable names under `requirements.commands` and environment variable names under `requirements.env`.

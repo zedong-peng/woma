@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added opt-in Pi Agent targets with isolated `PI_CODING_AGENT_DIR` homes, atomic Skill views, shell activation, and explicit rejection of unsupported Pi MCP/Hook resources.
 - Changed explicit Skill migration to create and atomically install one independently versioned Package per Skill.
 - Added visible Skill names, providing Package versions, and target platforms to `harness env show`.
 - Added a current-user Codex/Claude process check and mandatory interactive confirmation before migration while an Agent is running.

@@ -37,7 +37,7 @@ metadata:
   description: Describe the repeatable outcome this harness delivers.
   tags: []
 spec:
-  platforms: [codex, claude]
+  platforms: [codex, claude, pi]
   dependencies: []
   entrypoints:
     - name: ${name}
