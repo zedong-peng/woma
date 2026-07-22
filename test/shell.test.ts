@@ -69,6 +69,36 @@ test("zsh hook installs an idempotent precmd prompt prefix", () => {
   assert.match(hook, /PI_CODING_AGENT_DIR=.*environments.*home\/pi/);
 });
 
+test("zsh hook updates the parent shell after activate", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-zsh-activation-"));
+  try {
+    const hookPath = path.join(root, "hook.zsh");
+    const executable = path.join(root, "bin", "harness");
+    await mkdir(path.dirname(executable), { recursive: true });
+    await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(executable, 0o755);
+    const harnessHome = path.join(root, "home");
+    await fakeEnvironment(harnessHome, "research", ["codex"]);
+    await fakeEnvironment(harnessHome, "base", ["codex", "claude"]);
+    await writeFile(hookPath, renderShellHook("zsh"), "utf8");
+    const script = [
+      'source "$1"',
+      "harness activate research",
+      '__harness_prompt_update',
+      'printf \'%s|%s|%s\' "$HARNESS_PROMPT_PREFIX" "$HARNESS_ENV" "$CODEX_HOME"',
+    ].join("\n");
+    const { stdout } = await run("zsh", ["-f", "-c", script, "zsh", hookPath], {
+      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome },
+    });
+    assert.equal(
+      stdout,
+      `(harness:research) |research|${path.join(harnessHome, "environments", "research", "home", "codex")}`,
+    );
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("bash hook updates the parent shell after activate and deactivate", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-activation-"));
   try {
