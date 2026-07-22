@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +11,14 @@ import type { Platform } from "../src/types.js";
 import { removeTestTree } from "./helpers.js";
 
 const run = promisify(execFile);
+
+async function findExecutable(name: string): Promise<string | undefined> {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    const candidate = path.join(directory, name);
+    if (await access(candidate, constants.X_OK).then(() => true, () => false)) return candidate;
+  }
+  return undefined;
+}
 
 async function fakeEnvironment(home: string, name: string, targets: Platform[]): Promise<void> {
   const root = path.join(home, "environments", name);
@@ -69,7 +78,9 @@ test("zsh hook installs an idempotent precmd prompt prefix", () => {
   assert.match(hook, /PI_CODING_AGENT_DIR=.*environments.*home\/pi/);
 });
 
-test("zsh hook updates the parent shell after activate", async () => {
+test("zsh hook updates the parent shell after activate", async (context) => {
+  const zsh = await findExecutable("zsh");
+  if (!zsh) return context.skip("zsh is not installed");
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-zsh-activation-"));
   try {
     const hookPath = path.join(root, "hook.zsh");
@@ -87,7 +98,7 @@ test("zsh hook updates the parent shell after activate", async () => {
       '__harness_prompt_update',
       'printf \'%s|%s|%s\' "$HARNESS_PROMPT_PREFIX" "$HARNESS_ENV" "$CODEX_HOME"',
     ].join("\n");
-    const { stdout } = await run("zsh", ["-f", "-c", script, "zsh", hookPath], {
+    const { stdout } = await run(zsh, ["-f", "-c", script, "zsh", hookPath], {
       env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome },
     });
     assert.equal(
