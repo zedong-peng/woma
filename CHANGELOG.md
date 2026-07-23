@@ -4,7 +4,7 @@
 
 - Added opt-in Pi Agent targets with isolated `PI_CODING_AGENT_DIR` homes, atomic Skill views, shell activation, and explicit rejection of unsupported Pi MCP/Hook resources.
 - Changed explicit Skill migration to create and atomically install one independently versioned Package per Skill.
-- Added visible Skill names, providing Package versions, and target platforms to `harness env show`.
+- Added `harness list` to show an Environment's locked Packages and visible Skills with providing Package versions and target platforms.
 - Added a current-user Codex/Claude process check and mandatory interactive confirmation before migration while an Agent is running.
 - Added explicit `harness migrate sessions` snapshots from original Agent homes into Environment-owned ordinary files, including structured JSONL history merging, without implicit initialization-time migration or links back to the source.
 - Replaced shared runtime adoption with stable per-Environment Agent homes and inherited Environment-specific credentials/provider settings, so unknown state and SQLite databases are never copied across view generations.

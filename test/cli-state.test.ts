@@ -124,12 +124,34 @@ test("CLI exports and imports a portable Environment bundle", { concurrency: fal
   }
 });
 
+test("CLI lists packages and visible Skills in a selected Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-list-"));
+  const home = path.join(root, "home");
+  try {
+    const pkg = await packageFixture(root, "listed-skill");
+    assert.equal((await runCli(["env", "create", "listed", "--target", "codex"], root, home)).code, 0);
+    assert.equal((await runCli(["install", "-n", "listed", pkg], root, home)).code, 0);
+
+    const selected = await runCli(["list", "-n", "listed"], root, home);
+    assert.equal(selected.code, 0, selected.stderr);
+    assert.match(selected.stdout, /Environment: listed/);
+    assert.match(selected.stdout, /packages\s+.*listed-skill@1\.0\.0/);
+    assert.match(selected.stdout, /listed-skill\s+listed-skill@1\.0\.0\s+codex/);
+
+    const current = await runCli(["list"], root, home);
+    assert.equal(current.code, 0, current.stderr);
+    assert.match(current.stdout, /Environment: base/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("CLI exposes environment commands and removes workflow phase commands", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-help-"));
   try {
     const result = await runCli(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
-    for (const command of ["env", "migrate", "install", "activate", "deactivate", "info", "sync", "doctor", "shell"]) {
+    for (const command of ["env", "migrate", "install", "list", "activate", "deactivate", "info", "sync", "doctor", "shell"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
     }
     for (const command of ["bind", "current", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {

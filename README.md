@@ -84,7 +84,7 @@ Create, inspect, activate, and remove an Environment:
 ```bash
 harness env create performance --target codex
 harness install --name performance builtin:performance-engineering
-harness env show performance
+harness list --name performance
 harness activate performance
 codex
 
@@ -126,7 +126,7 @@ Use `--name <new-environment>` during import to choose a different name.
 ```bash
 harness info
 harness env list
-harness env show base
+harness list --name base
 harness doctor --name base
 harness sync --name base
 harness inspect builtin:auto-research
