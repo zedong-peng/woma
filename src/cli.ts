@@ -58,6 +58,11 @@ function targets(input: string): Platform[] {
   return result;
 }
 
+function visibleTargets(environmentTargets: Platform[], packagePlatforms: Platform[], resourcePlatforms?: Platform[]): Platform[] {
+  const supported = new Set(resourcePlatforms ?? packagePlatforms);
+  return environmentTargets.filter((target) => supported.has(target));
+}
+
 function printActions(actions: Action[]): void {
   if (actions.length === 0) {
     console.log("No file changes.");
@@ -180,7 +185,7 @@ envCommand
 
 program
   .command("list")
-  .description("list packages and visible Skills in an environment")
+  .description("list packages and Package-managed resources in an environment")
   .option("-n, --name <environment>", "environment to list; defaults to the active environment, then base")
   .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
@@ -194,24 +199,62 @@ program
         return { status: "error" as const, locked, error: error as Error };
       }
     }));
+    const available = packages.filter((loaded) => loaded.status === "ok");
+    const unavailable = packages.filter((loaded) => loaded.status === "error");
     console.log(`Environment: ${name}${active === name ? " (active)" : ""}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
     console.log(`  packages  ${lockedPackages.map((pkg) => `${pkg.name}@${pkg.version}`).join(", ") || "none"}`);
     console.log("  skills");
-    let visibleSkills = 0;
-    for (const loaded of packages) {
-      if (loaded.status === "error") {
-        console.log(`    [unavailable]  ${loaded.locked.name}@${loaded.locked.version}  ${loaded.error.message}`);
-        continue;
-      }
-      const platforms = environment.spec.targets.filter((target) => loaded.pkg.manifest.spec.platforms.includes(target));
+    let resourceCount = 0;
+    for (const loaded of available) {
+      const platforms = visibleTargets(
+        environment.spec.targets,
+        loaded.pkg.manifest.spec.platforms,
+      );
       for (const skill of loaded.pkg.manifest.spec.skills) {
         console.log(`    ${skill.name}  ${loaded.locked.name}@${loaded.locked.version}  ${platforms.join(", ") || "none"}`);
-        visibleSkills += 1;
+        resourceCount += 1;
       }
     }
-    if (visibleSkills === 0 && packages.every((loaded) => loaded.status === "ok")) console.log("    none");
+    if (resourceCount === 0) console.log("    none");
+
+    console.log("  mcp servers");
+    resourceCount = 0;
+    for (const loaded of available) {
+      for (const server of loaded.pkg.manifest.spec.mcpServers) {
+        const platforms = visibleTargets(
+          environment.spec.targets,
+          loaded.pkg.manifest.spec.platforms,
+          server.platforms,
+        );
+        console.log(`    ${server.name}  ${server.transport}  ${loaded.locked.name}@${loaded.locked.version}  ${platforms.join(", ") || "none"}`);
+        resourceCount += 1;
+      }
+    }
+    if (resourceCount === 0) console.log("    none");
+
+    console.log("  hooks");
+    resourceCount = 0;
+    for (const loaded of available) {
+      for (const hook of loaded.pkg.manifest.spec.hooks) {
+        const platforms = visibleTargets(
+          environment.spec.targets,
+          loaded.pkg.manifest.spec.platforms,
+          hook.platforms,
+        );
+        console.log(`    ${hook.event}  ${hook.matcher ?? "*"}  ${loaded.locked.name}@${loaded.locked.version}  ${platforms.join(", ") || "none"}`);
+        resourceCount += 1;
+      }
+    }
+    if (resourceCount === 0) console.log("    none");
+
+    if (unavailable.length > 0) {
+      console.log("  unavailable packages");
+      for (const loaded of unavailable) {
+        console.log(`    ${loaded.locked.name}@${loaded.locked.version}  ${loaded.error.message}`);
+      }
+    }
   });
 
 envCommand

@@ -116,7 +116,9 @@ harness doctor [-n <environment>]
 harness inspect <source-or-package> [-n <environment>]
 ```
 
-`env list` marks the Environment selected in the current shell. `list` displays the selected Environment's roots, targets, locked Package closure, and every visible Skill with its providing Package and target platforms. Pass `--name` to inspect another Environment; otherwise the command uses the active Environment and falls back to `base`. If a locked Package cache is unavailable, the Package remains in the summary and its Skill details are marked unavailable; use `doctor` or `sync` to repair it.
+`env list` marks the Environment selected in the current shell. `list` displays the selected Environment's roots, targets, locked Package closure, and every Package-managed Skill, MCP server, and hook. Skill rows show the resource name, providing Package, and effective target platforms; MCP server rows additionally show the transport, and hook rows show the event and matcher (`*` when omitted). Effective targets preserve Environment target order and intersect those targets with the resource's explicit platforms, or with the Package platforms when the resource has no override. A declared resource with no effective target is still shown with `none`, and an empty resource section also shows `none`.
+
+Pass `--name` to inspect another Environment; otherwise the command uses the active Environment and falls back to `base`. If a locked Package cache is unavailable, the Package remains in the summary and appears once under `unavailable packages`; use `doctor` or `sync` to repair it.
 
 `info --json` is the stable machine-readable context interface used by `harness-project-memory`. It returns the configured project directory, selected Environment, Memory paths, Packages, Skills, and entrypoints. It replaces the redundant user-facing `current` command.
 
