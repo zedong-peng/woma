@@ -178,11 +178,13 @@ envCommand
     for (const name of names) console.log(`${active === name ? "*" : " "} ${name}`);
   });
 
-envCommand
-  .command("show <name>")
-  .description("show an environment recipe, packages, and visible Skills")
-  .action(async (name: string, _options: unknown, command: Command) => {
+program
+  .command("list")
+  .description("list packages and visible Skills in an environment")
+  .option("-n, --name <environment>", "environment to list; defaults to the active environment, then base")
+  .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
+    const name = selectedEnvironment(options.name);
     const [{ environment, lock }, active] = await Promise.all([environmentSnapshot(project, name), selectedEnvironment()]);
     const lockedPackages = Object.values(lock.packages);
     const packages = await Promise.all(lockedPackages.map(async (locked) => {

@@ -7,7 +7,6 @@ Before `migrate skills` or `migrate sessions`, Harness checks the current user's
 ```bash
 harness env list
 harness env create <name> [--target codex|claude|pi|both|all|<comma-separated-list>]
-harness env show <name>
 harness env remove <name>
 ```
 
@@ -110,14 +109,14 @@ pi
 
 ```bash
 harness env list
-harness env show <name>
+harness list [-n <environment>]
 harness info [--json]
 harness sync [-n <environment>]
 harness doctor [-n <environment>]
 harness inspect <source-or-package> [-n <environment>]
 ```
 
-`env list` marks the Environment selected in the current shell. `env show` displays one Environment's roots, targets, locked Package closure, and every visible Skill with its providing Package and target platforms. If a locked Package cache is unavailable, the Package remains in the summary and its Skill details are marked unavailable; use `doctor` or `sync` to repair it.
+`env list` marks the Environment selected in the current shell. `list` displays the selected Environment's roots, targets, locked Package closure, and every visible Skill with its providing Package and target platforms. Pass `--name` to inspect another Environment; otherwise the command uses the active Environment and falls back to `base`. If a locked Package cache is unavailable, the Package remains in the summary and its Skill details are marked unavailable; use `doctor` or `sync` to repair it.
 
 `info --json` is the stable machine-readable context interface used by `harness-project-memory`. It returns the configured project directory, selected Environment, Memory paths, Packages, Skills, and entrypoints. It replaces the redundant user-facing `current` command.
 
