@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -56,6 +57,27 @@ async function runCli(args: string[], cwd: string, home: string): Promise<Comman
     process.stdout.write = previous.stdoutWrite;
     process.stderr.write = previous.stderrWrite;
   }
+}
+
+async function runCliProcess(args: string[], cwd: string, home: string): Promise<CommandResult> {
+  const cli = path.resolve("dist/src/cli.js");
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cli, ...args], {
+      cwd,
+      env: { ...process.env, HARNESS_HOME: home },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
 }
 
 async function packageFixture(
@@ -149,7 +171,7 @@ test("CLI lists packages and visible Skills in a selected Environment", { concur
 test("CLI exposes environment commands and removes workflow phase commands", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-help-"));
   try {
-    const result = await runCli(["--help"], root, path.join(root, "home"));
+    const result = await runCliProcess(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
     for (const command of ["env", "migrate", "install", "list", "activate", "deactivate", "info", "sync", "doctor", "shell"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
@@ -157,7 +179,7 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
     for (const command of ["bind", "current", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
       assert.doesNotMatch(result.stdout, new RegExp(`^  ${command}(?: |$)`, "m"));
     }
-    const removed = await runCli(["bind", "test", "npm", "test"], root, path.join(root, "home"));
+    const removed = await runCliProcess(["bind", "test", "npm", "test"], root, path.join(root, "home"));
     assert.notEqual(removed.code, 0);
     assert.match(removed.stderr, /unknown command ['"]bind['"]/);
   } finally {
@@ -270,7 +292,7 @@ test("CLI always includes foundational packages and rejects the removed without-
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-foundations-"));
   const project = path.join(root, "project");
   try {
-    const removedOption = await runCli(
+    const removedOption = await runCliProcess(
       ["--project", project, "env", "create", "minimal", "--target", "codex", "--without-memory"],
       root,
       path.join(root, "home"),
@@ -345,25 +367,28 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     assert.equal(current.code, 0, current.stderr);
     assert.match(current.stdout, /Environment: research/);
     assert.match(current.stdout, /roots\s+harness-project-memory, harness-package-builder, auto-research/);
-    const list = await runCli(["--project", project, "env", "list"], root, home);
+    const environmentList = await runCli(["--project", project, "env", "list"], root, home);
+    assert.equal(environmentList.code, 0, environmentList.stderr);
+    assert.match(environmentList.stdout, /\* research/);
+    const list = await runCli(["--project", project, "list", "--name", "research"], root, home);
     assert.equal(list.code, 0, list.stderr);
-    assert.match(list.stdout, /\* research/);
-    const show = await runCli(["--project", project, "env", "show", "research"], root, home);
-    assert.equal(show.code, 0, show.stderr);
-    assert.match(show.stdout, /paper-search@1\.0\.0/);
-    assert.match(show.stdout, /skills\n/);
-    assert.match(show.stdout, /harness-project-memory\s+harness-project-memory@0\.1\.0\s+codex/);
-    assert.match(show.stdout, /harness-package-builder\s+harness-package-builder@1\.0\.0\s+codex/);
-    assert.match(show.stdout, /paper-search\s+paper-search@1\.0\.0\s+codex/);
-    assert.match(show.stdout, /auto-research\s+auto-research@1\.0\.0\s+codex/);
+    assert.match(list.stdout, /paper-search@1\.0\.0/);
+    assert.match(list.stdout, /skills\n/);
+    assert.match(list.stdout, /harness-project-memory\s+harness-project-memory@0\.1\.0\s+codex/);
+    assert.match(list.stdout, /harness-package-builder\s+harness-package-builder@1\.0\.0\s+codex/);
+    assert.match(list.stdout, /paper-search\s+paper-search@1\.0\.0\s+codex/);
+    assert.match(list.stdout, /auto-research\s+auto-research@1\.0\.0\s+codex/);
+    const activeList = await runCli(["--project", project, "list"], root, home);
+    assert.equal(activeList.code, 0, activeList.stderr);
+    assert.match(activeList.stdout, /Environment: research \(active\)/);
     const paperSearchLock = lock.packages["paper-search"];
     assert.ok(paperSearchLock);
     await rm(path.join(home, "packages", "paper-search", paperSearchLock.cacheKey), { recursive: true, force: true });
-    const showWithMissingCache = await runCli(["--project", project, "env", "show", "research"], root, home);
-    assert.equal(showWithMissingCache.code, 0, showWithMissingCache.stderr);
-    assert.match(showWithMissingCache.stdout, /packages\s+.*paper-search@1\.0\.0/);
-    assert.match(showWithMissingCache.stdout, /\[unavailable\]\s+paper-search@1\.0\.0\s+Package paper-search@1\.0\.0 is not cached/);
-    assert.match(showWithMissingCache.stdout, /auto-research\s+auto-research@1\.0\.0\s+codex/);
+    const listWithMissingCache = await runCli(["--project", project, "list", "--name", "research"], root, home);
+    assert.equal(listWithMissingCache.code, 0, listWithMissingCache.stderr);
+    assert.match(listWithMissingCache.stdout, /packages\s+.*paper-search@1\.0\.0/);
+    assert.match(listWithMissingCache.stdout, /\[unavailable\]\s+paper-search@1\.0\.0\s+Package paper-search@1\.0\.0 is not cached/);
+    assert.match(listWithMissingCache.stdout, /auto-research\s+auto-research@1\.0\.0\s+codex/);
     const repair = await runCli(["--project", project, "sync", "-n", "research"], root, home);
     assert.equal(repair.code, 0, repair.stderr);
     const installWhileActive = await runCli(["--project", project, "install", idea], root, home);
