@@ -19,6 +19,7 @@
     "examples/auto-research",
     "examples/harness-package-builder",
     "scripts/benchmark-switch.mjs",
+    "scripts/postinstall.mjs",
     "CHANGELOG.md",
     "README.md",
     "SECURITY.md"
@@ -29,6 +30,7 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
     "benchmark": "npm run build --silent && node scripts/benchmark-switch.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
     "start": "node dist/src/cli.js"
   },
   "engines": {

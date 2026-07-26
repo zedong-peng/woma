@@ -31,11 +31,13 @@ npm link
 harness --version
 ```
 
-**Add the shell hook** to `~/.bashrc` or `~/.zshrc`:
+After installation, initialize Harness for your current shell:
 
 ```bash
-eval "$(harness shell hook)"
+harness init
 ```
+
+Like `conda init`, this installs a managed block in `~/.bashrc`, `~/.bash_profile`, or `~/.zshrc`. The block sources a static hook from `$HARNESS_HOME/shell`, so ordinary shell startup does not launch Node. It does not create, validate, synchronize, or repair `base`, and it does not acquire Harness locks. Use `harness init --reverse` to remove the integration.
 
 Open a new shell or reload the startup file.
 

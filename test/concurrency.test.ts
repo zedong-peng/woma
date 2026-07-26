@@ -61,15 +61,15 @@ test("an abandoned Environment lock is recovered after its stale threshold", asy
   }
 });
 
-test("concurrent first use initializes base exactly once across processes", async () => {
+test("concurrent explicit first use initializes base exactly once across processes", async () => {
   for (let index = 0; index < 4; index += 1) {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-concurrent-base-"));
     const home = path.join(root, "home");
     const env = { ...process.env, HARNESS_HOME: home };
     try {
       await Promise.all([
-        run(process.execPath, [cli, "shell", "hook", "bash"], { cwd: root, env }),
-        run(process.execPath, [cli, "shell", "hook", "bash"], { cwd: root, env }),
+        run(process.execPath, [cli, "info", "--json"], { cwd: root, env }),
+        run(process.execPath, [cli, "info", "--json"], { cwd: root, env }),
       ]);
       const lock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
         packages: Record<string, unknown>;

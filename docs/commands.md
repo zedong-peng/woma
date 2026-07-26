@@ -133,23 +133,27 @@ Pass `--name` to inspect another Environment; otherwise the command uses the act
 ## Package authoring
 
 ```bash
-harness init [directory] [--name <name>]
 harness inspect <source>
 harness capture <directory> --from codex|claude [--name <name>]
 ```
 
-`init` scaffolds a Package into a new or empty destination and refuses non-empty destinations. `capture` exports supported resources from an existing Agent project configuration without copying literal credential values; its output directory must not already exist. Both commands stage and validate their output before publication and leave no partial Package after a normal failure. The foundational `harness-package-builder` Skill can wrap existing Skills and Agent resources, update a Package, aggregate dependencies, or author an optional coordinating entrypoint Skill before validating the result with `inspect`.
+`capture` exports supported resources from an existing Agent project configuration without copying literal credential values; its output directory must not already exist. The foundational `harness-package-builder` Skill owns Package creation and authoring. It can wrap existing Skills and Agent resources, update a Package, aggregate dependencies, or author an optional coordinating entrypoint Skill before validating the result with `inspect`. Package authoring is intentionally separate from the core Environment-management CLI, following Conda's separation between `conda` and `conda-build`.
 
 ## Shell integration
 
 ```bash
+harness init [bash|zsh] [--dry-run] [--reverse]
 harness shell hook [bash|zsh]
 ```
 
-Add the following line to `~/.bashrc` or `~/.zshrc`:
+Initialize the current login shell after installing or updating Harness:
 
 ```bash
-eval "$(harness shell hook)"
+harness init
 ```
 
-The hook saves the original Codex, Claude, and Pi configuration roots, validates the selected Environment before exporting its view, restores the original root for unsupported targets, and shows `(harness:<environment>)` in the prompt. A stale inherited selection falls back to `base` with a warning. Only a successful top-level `activate` or `deactivate` updates the parent shell; help and unrelated commands are inert. The hook does not proxy `codex`, `claude`, or `pi`.
+Like `conda init`, `harness init` adds a marker-delimited managed block to the selected shell profile. Bash uses `~/.bash_profile` on macOS and `~/.bashrc` elsewhere; Zsh uses `$ZDOTDIR/.zshrc` when `ZDOTDIR` is set and `~/.zshrc` otherwise. The command writes a static, versioned hook to `$HARNESS_HOME/shell`, and the profile only sources that file. Repeated initialization is a no-op, `--dry-run` prints the planned file actions, and `--reverse` removes the managed block and static hook while preserving user-owned profile content, modes, and symbolic links.
+
+`shell hook` remains the read-only interface for printing the deterministic integration text manually. Neither hook generation nor sourcing creates, validates, synchronizes, or repairs an Environment; loads Packages; initializes Memory; mutates the current project; or acquires Harness locks. An explicit command such as `info`, `env list`, `install`, `activate`, `sync`, or `doctor` initializes `base` lazily when needed.
+
+The sourced hook saves the original Codex, Claude, and Pi configuration roots and performs bounded path checks before exporting an existing Environment's view. A stale inherited selection falls back to an existing usable `base` with a warning. If `base` is also unavailable, it restores all original Agent homes and leaves no Harness Environment selected. It restores the original root for each unsupported target and shows `(harness:<environment>)` only when selection succeeds. Only a successful top-level `activate` or `deactivate` updates the parent shell; help and unrelated commands are inert. The hook does not proxy `codex`, `claude`, or `pi`.

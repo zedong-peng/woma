@@ -273,3 +273,39 @@ test("shell hook falls back from a phantom inherited Environment", async () => {
     await removeTestTree(root);
   }
 });
+
+test("shell hook restores original Agent homes when no Environment is available", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-no-environment-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const originalCodex = path.join(root, "original-codex");
+    const originalClaude = path.join(root, "original-claude");
+    const originalPi = path.join(root, "original-pi");
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const script = [
+      'source "$1"',
+      'printf \'%s|%s|%s|%s|%s\' "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$PI_CODING_AGENT_DIR" "${HARNESS_ENV-unset}" "$HARNESS_PROMPT_PREFIX"',
+    ].join("\n");
+    const { stdout, stderr } = await run(
+      "bash",
+      ["--noprofile", "--norc", "-c", script, "bash", hookPath],
+      {
+        env: {
+          ...process.env,
+          HARNESS_HOME: path.join(root, "missing-home"),
+          HARNESS_ENV: "missing",
+          HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
+          HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+          HARNESS_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
+          CODEX_HOME: path.join(root, "stale-codex"),
+          CLAUDE_CONFIG_DIR: path.join(root, "stale-claude"),
+          PI_CODING_AGENT_DIR: path.join(root, "stale-pi"),
+        },
+      },
+    );
+    assert.equal(stdout, `${originalCodex}|${originalClaude}|${originalPi}|unset|`);
+    assert.match(stderr, /Environment missing is unavailable; using original Agent homes/);
+  } finally {
+    await removeTestTree(root);
+  }
+});

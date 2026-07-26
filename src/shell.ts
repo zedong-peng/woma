@@ -14,7 +14,7 @@ const updatePrompt = [
   "__harness_prompt_update() {",
   "  local active",
   '  active="${HARNESS_ENV:-}"',
-  '  [[ -n "$active" ]] || active="base"',
+  '  if [[ -z "$active" ]]; then HARNESS_PROMPT_PREFIX=""; return; fi',
   '  case "$active" in',
   '    *[!a-z0-9._-]*) HARNESS_PROMPT_PREFIX="" ;;',
   '    *) HARNESS_PROMPT_PREFIX="(harness:$active) " ;;',
@@ -58,6 +58,13 @@ function commandWrapper(name: "harness" | "harness-conda"): string[] {
 }
 
 const environmentSelection = [
+  "__harness_restore_original_env() {",
+  "  unset HARNESS_ENV",
+  '  export CODEX_HOME="$HARNESS_ORIGINAL_CODEX_HOME"',
+  '  export CLAUDE_CONFIG_DIR="$HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR"',
+  '  export PI_CODING_AGENT_DIR="$HARNESS_ORIGINAL_PI_CODING_AGENT_DIR"',
+  "}",
+  "",
   "__harness_apply_env() {",
   "  local active home",
   '  active="${1:-base}"',
@@ -88,6 +95,19 @@ const environmentSelection = [
   ...commandWrapper("harness-conda"),
 ];
 
+const initialEnvironmentSelection = [
+  'if ! __harness_apply_env "${HARNESS_ENV:-base}"; then',
+  '  __harness_unavailable_env="${HARNESS_ENV:-base}"',
+  '  if [[ "$__harness_unavailable_env" != "base" ]] && __harness_apply_env base; then',
+  '    printf \'harness: Environment %s is unavailable; using base\\n\' "$__harness_unavailable_env" >&2',
+  "  else",
+  '    printf \'harness: Environment %s is unavailable; using original Agent homes\\n\' "$__harness_unavailable_env" >&2',
+  "    __harness_restore_original_env",
+  "  fi",
+  "  unset __harness_unavailable_env",
+  "fi",
+];
+
 function zshHook(): string {
   return [
     "# harness-conda shell hook (zsh)",
@@ -104,7 +124,7 @@ function zshHook(): string {
     "  autoload -Uz add-zsh-hook",
     "  add-zsh-hook precmd __harness_prompt_update",
     "fi",
-    '__harness_apply_env "${HARNESS_ENV:-base}" || { printf \'harness: Environment %s is unavailable; using base\\n\' "${HARNESS_ENV:-base}" >&2; __harness_apply_env base; }',
+    ...initialEnvironmentSelection,
     "__harness_prompt_update",
     "",
   ].join("\n");
@@ -128,7 +148,7 @@ function bashHook(): string {
     '    *) PROMPT_COMMAND="__harness_prompt_update${PROMPT_COMMAND:+; $PROMPT_COMMAND}" ;;',
     "  esac",
     "fi",
-    '__harness_apply_env "${HARNESS_ENV:-base}" || { printf \'harness: Environment %s is unavailable; using base\\n\' "${HARNESS_ENV:-base}" >&2; __harness_apply_env base; }',
+    ...initialEnvironmentSelection,
     "__harness_prompt_update",
     "",
   ].join("\n");

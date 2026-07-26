@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, copyFile, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -59,7 +59,7 @@ async function runCli(args: string[], cwd: string, home: string): Promise<Comman
   }
 }
 
-async function runCliProcess(args: string[], cwd: string, home: string): Promise<CommandResult> {
+async function runCliProcess(args: string[], cwd: string, home: string, timeoutMs = 10_000): Promise<CommandResult> {
   const cli = path.resolve("dist/src/cli.js");
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cli, ...args], {
@@ -75,8 +75,18 @@ async function runCliProcess(args: string[], cwd: string, home: string): Promise
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
     });
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error(`CLI did not exit within ${timeoutMs}ms: ${args.join(" ")}`));
+    }, timeoutMs);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      resolve({ code: code ?? 1, stdout, stderr });
+    });
   });
 }
 
@@ -181,7 +191,7 @@ test("CLI reports existing Agent state once without contaminating stdout", { con
   }
 });
 
-test("CLI shell hook keeps existing-state guidance off stdout", { concurrency: false }, async () => {
+test("CLI shell hook is read-only and leaves lazy base initialization to an explicit command", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-hook-existing-state-"));
   const home = path.join(root, "home");
   const previous = {
@@ -198,7 +208,8 @@ test("CLI shell hook keeps existing-state guidance off stdout", { concurrency: f
     assert.equal(hook.code, 0, hook.stderr);
     assert.match(hook.stdout, /^# harness-conda shell hook \(bash\)/);
     assert.doesNotMatch(hook.stdout, /isolated base Environment|migrate skills/);
-    assert.match(hook.stderr, /Harness created an isolated base Environment/);
+    assert.equal(hook.stderr, "");
+    await assert.rejects(access(home), { code: "ENOENT" });
 
     const script = path.join(root, "hook.sh");
     await write(script, hook.stdout);
@@ -215,11 +226,136 @@ test("CLI shell hook keeps existing-state guidance off stdout", { concurrency: f
 
     const repeated = await runCli(["shell", "hook", "bash"], root, home);
     assert.equal(repeated.stderr, "");
+    await assert.rejects(access(home), { code: "ENOENT" });
+
+    const info = await runCli(["info", "--json"], root, home);
+    assert.equal(info.code, 0, info.stderr);
+    assert.equal((JSON.parse(info.stdout) as { environment: { name: string } }).environment.name, "base");
+    assert.match(info.stderr, /Harness created an isolated base Environment/);
+    await access(path.join(home, "environments", "base", "view", "view.json"));
   } finally {
     if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
     else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
     if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
     else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
+test("CLI shell hook ignores held locks and unavailable Environment state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-hook-lock-"));
+  const home = path.join(root, "home");
+  const lock = path.join(home, "locks", "environments", "base.lock");
+  try {
+    await write(
+      path.join(lock, "owner.json"),
+      `${JSON.stringify({
+        token: "held-for-shell-test",
+        pid: process.pid,
+        hostname: os.hostname(),
+        acquiredAt: new Date(Date.now() - 120_000).toISOString(),
+      })}\n`,
+    );
+    const ownerBefore = await readFile(path.join(lock, "owner.json"), "utf8");
+
+    const hook = await runCliProcess(["shell", "hook", "zsh"], root, home, 3_000);
+    assert.equal(hook.code, 0, hook.stderr);
+    assert.match(hook.stdout, /^# harness-conda shell hook \(zsh\)/);
+    assert.equal(await readFile(path.join(lock, "owner.json"), "utf8"), ownerBefore);
+    await assert.rejects(access(path.join(home, "environments")), { code: "ENOENT" });
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("CLI shell hook tolerates corrupt, read-only, and unavailable Harness homes", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-hook-unavailable-"));
+  try {
+    const corruptHome = path.join(root, "corrupt-home");
+    const environmentFile = path.join(corruptHome, "environments", "base", "environment.yaml");
+    const viewFile = path.join(corruptHome, "environments", "base", "view", "view.json");
+    await write(environmentFile, "invalid: [\n");
+    await write(viewFile, "not json\n");
+    await chmod(corruptHome, 0o500);
+
+    const corrupt = await runCliProcess([`-p${root}`, "shell", "hook", "bash"], root, corruptHome, 3_000);
+    assert.equal(corrupt.code, 0, corrupt.stderr);
+    assert.match(corrupt.stdout, /^# harness-conda shell hook \(bash\)/);
+    assert.equal(await readFile(environmentFile, "utf8"), "invalid: [\n");
+    assert.equal(await readFile(viewFile, "utf8"), "not json\n");
+    await assert.rejects(access(path.join(root, ".harness")), { code: "ENOENT" });
+
+    const unavailableHome = path.join(root, "not-a-directory");
+    await writeFile(unavailableHome, "occupied\n", "utf8");
+    const unavailable = await runCliProcess(["shell", "hook", "bash"], root, unavailableHome, 3_000);
+    assert.equal(unavailable.code, 0, unavailable.stderr);
+    assert.match(unavailable.stdout, /^# harness-conda shell hook \(bash\)/);
+    assert.equal(await readFile(unavailableHome, "utf8"), "occupied\n");
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("concurrent shell hook starts do not create Harness state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-hook-concurrent-"));
+  const home = path.join(root, "missing-home");
+  try {
+    const hooks = await Promise.all(
+      Array.from({ length: 8 }, () => runCliProcess(["shell", "hook", "bash"], root, home, 5_000)),
+    );
+    for (const hook of hooks) {
+      assert.equal(hook.code, 0, hook.stderr);
+      assert.match(hook.stdout, /^# harness-conda shell hook \(bash\)/);
+    }
+    await assert.rejects(access(home), { code: "ENOENT" });
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("development-linked shell hook does not load the full CLI module", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-hook-linked-"));
+  try {
+    const installation = path.join(root, "installation");
+    const library = path.join(installation, "lib");
+    const executable = path.join(installation, "bin", "harness");
+    await mkdir(path.dirname(executable), { recursive: true });
+    await mkdir(library, { recursive: true });
+    await write(path.join(installation, "package.json"), '{"type":"module"}\n');
+    await copyFile(path.resolve("dist/src/cli.js"), path.join(library, "cli.js"));
+    await copyFile(path.resolve("dist/src/shell.js"), path.join(library, "shell.js"));
+    await chmod(path.join(library, "cli.js"), 0o755);
+    await symlink(path.join(library, "cli.js"), executable);
+
+    const result = await new Promise<CommandResult>((resolve, reject) => {
+      const child = spawn(executable, ["shell", "hook", "bash"], {
+        cwd: root,
+        env: { ...process.env, HARNESS_HOME: path.join(root, "home") },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /^# harness-conda shell hook \(bash\)/);
+    await assert.rejects(access(path.join(library, "cli-main.js")), { code: "ENOENT" });
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("shell hook help remains available through the full CLI", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-hook-help-"));
+  try {
+    const result = await runCliProcess(["shell", "hook", "--help"], root, path.join(root, "home"));
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Usage: harness shell hook/);
+    assert.doesNotMatch(result.stdout, /^# harness-conda shell hook/);
+  } finally {
     await removeTestTree(root);
   }
 });
@@ -354,10 +490,11 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     const shellHook = await runCli(["shell", "hook", "bash"], project, home);
     assert.equal(shellHook.code, 0, shellHook.stderr);
     assert.match(shellHook.stdout, /__harness_apply_env/);
-    assert.match(await readFile(path.join(home, "environments", "base", "view", "view.json"), "utf8"), /"environment": "base"/);
+    await assert.rejects(access(home), { code: "ENOENT" });
     const initial = await runCli(["info", "--json"], project, home);
     assert.equal(initial.code, 0, initial.stderr);
     assert.equal((JSON.parse(initial.stdout) as { environment: { name: string } }).environment.name, "base");
+    assert.match(await readFile(path.join(home, "environments", "base", "view", "view.json"), "utf8"), /"environment": "base"/);
     const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
