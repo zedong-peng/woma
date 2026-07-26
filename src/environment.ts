@@ -119,7 +119,7 @@ interface EnvironmentMutationHooks {
   onMetadataPrepared?: () => Promise<void> | void;
 }
 
-interface EnvironmentInstallHooks extends EnvironmentMutationHooks {
+export interface EnvironmentInstallHooks extends EnvironmentMutationHooks {
   sourceOptions?: PackageSourceOptions;
 }
 

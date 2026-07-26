@@ -4,7 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
-import { activateEnvironment, createEnvironment, doctorEnvironment, installIntoEnvironment, syncEnvironment } from "../src/environment.js";
+import {
+  activateEnvironment,
+  createEnvironment,
+  doctorEnvironment,
+  installIntoEnvironment,
+  readEnvironment,
+  syncEnvironment,
+} from "../src/environment.js";
+import { reconcileEnvironmentRuntimeSkills } from "../src/migrate-skills.js";
 import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 
@@ -310,6 +318,89 @@ test("Codex can replace legacy projected system Skills without invalidating the 
     const drifted = (await doctorEnvironment(root, "tools")).find((check) => check.label === "view");
     assert.equal(drifted?.status, "fail");
     assert.match(drifted?.detail ?? "", /Harness-managed Codex Skill link/);
+  } finally {
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previous.harnessEnvironment;
+    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
+    await removeTestTree(root);
+  }
+});
+
+test("Codex-installed ordinary Skills synchronize into only the selected Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-codex-runtime-skill-sync-"));
+  const previous = {
+    harnessHome: process.env.HARNESS_HOME,
+    harnessEnvironment: process.env.HARNESS_ENV,
+    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+  };
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ENV = "tools";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    await createEnvironment(root, "isolated", ["codex"]);
+    const skills = path.join(environmentAgentHomePath("tools", "codex"), "skills");
+    const runtimeSkill = path.join(skills, "window-installed");
+    await write(
+      path.join(runtimeSkill, "SKILL.md"),
+      "---\nname: window-installed\ndescription: Installed by Codex in its runtime window.\n---\n\nUse the runtime Skill.\n",
+    );
+    await write(path.join(runtimeSkill, "data.bin"), Buffer.from([39, 0, 255]));
+    await write(path.join(skills, ".system", ".codex-system-skills.marker"), "system-state\n");
+    await write(
+      path.join(skills, ".hidden-runtime", "SKILL.md"),
+      "---\nname: hidden-runtime\ndescription: Hidden runtime state.\n---\nHidden.\n",
+    );
+    const lockPath = path.join(process.env.HARNESS_HOME, "environments", "tools", "lock.json");
+    const beforeLock = await readFile(lockPath);
+    let planned: string[] = [];
+
+    await assert.rejects(
+      reconcileEnvironmentRuntimeSkills({
+        projectRoot: root,
+        environment: "tools",
+        beforeAdopt: (names) => {
+          planned = names;
+        },
+        hooks: {
+          onMetadataPrepared: () => {
+            throw new Error("injected runtime Skill synchronization failure");
+          },
+        },
+      }),
+      /injected runtime Skill synchronization failure/,
+    );
+    assert.deepEqual(planned, ["window-installed"]);
+    assert.equal((await lstat(runtimeSkill)).isDirectory(), true);
+    assert.deepEqual(await readFile(path.join(runtimeSkill, "data.bin")), Buffer.from([39, 0, 255]));
+    assert.deepEqual(await readFile(lockPath), beforeLock);
+
+    const synchronized = await reconcileEnvironmentRuntimeSkills({ projectRoot: root, environment: "tools" });
+    assert.deepEqual(synchronized.packages.map((pkg) => pkg.name), ["window-installed"]);
+    assert.equal((await lstat(runtimeSkill)).isSymbolicLink(), true);
+    assert.equal(
+      path.resolve(path.dirname(runtimeSkill), await readlink(runtimeSkill)),
+      path.join(environmentViewPath("tools"), "codex", "skills", "window-installed"),
+    );
+    assert.deepEqual(await readFile(path.join(runtimeSkill, "data.bin")), Buffer.from([39, 0, 255]));
+    assert.equal(await readFile(path.join(skills, ".system", ".codex-system-skills.marker"), "utf8"), "system-state\n");
+    await access(path.join(skills, ".hidden-runtime", "SKILL.md"));
+    await assert.rejects(access(path.join(environmentAgentHomePath("isolated", "codex"), "skills", "window-installed")));
+
+    const lock = JSON.parse(await readFile(lockPath, "utf8")) as { packages: Record<string, { source: string }> };
+    assert.match(lock.packages["window-installed"]?.source ?? "", /migrations\/skills\/window-installed/);
+    assert.equal(
+      (await readEnvironment(root, "tools")).spec.roots.some((item) => item.name === "window-installed"),
+      true,
+    );
+    await syncEnvironment(root, "tools");
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
+    const repeated = await reconcileEnvironmentRuntimeSkills({ projectRoot: root, environment: "tools" });
+    assert.equal(repeated.unchanged, true);
+    assert.deepEqual(repeated.packages, []);
   } finally {
     if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous.harnessHome;

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Moved Codex-managed `skills/.system` into the stable per-Environment Agent home, while retaining atomic Package Skill projection and compatibility with existing linked layouts.
+- Moved Codex-managed `skills/.system` into the stable per-Environment Agent home, retained atomic Package Skill projection and compatibility with existing linked layouts, and made `harness sync` adopt ordinary Skills installed by Codex into that Environment as locked content-addressed Packages.
 - Added `harness uninstall` with active-or-named Environment selection, dry-run resource plans, shared-dependency retention, orphan pruning, foundational Package protection, and atomic rollback across recipes, locks, stable Agent homes, and views.
 - Added direct Git subdirectory installation with optional full-commit selection and immutable commit/content-integrity provenance preserved through sync, `harness list`, and portable bundles.
 - Reassigned `harness init` to Conda-style shell initialization with a static hook, managed profile block, dry-run, reversal, and post-install guidance; moved its former Package scaffold to the provider-oriented `harness skeleton workflow` interface while retaining `harness-package-builder` for full authoring.

@@ -4,11 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
-import { DEFAULT_ENVIRONMENT, environmentPath, environmentSnapshot, installPackagesIntoEnvironment } from "./environment.js";
+import {
+  DEFAULT_ENVIRONMENT,
+  environmentPath,
+  environmentSnapshot,
+  installPackagesIntoEnvironment,
+  type EnvironmentInstallHooks,
+} from "./environment.js";
 import { harnessHome, hashDirectory, pathExists, writeTextAtomic } from "./fs.js";
 import { loadCachedPackage, validatePackage } from "./package.js";
 import { loadManifest } from "./schema.js";
-import { sourceAgentHome } from "./view.js";
+import { environmentAgentHomePath, sourceAgentHome } from "./view.js";
 import type { CodexClaudePlatform, HarnessManifest, SkillSpec } from "./types.js";
 
 const EXCLUDED_NAMES = new Set([".git", ".harness", "node_modules", ".DS_Store"]);
@@ -18,6 +24,7 @@ export type SkillMigrationSource = CodexClaudePlatform | "both";
 
 interface ExistingSkill {
   name: string;
+  entryPath: string;
   root: string;
   integrity: string;
   sources: CodexClaudePlatform[];
@@ -36,6 +43,14 @@ export interface SkillMigrationResult {
   normalized: string[];
   dryRun: boolean;
   unchanged: boolean;
+}
+
+interface PlannedSkillPackage {
+  name: string;
+  version: string;
+  destination: string;
+  source: string;
+  sources: CodexClaudePlatform[];
 }
 
 function copyFilter(source: string): boolean {
@@ -77,12 +92,15 @@ async function normalizeLegacyFrontmatter(filePath: string): Promise<void> {
   await writeTextAtomic(filePath, input.replace(match[1], normalized));
 }
 
-async function discoverSkills(platform: CodexClaudePlatform): Promise<ExistingSkill[]> {
-  const skillsRoot = path.join(sourceAgentHome(platform), AGENT_SKILLS_DIRECTORY);
+async function discoverSkills(
+  platform: CodexClaudePlatform,
+  skillsRoot = path.join(sourceAgentHome(platform), AGENT_SKILLS_DIRECTORY),
+  excludedNames: ReadonlySet<string> = new Set(),
+): Promise<ExistingSkill[]> {
   if (!(await pathExists(skillsRoot))) return [];
   const skills: ExistingSkill[] = [];
   for (const entry of (await readdir(skillsRoot)).sort()) {
-    if (entry.startsWith(".")) continue;
+    if (entry.startsWith(".") || excludedNames.has(entry)) continue;
     const candidate = path.join(skillsRoot, entry);
     const info = await lstat(candidate);
     if (!info.isDirectory() && !info.isSymbolicLink()) continue;
@@ -95,6 +113,7 @@ async function discoverSkills(platform: CodexClaudePlatform): Promise<ExistingSk
     const skillDocument = await readFile(path.join(root, "SKILL.md"), "utf8");
     skills.push({
       name,
+      entryPath: candidate,
       root,
       integrity: await hashDirectory(root),
       sources: [platform],
@@ -242,23 +261,24 @@ async function assertNoEnvironmentConflicts(
   });
 }
 
-export async function migrateExistingSkills(options: {
-  projectRoot: string;
-  environment: string;
-  from: SkillMigrationSource;
-  dryRun?: boolean;
-}): Promise<SkillMigrationResult> {
-  const skills = await existingSkills(options.from);
-  const packages = skills.map((skill) => {
+function plannedSkillPackages(skills: ExistingSkill[]): PlannedSkillPackage[] {
+  return skills.map((skill) => {
     const id = snapshotId(skill);
     const version = `0.0.0-migrate.${id.slice(0, 12)}`;
     const destination = path.join(harnessHome(), "migrations", "skills", skill.name, id);
     return { name: skill.name, version, destination, source: `file:${destination}`, sources: [...skill.sources] };
   });
-  const unchangedPackages = await assertNoEnvironmentConflicts(options.projectRoot, options.environment, skills, packages);
-  const unchanged = unchangedPackages.every(Boolean);
-  const result: SkillMigrationResult = {
-    environment: options.environment,
+}
+
+function migrationResult(
+  environment: string,
+  skills: ExistingSkill[],
+  packages: PlannedSkillPackage[],
+  unchangedPackages: boolean[],
+  dryRun: boolean,
+): SkillMigrationResult {
+  return {
+    environment,
     packages: packages.map((pkg, index) => ({
       name: pkg.name,
       version: pkg.version,
@@ -267,49 +287,175 @@ export async function migrateExistingSkills(options: {
       unchanged: unchangedPackages[index]!,
     })),
     normalized: skills.filter((skill) => skill.normalizeFrontmatter).map((skill) => skill.name),
-    dryRun: options.dryRun ?? false,
-    unchanged,
+    dryRun,
+    unchanged: unchangedPackages.every(Boolean),
   };
-  if (options.dryRun) {
-    for (const [index, pkg] of packages.entries()) {
-      if (await pathExists(pkg.destination)) await validateSnapshot(pkg.destination, pkg.name, pkg.version);
-      else {
-        const temporary = await mkdtemp(path.join(os.tmpdir(), "harness-skills-migration-plan-"));
-        try {
-          await buildSnapshot(temporary, skills[index]!, pkg.version);
-        } finally {
-          await removeTemporary(temporary);
-        }
-      }
-    }
-    return result;
-  }
-  if (unchanged) {
-    for (const pkg of packages) await validateSnapshot(pkg.destination, pkg.name, pkg.version);
-    return result;
-  }
+}
 
+async function prepareSkillSnapshots(
+  skills: ExistingSkill[],
+  packages: PlannedSkillPackage[],
+  options: { dryRun: boolean; publish: boolean },
+): Promise<void> {
   for (const [index, pkg] of packages.entries()) {
-    if (!(await pathExists(pkg.destination))) {
-      await mkdir(path.dirname(pkg.destination), { recursive: true, mode: 0o700 });
-      const temporary = await mkdtemp(path.join(path.dirname(pkg.destination), ".skills-migration-"));
+    if (await pathExists(pkg.destination)) {
+      await validateSnapshot(pkg.destination, pkg.name, pkg.version);
+      continue;
+    }
+    if (options.dryRun) {
+      const temporary = await mkdtemp(path.join(os.tmpdir(), "harness-skills-migration-plan-"));
       try {
         await buildSnapshot(temporary, skills[index]!, pkg.version);
-        await setTreeWritable(temporary, false);
-        try {
-          await rename(temporary, pkg.destination);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
-          await removeTemporary(temporary);
-        }
-      } catch (error) {
+      } finally {
         await removeTemporary(temporary);
-        throw error;
       }
+      continue;
+    }
+    if (!options.publish) {
+      await validateSnapshot(pkg.destination, pkg.name, pkg.version);
+      continue;
+    }
+    await mkdir(path.dirname(pkg.destination), { recursive: true, mode: 0o700 });
+    const temporary = await mkdtemp(path.join(path.dirname(pkg.destination), ".skills-migration-"));
+    try {
+      await buildSnapshot(temporary, skills[index]!, pkg.version);
+      await setTreeWritable(temporary, false);
+      try {
+        await rename(temporary, pkg.destination);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST" && (error as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw error;
+        await removeTemporary(temporary);
+      }
+    } catch (error) {
+      await removeTemporary(temporary);
+      throw error;
     }
     await validateSnapshot(pkg.destination, pkg.name, pkg.version);
   }
+}
+
+export async function migrateExistingSkills(options: {
+  projectRoot: string;
+  environment: string;
+  from: SkillMigrationSource;
+  dryRun?: boolean;
+}): Promise<SkillMigrationResult> {
+  const skills = await existingSkills(options.from);
+  const packages = plannedSkillPackages(skills);
+  const unchangedPackages = await assertNoEnvironmentConflicts(options.projectRoot, options.environment, skills, packages);
+  const unchanged = unchangedPackages.every(Boolean);
+  const result = migrationResult(options.environment, skills, packages, unchangedPackages, options.dryRun ?? false);
+  await prepareSkillSnapshots(skills, packages, { dryRun: options.dryRun ?? false, publish: !unchanged });
+  if (options.dryRun || unchanged) return result;
   const changedSources = packages.filter((_pkg, index) => !unchangedPackages[index]).map((pkg) => pkg.source);
   await installPackagesIntoEnvironment(options.projectRoot, options.environment, changedSources);
   return result;
+}
+
+export interface RuntimeSkillSyncOptions {
+  projectRoot: string;
+  environment: string;
+  beforeAdopt?: (skills: string[]) => Promise<void> | void;
+  hooks?: EnvironmentInstallHooks;
+}
+
+function noRuntimeSkillChanges(environment: string): SkillMigrationResult {
+  return {
+    environment,
+    packages: [],
+    normalized: [],
+    dryRun: false,
+    unchanged: true,
+  };
+}
+
+async function managedEnvironmentSkillNames(projectRoot: string, environment: string): Promise<Set<string>> {
+  const { lock } = await environmentSnapshot(projectRoot, environment);
+  const names = new Set<string>();
+  for (const locked of Object.values(lock.packages)) {
+    const pkg = await loadCachedPackage(locked);
+    for (const skill of pkg.manifest.spec.skills) names.add(skill.name);
+  }
+  return names;
+}
+
+async function restoreRuntimeSkillEntries(
+  staging: string,
+  moved: { original: string; backup: string }[],
+  cause: unknown,
+): Promise<never> {
+  const errors: unknown[] = [];
+  for (const entry of [...moved].reverse()) {
+    try {
+      if (!(await lstat(entry.backup).catch(() => undefined))) continue;
+      if (await lstat(entry.original).catch(() => undefined)) {
+        throw new Error(`Refusing to overwrite a Skill path while rolling back runtime synchronization: ${entry.original}`);
+      }
+      await rename(entry.backup, entry.original);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length === 0) await removeTemporary(staging);
+  if (errors.length > 0) {
+    throw new AggregateError(
+      [cause, ...errors],
+      `Runtime Skill synchronization failed; preserved entries remain at ${staging}`,
+    );
+  }
+  throw cause;
+}
+
+export async function reconcileEnvironmentRuntimeSkills(options: RuntimeSkillSyncOptions): Promise<SkillMigrationResult> {
+  const snapshot = await environmentSnapshot(options.projectRoot, options.environment);
+  if (!snapshot.environment.spec.targets.includes("codex")) return noRuntimeSkillChanges(options.environment);
+
+  const managedNames = await managedEnvironmentSkillNames(options.projectRoot, options.environment);
+  const skillsRoot = path.join(environmentAgentHomePath(options.environment, "codex"), AGENT_SKILLS_DIRECTORY);
+  const discovered = await discoverSkills("codex", skillsRoot, managedNames);
+  const byName = new Map<string, ExistingSkill>();
+  for (const skill of discovered) {
+    if (byName.has(skill.name)) throw new Error(`Existing codex Skill names normalize to the same name ${skill.name}`);
+    byName.set(skill.name, skill);
+  }
+  const skills = [...byName.values()].sort((left, right) => left.name.localeCompare(right.name));
+  if (skills.length === 0) return noRuntimeSkillChanges(options.environment);
+
+  const packages = plannedSkillPackages(skills);
+  const unchangedPackages = await assertNoEnvironmentConflicts(
+    options.projectRoot,
+    options.environment,
+    skills,
+    packages,
+  );
+  const result = migrationResult(options.environment, skills, packages, unchangedPackages, false);
+  await options.beforeAdopt?.(skills.map((skill) => skill.name));
+  await prepareSkillSnapshots(skills, packages, { dryRun: false, publish: !result.unchanged });
+  if (result.unchanged) return result;
+
+  const staging = await mkdtemp(path.join(path.dirname(environmentPath(options.projectRoot, options.environment)), ".skills-sync-"));
+  const moved: { original: string; backup: string }[] = [];
+  try {
+    for (const [index, skill] of skills.entries()) {
+      if (unchangedPackages[index]) continue;
+      if ((await hashDirectory(await realpath(skill.entryPath))) !== skill.integrity) {
+        throw new Error(`Codex runtime Skill ${skill.name} changed while it was being synchronized; retry the command`);
+      }
+      const backup = path.join(staging, path.basename(skill.entryPath));
+      await rename(skill.entryPath, backup);
+      moved.push({ original: skill.entryPath, backup });
+    }
+    const changedSources = packages.filter((_pkg, index) => !unchangedPackages[index]).map((pkg) => pkg.source);
+    await installPackagesIntoEnvironment(
+      options.projectRoot,
+      options.environment,
+      changedSources,
+      process.cwd(),
+      options.hooks,
+    );
+    await removeTemporary(staging);
+    return result;
+  } catch (error) {
+    return restoreRuntimeSkillEntries(staging, moved, error);
+  }
 }
