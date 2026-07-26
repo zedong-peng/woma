@@ -2,16 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { cp, lstat, mkdir, mkdtemp, readFile, readlink, readdir, rename, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { AGENT_SESSION_ENTRIES } from "./agent-state-paths.js";
 import { environmentSnapshot } from "./environment.js";
 import { withEnvironmentLock } from "./environment-lock.js";
 import { writeBufferPreservingFile } from "./fs.js";
 import { environmentAgentHomePath, sourceAgentHome } from "./view.js";
 import type { CodexClaudePlatform } from "./types.js";
 
-const SESSION_ENTRIES: Record<CodexClaudePlatform, string[]> = {
-  codex: ["archived_sessions", "history.jsonl", "session_index.jsonl", "sessions", "shell_snapshots"],
-  claude: ["file-history", "history.jsonl", "plans", "projects", "session-env", "shell-snapshots", "tasks", "todos"],
-};
 const STRUCTURED_JSONL_ENTRIES = new Set(["history.jsonl", "session_index.jsonl"]);
 
 export type SessionMigrationSource = CodexClaudePlatform | "both";
@@ -178,7 +175,7 @@ async function discoverEntries(source: SessionMigrationSource): Promise<SessionE
   const entries: SessionEntry[] = [];
   for (const platform of platforms) {
     const home = sourceAgentHome(platform);
-    for (const name of SESSION_ENTRIES[platform]) {
+    for (const name of AGENT_SESSION_ENTRIES[platform]) {
       const candidate = path.join(home, name);
       const info = await lstat(candidate).catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return undefined;

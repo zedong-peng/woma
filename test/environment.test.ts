@@ -643,6 +643,89 @@ test("global Environment reads reject missing foundational packages", { concurre
   }
 });
 
+test("first base creation detects supported existing Agent state once without reading or migrating it", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-existing-state-"));
+  const previous = {
+    home: process.env.HARNESS_HOME,
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    const home = path.join(root, "home");
+    const codex = path.join(root, "codex");
+    const claude = path.join(root, "claude");
+    await mkdir(path.join(codex, "skills"), { recursive: true });
+    await mkdir(path.join(claude, "projects"), { recursive: true });
+    await writeFile(path.join(claude, "projects", "private-session"), "unchanged\n", "utf8");
+    await mkdir(path.join(codex, "plugins", "ignored"), { recursive: true });
+    process.env.HARNESS_HOME = home;
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+
+    let notices = 0;
+    const options = { onExistingAgentStateDetected: () => { notices += 1; } };
+    const [first, second] = await Promise.all([
+      ensureBaseEnvironment(root, options),
+      ensureBaseEnvironment(root, options),
+    ]);
+
+    assert.equal(first.metadata.name, "base");
+    assert.equal(second.metadata.name, "base");
+    assert.equal(notices, 1);
+    assert.equal(await readFile(path.join(claude, "projects", "private-session"), "utf8"), "unchanged\n");
+    await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
+    const lock = await readEnvironmentLock(root, "base");
+    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+    await ensureBaseEnvironment(root, options);
+    assert.equal(notices, 1);
+  } finally {
+    if (previous.home === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
+test("first base creation ignores unsupported Agent paths and metadata types", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-no-existing-state-"));
+  const previous = {
+    home: process.env.HARNESS_HOME,
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    const codex = path.join(root, "codex");
+    const claude = path.join(root, "claude");
+    const external = path.join(root, "external");
+    await mkdir(path.join(codex, "plugins"), { recursive: true });
+    await writeFile(path.join(codex, "skills"), "not a directory\n", "utf8");
+    await mkdir(external, { recursive: true });
+    await symlink(external, path.join(codex, "sessions"));
+    await mkdir(claude, { recursive: true });
+    process.env.HARNESS_HOME = path.join(root, "home");
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+
+    let notices = 0;
+    await ensureBaseEnvironment(root, { onExistingAgentStateDetected: () => { notices += 1; } });
+
+    assert.equal(notices, 0);
+    assert.equal(await readFile(path.join(codex, "skills"), "utf8"), "not a directory\n");
+    assert.equal((await lstat(path.join(codex, "sessions"))).isSymbolicLink(), true);
+  } finally {
+    if (previous.home === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
 test("concurrent first reads initialize the implicit base Environment once", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-concurrent-init-"));
   process.env.HARNESS_HOME = path.join(root, "home");

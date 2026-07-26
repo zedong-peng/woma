@@ -3,6 +3,7 @@ import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, 
 import os from "node:os";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
 import { DEFAULT_ENVIRONMENT, environmentPath, environmentSnapshot, installPackagesIntoEnvironment } from "./environment.js";
 import { harnessHome, hashDirectory, pathExists, writeTextAtomic } from "./fs.js";
 import { loadCachedPackage, validatePackage } from "./package.js";
@@ -77,7 +78,7 @@ async function normalizeLegacyFrontmatter(filePath: string): Promise<void> {
 }
 
 async function discoverSkills(platform: CodexClaudePlatform): Promise<ExistingSkill[]> {
-  const skillsRoot = path.join(sourceAgentHome(platform), "skills");
+  const skillsRoot = path.join(sourceAgentHome(platform), AGENT_SKILLS_DIRECTORY);
   if (!(await pathExists(skillsRoot))) return [];
   const skills: ExistingSkill[] = [];
   for (const entry of (await readdir(skillsRoot)).sort()) {

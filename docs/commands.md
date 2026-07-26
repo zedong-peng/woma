@@ -10,7 +10,11 @@ harness env create <name> [--target codex|claude|pi|both|all|<comma-separated-li
 harness env remove <name>
 ```
 
-`base` is initialized automatically and cannot be explicitly created or removed. For backward compatibility, `base`, `both`, and an omitted `--target` select Codex and Claude. Use `--target pi`, a comma-separated combination such as `codex,pi`, or `--target all` explicitly. Every Environment contains `harness-project-memory` and `harness-package-builder` as foundational root Packages. Environment initialization never scans or imports ordinary Skills or session state from existing Agent homes.
+`base` is initialized automatically and cannot be explicitly created or removed. For backward compatibility, `base`, `both`, and an omitted `--target` select Codex and Claude. Use `--target pi`, a comma-separated combination such as `codex,pi`, or `--target all` explicitly. Every Environment contains `harness-project-memory` and `harness-package-builder` as foundational root Packages.
+
+On the first successful implicit creation of `base`, Harness uses `lstat`-style metadata checks on only the documented Codex/Claude `skills` and session migration paths. If a real supported file or directory exists, it writes one migration notice to stderr. It does not enumerate children, read contents, follow symlinks, print private names or paths, or import any state. Empty supported directories count as existing state. Supported credentials and provider configuration seed separately through the normal Environment view construction; Skills and sessions remain explicit migrations. The published base recipe is the durable one-time boundary, so no notice marker or discovered-state metadata is stored. Shell-hook and JSON stdout remain machine-readable.
+
+Discovery does not imply adoption. Harness follows Conda's conservative separation between finding validated existing environments and explicitly creating, cloning, or importing them; it does not register an arbitrary Agent home as an Environment, just as Conda does not silently adopt an arbitrary Python or `venv` installation.
 
 Environment recipes and locks are stored under `$HARNESS_HOME/environments/`. `HARNESS_HOME` defaults to `~/.harness-conda`.
 

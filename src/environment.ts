@@ -1,9 +1,10 @@
-import { access, readdir, readFile, rm } from "node:fs/promises";
+import { access, lstat, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { satisfies } from "semver";
 import { z } from "zod";
+import { AGENT_SESSION_ENTRIES, AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
 import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
 import { withEnvironmentLock, withProjectLock } from "./environment-lock.js";
 import { installPackageTree, loadCachedPackage, syncLockedPackage, type PackageInstallPlan } from "./package.js";
@@ -15,8 +16,8 @@ import {
   projectMemoryPath,
 } from "./memory.js";
 import { prepareMemoryBootstrapTransition } from "./memory-bootstrap.js";
-import { environmentViewPath, materializeEnvironmentView, validateEnvironmentView } from "./view.js";
-import type { Action, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
+import { environmentViewPath, materializeEnvironmentView, sourceAgentHome, validateEnvironmentView } from "./view.js";
+import type { Action, CodexClaudePlatform, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
 
 const environmentName = z
   .string()
@@ -65,6 +66,10 @@ const environmentSchema = z
       .strict(),
   })
   .strict();
+
+export interface BaseEnvironmentInitializationOptions {
+  onExistingAgentStateDetected?: () => void;
+}
 
 export interface EnvironmentActivationResult {
   name?: string;
@@ -318,12 +323,40 @@ async function initializeEnvironment(projectRoot: string, name: string, targets:
   return environment;
 }
 
-export function ensureBaseEnvironment(projectRoot = process.cwd()): Promise<HarnessEnvironment> {
+async function existingAgentStateDetected(): Promise<boolean> {
+  const platforms: CodexClaudePlatform[] = ["codex", "claude"];
+  for (const platform of platforms) {
+    const home = sourceAgentHome(platform);
+    const skills = await lstat(path.join(home, AGENT_SKILLS_DIRECTORY)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (skills?.isDirectory() && !skills.isSymbolicLink()) return true;
+    for (const name of AGENT_SESSION_ENTRIES[platform]) {
+      const info = await lstat(path.join(home, name)).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (info && !info.isSymbolicLink() && (info.isFile() || info.isDirectory())) return true;
+    }
+  }
+  return false;
+}
+
+export function ensureBaseEnvironment(
+  projectRoot = process.cwd(),
+  options: BaseEnvironmentInitializationOptions = {},
+): Promise<HarnessEnvironment> {
   const filePath = environmentPath(projectRoot, DEFAULT_ENVIRONMENT);
   const existing = baseInitializations.get(filePath);
   if (existing) return existing;
   const initialization = withEnvironmentLock(DEFAULT_ENVIRONMENT, async () => {
-    if (!(await pathExists(filePath))) return initializeEnvironment(projectRoot, DEFAULT_ENVIRONMENT, ["codex", "claude"]);
+    if (!(await pathExists(filePath))) {
+      const detected = await existingAgentStateDetected();
+      const environment = await initializeEnvironment(projectRoot, DEFAULT_ENVIRONMENT, ["codex", "claude"]);
+      if (detected) options.onExistingAgentStateDetected?.();
+      return environment;
+    }
     try {
       const environment = await readEnvironmentFile(projectRoot, DEFAULT_ENVIRONMENT);
       const lock = await readEnvironmentLockFile(projectRoot, DEFAULT_ENVIRONMENT);

@@ -21,6 +21,7 @@ import {
   readEnvironmentLock,
   removeEnvironment,
   syncEnvironment,
+  type BaseEnvironmentInitializationOptions,
   type EnvironmentCheck,
 } from "./environment.js";
 import { installPackageSource, loadCachedPackage } from "./package.js";
@@ -30,11 +31,36 @@ import { migrateExistingSkills, type SkillMigrationSource } from "./migrate-skil
 import { migrateExistingSessions } from "./migrate-sessions.js";
 import type { Action, Platform } from "./types.js";
 
+const EXISTING_AGENT_STATE_NOTICE = `Harness created an isolated base Environment.
+
+Existing Codex or Claude data remains unchanged in the original Agent homes.
+Supported configuration and credentials are seeded separately where supported.
+Existing Agent Skills, sessions, and history were detected but were not imported.
+
+Preview migration:
+  harness migrate skills --dry-run
+  harness migrate sessions --dry-run
+
+Import Skills into base:
+  harness migrate skills
+
+After stopping all Codex and Claude processes, import sessions:
+  harness migrate sessions
+`;
+
+const baseInitializationOptions: BaseEnvironmentInitializationOptions = {
+  onExistingAgentStateDetected: () => process.stderr.write(`${EXISTING_AGENT_STATE_NOTICE}\n`),
+};
+
 const program = new Command();
 
 function projectRoot(command: Command): string {
   const configured = command.optsWithGlobals<{ project?: string }>().project;
   return path.resolve(configured ?? process.cwd());
+}
+
+async function ensureSelectedBase(project: string, name: string): Promise<void> {
+  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(project, baseInitializationOptions);
 }
 
 function selectedEnvironment(requested?: string): string {
@@ -106,6 +132,7 @@ envCommand
   .option("-t, --target <target>", "codex, claude, pi, both, all, or a comma-separated list", "both")
   .action(async (name: string, options: { target: string }, command: Command) => {
     const project = projectRoot(command);
+    await ensureSelectedBase(project, name);
     const environment = await createEnvironment(project, name, targets(options.target));
     const lock = await readEnvironmentLock(project, name);
     console.log(`Created global environment ${name}`);
@@ -127,8 +154,10 @@ migrateCommand
     const from = migrationSource(options.from);
     await requireAgentMigrationConfirmation();
     const environmentName = selectedEnvironment(options.name);
+    const project = projectRoot(command);
+    if (!options.dryRun) await ensureSelectedBase(project, environmentName);
     const result = await migrateExistingSkills({
-      projectRoot: projectRoot(command),
+      projectRoot: project,
       environment: environmentName,
       from,
       dryRun: options.dryRun,
@@ -154,8 +183,10 @@ migrateCommand
     const from = migrationSource(options.from);
     await requireAgentMigrationConfirmation();
     const environmentName = selectedEnvironment(options.name);
+    const project = projectRoot(command);
+    await ensureSelectedBase(project, environmentName);
     const result = await migrateExistingSessions({
-      projectRoot: projectRoot(command),
+      projectRoot: project,
       environment: environmentName,
       from,
       dryRun: options.dryRun,
@@ -178,6 +209,7 @@ envCommand
   .description("list named environments")
   .action(async (_options: unknown, command: Command) => {
     const project = projectRoot(command);
+    await ensureBaseEnvironment(project, baseInitializationOptions);
     const names = await listEnvironments(project);
     const active = selectedEnvironment();
     for (const name of names) console.log(`${active === name ? "*" : " "} ${name}`);
@@ -190,6 +222,7 @@ program
   .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
     const name = selectedEnvironment(options.name);
+    await ensureSelectedBase(project, name);
     const [{ environment, lock }, active] = await Promise.all([environmentSnapshot(project, name), selectedEnvironment()]);
     const lockedPackages = Object.values(lock.packages);
     const packages = await Promise.all(lockedPackages.map(async (locked) => {
@@ -271,7 +304,9 @@ envCommand
   .requiredOption("-n, --name <environment>", "environment to export")
   .requiredOption("-o, --output <file>", "destination .harness-env file")
   .action(async (options: { name: string; output: string }, command: Command) => {
-    const result = await exportEnvironmentBundle(projectRoot(command), options.name, options.output);
+    const project = projectRoot(command);
+    await ensureSelectedBase(project, options.name);
+    const result = await exportEnvironmentBundle(project, options.name, options.output);
     console.log(`Exported environment ${result.environment} to ${result.path}`);
     console.log(`  packages  ${result.packages}`);
     console.log(`  bytes     ${result.bytes}`);
@@ -295,6 +330,7 @@ program
   .action(async (source: string, options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
     const environmentName = selectedEnvironment(options.name);
+    await ensureSelectedBase(project, environmentName);
     const result = await installIntoEnvironment(project, environmentName, source, process.cwd());
     console.log(`Installed ${result.root.lock.name}@${result.root.lock.version} into ${environmentName}`);
     console.log(`  source        ${result.root.lock.source}`);
@@ -308,7 +344,9 @@ program
   .description("atomically activate or switch one complete environment; defaults to base")
   .action(async (name: string | undefined, _options: unknown, command: Command) => {
     const environmentName = name ?? DEFAULT_ENVIRONMENT;
-    const result = await activateEnvironment(projectRoot(command), environmentName);
+    const project = projectRoot(command);
+    await ensureSelectedBase(project, environmentName);
+    const result = await activateEnvironment(project, environmentName);
     printActions(result.actions);
     console.log(`Activated environment ${environmentName}`);
     console.log(`  targets   ${result.targets.join(", ")}`);
@@ -321,6 +359,7 @@ program
   .action(async (_options: unknown, command: Command) => {
     const project = projectRoot(command);
     const previous = selectedEnvironment();
+    await ensureBaseEnvironment(project, baseInitializationOptions);
     const result = await deactivateEnvironment(project);
     printActions(result.actions);
     console.log(`Deactivated environment ${previous ?? DEFAULT_ENVIRONMENT}; using ${DEFAULT_ENVIRONMENT}`);
@@ -332,11 +371,12 @@ program
   .option("--json", "print structured Environment, package, Skill, and Memory context", false)
   .action(async (options: { json: boolean }, command: Command) => {
     const project = projectRoot(command);
+    const activeName = selectedEnvironment();
+    await ensureSelectedBase(project, activeName);
     if (options.json) {
       console.log(JSON.stringify(await environmentInfo(project), null, 2));
       return;
     }
-    const activeName = selectedEnvironment();
     const { environment, lock } = await environmentSnapshot(project, activeName);
     console.log(`Environment: ${activeName}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
@@ -350,7 +390,7 @@ shellCommand
   .command("hook [shell]")
   .description("print a bash or zsh hook for eval")
   .action(async (shell: string | undefined, _options: unknown, command: Command) => {
-    await ensureBaseEnvironment(projectRoot(command));
+    await ensureBaseEnvironment(projectRoot(command), baseInitializationOptions);
     process.stdout.write(renderShellHook(resolveShell(shell)));
   });
 
@@ -360,6 +400,8 @@ program
   .option("-n, --name <environment>", "environment to restore")
   .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
+    if (!options.name) await ensureBaseEnvironment(project, baseInitializationOptions);
+    else await ensureSelectedBase(project, options.name);
     const names = options.name ? [options.name] : await listEnvironments(project);
     if (names.length === 0) throw new Error("No environments to sync");
     for (const name of names) {
@@ -378,6 +420,7 @@ program
     if (names.length === 0) throw new Error("No environments to check");
     let failed = false;
     for (const name of names) {
+      await ensureSelectedBase(project, name);
       console.log(name);
       const checks = await doctorEnvironment(project, name);
       printChecks(checks);
