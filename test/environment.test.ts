@@ -139,17 +139,11 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
     const codexSkills = path.join(environmentViewPath("base"), "codex", "skills");
     await assert.rejects(readFile(path.join(codexSkills, "existing-review", "SKILL.md")), /ENOENT/);
-    const system = path.join(codexSkills, ".system");
-    assert.equal((await lstat(system)).isSymbolicLink(), true);
-    assert.equal(
-      path.resolve(path.dirname(system), await readlink(system)),
-      path.join(home, "environments", "base", "home", "codex-system-skills"),
-    );
+    await assert.rejects(access(path.join(codexSkills, ".system")), /ENOENT/);
+    const system = path.join(environmentAgentHomePath("base", "codex"), "skills", ".system");
+    await mkdir(system);
     await writeFile(path.join(system, "updated-by-codex"), "updated\n");
-    assert.equal(
-      await readFile(path.join(home, "environments", "base", "home", "codex-system-skills", "updated-by-codex"), "utf8"),
-      "updated\n",
-    );
+    assert.equal(await readFile(path.join(system, "updated-by-codex"), "utf8"), "updated\n");
     await assert.rejects(readFile(path.join(codex, "skills", ".system", "updated-by-codex")), /ENOENT/);
 
     await createEnvironment(root, "clean", ["codex"]);
@@ -213,7 +207,7 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
       await readFile(path.join(environmentViewPath("clean"), "codex", "skills", "new-codex-skill", "SKILL.md"), "utf8"),
       /New Skill/,
     );
-    assert.equal((await lstat(path.join(environmentViewPath("clean"), "codex", "skills", ".system"))).isSymbolicLink(), true);
+    await assert.rejects(access(path.join(environmentViewPath("clean"), "codex", "skills", ".system")), /ENOENT/);
   } finally {
     if (previous.home === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous.home;

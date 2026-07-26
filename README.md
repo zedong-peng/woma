@@ -115,9 +115,11 @@ harness uninstall downloaded-skill
 
 ## Configure Agents
 
-- **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`.
+- **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. Codex owns `$CODEX_HOME/skills/.system`; Harness reconciles only Package-managed ordinary Skill links in the surrounding stable `skills` directory.
 - **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
 - **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Harness manages only `$PI_CODING_AGENT_DIR/skills`; Pi owns every other file in that Environment home.
+
+Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time; their Agent homes, credentials, provider configuration, sessions, and Codex system Skills remain isolated. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
 
 ## Export and Import
 
@@ -142,6 +144,8 @@ harness doctor --name base
 harness sync --name base
 harness inspect builtin:auto-research
 ```
+
+`harness env list` shows registered Environment names and marks the one selected by the current shell; it does not perform a health check. Use `harness doctor --name <environment>` to validate an Environment.
 
 ## Author Packages
 

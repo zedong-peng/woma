@@ -7,6 +7,7 @@ import test from "node:test";
 import { exportEnvironmentBundle, importEnvironmentBundle } from "../src/environment-bundle.js";
 import { createEnvironment, environmentPath, environmentSnapshot, installIntoEnvironment } from "../src/environment.js";
 import { loadCachedPackage } from "../src/package.js";
+import { environmentAgentHomePath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 
 async function write(filePath: string, content: string | Buffer, mode?: number): Promise<void> {
@@ -82,6 +83,10 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
     await createEnvironment(projectA, "performance", ["codex", "claude"]);
     await installIntoEnvironment(projectA, "performance", source);
+    await write(
+      path.join(environmentAgentHomePath("performance", "codex"), "skills", ".system", "private-runtime-skill", "SKILL.md"),
+      "must-not-export-system-skill\n",
+    );
     const before = await environmentSnapshot(projectA, "performance");
     const first = await exportEnvironmentBundle(projectA, "performance", bundle);
     assert.equal(first.packages, 3);
@@ -93,7 +98,7 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     await assert.rejects(exportEnvironmentBundle(projectA, "performance", bundle), /Refusing to overwrite/);
     assert.deepEqual(await readFile(bundle), unchanged);
     const document = gunzipSync(await readFile(bundle)).toString("utf8");
-    assert.doesNotMatch(document, /must-not-export|private project memory|auth\.json/);
+    assert.doesNotMatch(document, /must-not-export|private project memory|auth\.json|private-runtime-skill/);
 
     await rm(source, { recursive: true, force: true });
     await removeTestTree(process.env.HARNESS_HOME);

@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, stat, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, rmdir, stat, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -7,6 +7,12 @@ import { harnessHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, wr
 import type { CodexClaudePlatform, HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
 const MANAGED_HOME_LINKS: Record<Platform, string[]> = {
+  codex: ["auth.json", "config.toml", "hooks.json"],
+  claude: [".credentials.json", "settings.json", "skills"],
+  pi: ["skills"],
+};
+
+const MANAGED_VIEW_ENTRIES: Record<Platform, string[]> = {
   codex: ["auth.json", "config.toml", "hooks.json", "skills"],
   claude: [".credentials.json", "settings.json", "skills"],
   pi: ["skills"],
@@ -222,16 +228,6 @@ export function environmentAgentHomePath(environmentName: string, platform: Plat
   return path.join(harnessHome(), "environments", environmentName, "home", platform);
 }
 
-function codexSystemSkillsRoot(environmentName: string): string {
-  return path.join(harnessHome(), "environments", environmentName, "home", "codex-system-skills");
-}
-
-async function linkCodexSystemSkills(environmentName: string, destinationRoot: string): Promise<void> {
-  const stable = codexSystemSkillsRoot(environmentName);
-  await mkdir(stable, { recursive: true, mode: 0o700 });
-  await createSymlink(stable, path.join(destinationRoot, "skills", ".system"), true);
-}
-
 function originalClaudeStatePath(sourceHome: string): string {
   const sibling = path.join(path.dirname(sourceHome), ".claude.json");
   return path.basename(sourceHome) === ".claude" ? sibling : path.join(sourceHome, ".claude.json");
@@ -353,7 +349,6 @@ async function buildCodexView(environmentName: string, root: string, packages: I
   await mkdir(root, { recursive: true, mode: 0o700 });
   const sourceHome = sourceAgentHome("codex");
   const links = await linkSkills(root, packages);
-  await linkCodexSystemSkills(environmentName, root);
 
   const currentConfig = path.join(environmentViewPath(environmentName), "codex", "config.toml");
   const sourceConfig = await pathExists(currentConfig) ? currentConfig : path.join(sourceHome, "config.toml");
@@ -423,12 +418,261 @@ interface StableHomeTransition {
   apply: () => Promise<() => Promise<void>>;
 }
 
+function metadataSkillNames(metadata: ViewMetadata, platform: Platform): string[] {
+  if (!metadata.skills || typeof metadata.skills !== "object" || Array.isArray(metadata.skills)) return [];
+  const target = (metadata.skills as Record<string, unknown>)[platform];
+  if (!target || typeof target !== "object" || Array.isArray(target)) return [];
+  return Object.keys(target as Record<string, unknown>);
+}
+
+function packageSkillNames(packages: InstalledPackage[]): string[] {
+  return packages.flatMap((pkg) => pkg.manifest.spec.skills.map((skill) => skill.name));
+}
+
+async function managedLinkMatches(link: string, source: string): Promise<boolean> {
+  const info = await lstat(link).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!info?.isSymbolicLink()) return false;
+  return path.resolve(path.dirname(link), await readlink(link)) === source;
+}
+
+async function restoreLegacyCodexSkills(
+  skillsRoot: string,
+  legacyTarget: string,
+  legacyRoot: string,
+  desiredNames: Set<string>,
+): Promise<void> {
+  const backup = path.join(path.dirname(skillsRoot), `.skills.rollback-${process.pid}-${randomUUID()}`);
+  await rename(skillsRoot, backup);
+  await symlink(legacyTarget, skillsRoot, process.platform === "win32" ? "junction" : undefined);
+  try {
+    for (const name of await readdir(backup)) {
+      const entry = path.join(backup, name);
+      const expected = path.join(legacyRoot, name);
+      if (desiredNames.has(name) && await managedLinkMatches(entry, expected)) {
+        await rm(entry, { force: true });
+        continue;
+      }
+      if (await lstat(expected).catch(() => undefined)) {
+        throw new Error(`Cannot restore Codex-owned Skill entry because its legacy path is occupied: ${expected}`);
+      }
+      await rename(entry, expected);
+    }
+    await rmdir(backup);
+  } catch (error) {
+    throw new Error(`Could not restore the legacy Codex Skills layout; preserved state remains at ${backup}: ${(error as Error).message}`);
+  }
+}
+
+// Older Environments exposed the generated directory directly. Move only entries
+// outside the previous ownership set so Codex runtime state survives the upgrade.
+async function prepareLegacyCodexSkillsTransition(
+  skillsRoot: string,
+  legacyTarget: string,
+  legacyRoot: string,
+  desiredNames: Set<string>,
+  previousNames: Set<string>,
+): Promise<StableHomeTransition> {
+  return {
+    apply: async () => {
+      const temporary = path.join(path.dirname(skillsRoot), `.skills.transition-${process.pid}-${randomUUID()}`);
+      await mkdir(temporary, { mode: 0o700 });
+      let replaced = false;
+      try {
+        const entries = await readdir(legacyRoot).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return [];
+          throw error;
+        });
+        const agentOwned = entries.filter((name) => !previousNames.has(name));
+        const conflict = agentOwned.find((name) => desiredNames.has(name));
+        if (conflict) {
+          throw new Error(`Refusing to replace Codex-owned Skill entry with a Harness Skill: ${path.join(skillsRoot, conflict)}`);
+        }
+        for (const name of agentOwned) {
+          await rename(path.join(legacyRoot, name), path.join(temporary, name)).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT") throw error;
+          });
+        }
+        for (const name of desiredNames) {
+          await symlink(
+            path.join(legacyRoot, name),
+            path.join(temporary, name),
+            process.platform === "win32" ? "junction" : "dir",
+          );
+        }
+        const current = await lstat(skillsRoot).catch(() => undefined);
+        const currentTarget = current?.isSymbolicLink() ? await readlink(skillsRoot) : undefined;
+        if (!current?.isSymbolicLink() || path.resolve(path.dirname(skillsRoot), currentTarget!) !== legacyRoot) {
+          throw new Error(`Managed Agent home link has an unexpected target: ${skillsRoot}`);
+        }
+        await rm(skillsRoot, { force: true });
+        await rename(temporary, skillsRoot);
+        replaced = true;
+      } catch (error) {
+        const cleanupErrors: unknown[] = [];
+        if (!replaced) {
+          if (!(await lstat(skillsRoot).catch(() => undefined))) {
+            await symlink(legacyTarget, skillsRoot, process.platform === "win32" ? "junction" : undefined).catch((cleanupError) => {
+              cleanupErrors.push(cleanupError);
+            });
+          }
+          for (const name of await readdir(temporary).catch(() => [])) {
+            const entry = path.join(temporary, name);
+            const expected = path.join(legacyRoot, name);
+            try {
+              if (desiredNames.has(name) && await managedLinkMatches(entry, expected)) await rm(entry, { force: true });
+              else if (!(await lstat(expected).catch(() => undefined))) await rename(entry, expected);
+              else throw new Error(`Cannot restore Codex-owned Skill entry: ${expected}`);
+            } catch (cleanupError) {
+              cleanupErrors.push(cleanupError);
+            }
+          }
+          await rmdir(temporary).catch((cleanupError: NodeJS.ErrnoException) => {
+            if (cleanupError.code !== "ENOENT") cleanupErrors.push(cleanupError);
+          });
+        }
+        if (cleanupErrors.length > 0) {
+          throw new AggregateError([error, ...cleanupErrors], "Could not migrate the legacy Codex Skills layout safely");
+        }
+        throw error;
+      }
+      return () => restoreLegacyCodexSkills(skillsRoot, legacyTarget, legacyRoot, desiredNames);
+    },
+  };
+}
+
+async function prepareCodexSkillsTransition(
+  environmentName: string,
+  packages: InstalledPackage[],
+  previousMetadata: ViewMetadata,
+  previousPackages: InstalledPackage[],
+): Promise<StableHomeTransition> {
+  const home = environmentAgentHomePath(environmentName, "codex");
+  const skillsRoot = path.join(home, "skills");
+  const viewSkillsRoot = path.join(environmentViewPath(environmentName), "codex", "skills");
+  const desiredNames = new Set(packageSkillNames(packages));
+  const previousNames = new Set([
+    ...metadataSkillNames(previousMetadata, "codex"),
+    ...packageSkillNames(previousPackages),
+  ]);
+  const info = await lstat(skillsRoot).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (info?.isSymbolicLink()) {
+    const target = await readlink(skillsRoot);
+    if (path.resolve(path.dirname(skillsRoot), target) !== viewSkillsRoot) {
+      throw new Error(`Managed Agent home link has an unexpected target: ${skillsRoot}`);
+    }
+    return prepareLegacyCodexSkillsTransition(skillsRoot, target, viewSkillsRoot, desiredNames, previousNames);
+  }
+  if (info && !info.isDirectory()) throw new Error(`Codex Skills root must be a directory: ${skillsRoot}`);
+
+  const createNames: string[] = [];
+  const removeNames: string[] = [];
+  if (info) {
+    for (const name of desiredNames) {
+      const link = path.join(skillsRoot, name);
+      const existing = await lstat(link).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (!existing) createNames.push(name);
+      else if (!(await managedLinkMatches(link, path.join(viewSkillsRoot, name)))) {
+        throw new Error(`Harness-managed Codex Skill path must be an expected symbolic link: ${link}`);
+      }
+    }
+    for (const name of previousNames) {
+      if (desiredNames.has(name)) continue;
+      const link = path.join(skillsRoot, name);
+      const existing = await lstat(link).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (!existing) continue;
+      if (!(await managedLinkMatches(link, path.join(viewSkillsRoot, name)))) {
+        throw new Error(`Refusing to remove a modified Harness-managed Codex Skill path: ${link}`);
+      }
+      removeNames.push(name);
+    }
+  } else {
+    createNames.push(...desiredNames);
+  }
+
+  return {
+    apply: async () => {
+      const rootCreated = !info;
+      const created: string[] = [];
+      const removed: { name: string; target: string }[] = [];
+      const rollback = async (): Promise<void> => {
+        const errors: unknown[] = [];
+        for (const name of [...created].reverse()) {
+          const link = path.join(skillsRoot, name);
+          try {
+            if (await managedLinkMatches(link, path.join(viewSkillsRoot, name))) await rm(link, { force: true });
+            else if (await lstat(link).catch(() => undefined)) throw new Error(`Refusing to remove a modified Codex Skill path: ${link}`);
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        for (const item of [...removed].reverse()) {
+          const link = path.join(skillsRoot, item.name);
+          try {
+            if (!(await lstat(link).catch(() => undefined))) {
+              await symlink(item.target, link, process.platform === "win32" ? "junction" : "dir");
+            } else if (!(await managedLinkMatches(link, path.resolve(path.dirname(link), item.target)))) {
+              throw new Error(`Refusing to overwrite a Codex-owned Skill path during rollback: ${link}`);
+            }
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (rootCreated) {
+          await rmdir(skillsRoot).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") errors.push(error);
+          });
+        }
+        if (errors.length > 0) throw new AggregateError(errors, "Could not roll back Codex Skill links");
+      };
+      try {
+        await mkdir(skillsRoot, { recursive: true, mode: 0o700 });
+        for (const name of removeNames) {
+          const link = path.join(skillsRoot, name);
+          removed.push({ name, target: await readlink(link) });
+          await rm(link, { force: true });
+        }
+        for (const name of createNames) {
+          await symlink(
+            path.join(viewSkillsRoot, name),
+            path.join(skillsRoot, name),
+            process.platform === "win32" ? "junction" : "dir",
+          );
+          created.push(name);
+        }
+        return rollback;
+      } catch (error) {
+        try {
+          await rollback();
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], "Could not update Codex Skill links");
+        }
+        throw error;
+      }
+    },
+  };
+}
+
 async function prepareStableHomeTransition(
   environment: HarnessEnvironment,
   packages: InstalledPackage[],
   previousMetadata: ViewMetadata,
   previousPackages: InstalledPackage[],
 ): Promise<StableHomeTransition> {
+  const codexSkills = environment.spec.targets.includes("codex")
+    ? await prepareCodexSkillsTransition(environment.metadata.name, packages, previousMetadata, previousPackages)
+    : undefined;
   const links: {
     destination: string;
     source: string;
@@ -513,6 +757,7 @@ async function prepareStableHomeTransition(
     apply: async () => {
       const rollbacks: (() => Promise<void>)[] = [];
       try {
+        if (codexSkills) rollbacks.push(await codexSkills.apply());
         for (const link of links.filter((item) => item.action === "create")) {
           await mkdir(path.dirname(link.destination), { recursive: true, mode: 0o700 });
           await createSymlink(link.source, link.destination, link.directory);
@@ -717,8 +962,21 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
       const actual = path.resolve(path.dirname(link), await readlink(link));
       if (actual !== expected) throw new Error(`Managed Agent home link has an unexpected target: ${link}`);
     }
+    let legacyCodexSkills = false;
+    if (target === "codex") {
+      const skills = path.join(home, "skills");
+      const info = await lstat(skills).catch(() => undefined);
+      if (info?.isSymbolicLink()) {
+        const actual = path.resolve(path.dirname(skills), await readlink(skills));
+        const expected = path.join(root, "codex", "skills");
+        if (actual !== expected) throw new Error(`Managed Agent home link has an unexpected target: ${skills}`);
+        legacyCodexSkills = true;
+      } else if (!info?.isDirectory()) {
+        throw new Error(`Codex Skills root is missing or invalid: ${skills}`);
+      }
+    }
     const unexpectedViewEntries = (await readdir(path.join(root, target))).filter(
-      (name) => !MANAGED_HOME_LINKS[target].includes(name),
+      (name) => !MANAGED_VIEW_ENTRIES[target].includes(name),
     );
     if (unexpectedViewEntries.length > 0) {
       throw new Error(`Environment view contains unmanaged Agent state: ${unexpectedViewEntries.join(", ")}`);
@@ -733,22 +991,20 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
         const actual = await realpath(link).catch(() => undefined);
         if (actual !== expected) throw new Error(`Environment Skill link has an unexpected target: ${link}`);
         expectedSkills[skill.name] = path.resolve(pkg.root, skill.path);
+        if (target === "codex" && !legacyCodexSkills) {
+          const homeLink = path.join(home, "skills", skill.name);
+          const homeInfo = await lstat(homeLink).catch(() => undefined);
+          if (!homeInfo?.isSymbolicLink()) throw new Error(`Harness-managed Codex Skill link is missing: ${homeLink}`);
+          const homeTarget = path.resolve(path.dirname(homeLink), await readlink(homeLink));
+          if (homeTarget !== link) throw new Error(`Harness-managed Codex Skill link has an unexpected target: ${homeLink}`);
+        }
       }
     }
     const skillsRoot = path.join(root, target, "skills");
     const actualSkillNames = (await readdir(skillsRoot).catch(() => [])).sort();
-    const expectedSkillNames = Object.keys(expectedSkills).concat(target === "codex" ? [".system"] : []).sort();
-    if (!equal(actualSkillNames, expectedSkillNames)) {
+    const expectedSkillNames = Object.keys(expectedSkills).sort();
+    if (!legacyCodexSkills && !equal(actualSkillNames, expectedSkillNames)) {
       throw new Error(`Environment Skill visibility differs from the lock at ${skillsRoot}`);
-    }
-    if (target === "codex") {
-      const system = path.join(skillsRoot, ".system");
-      const info = await lstat(system).catch(() => undefined);
-      if (!info?.isSymbolicLink()) throw new Error(`Codex system Skills stable link is missing: ${system}`);
-      const actual = path.resolve(path.dirname(system), await readlink(system));
-      if (actual !== codexSystemSkillsRoot(environment.metadata.name)) {
-        throw new Error(`Codex system Skills stable link has an unexpected target: ${system}`);
-      }
     }
     const metadataSkills = metadata.skills;
     if (!metadataSkills || typeof metadataSkills !== "object" || Array.isArray(metadataSkills)) {
