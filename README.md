@@ -138,6 +138,17 @@ harness sync --name base
 harness inspect builtin:auto-research
 ```
 
+## Author Packages
+
+Generate an editable Package recipe with a coordinating Skill:
+
+```bash
+harness skeleton workflow research-review --output-dir ./packages --version 0.1.0
+harness inspect ./packages/research-review
+```
+
+The provider-oriented `skeleton` interface follows `conda skeleton` while adding the Harness-specific `workflow` recipe type. Use the foundational `harness-package-builder` Skill for richer Package composition and updates.
+
 ## Documentation
 
 - [Command reference](docs/commands.md)

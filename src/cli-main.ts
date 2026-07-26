@@ -27,6 +27,7 @@ import {
 import { installPackageSource, loadCachedPackage } from "./package.js";
 import { renderShellHook, resolveShell } from "./shell.js";
 import { initializeShell } from "./shell-init.js";
+import { createWorkflowSkeleton } from "./skeleton.js";
 import { migrateExistingSkills, type SkillMigrationSource } from "./migrate-skills.js";
 import { migrateExistingSessions } from "./migrate-sessions.js";
 import type { Action, LockedPackage, Platform } from "./types.js";
@@ -140,6 +141,22 @@ program
       console.log(`Initialized ${resolved} shell integration`);
       console.log(`Restart your shell or reload ${result.profilePath}`);
     }
+  });
+
+const skeletonCommand = program.command("skeleton").description("generate an editable Harness Package recipe");
+
+skeletonCommand
+  .command("workflow <name>")
+  .description("generate a Package with a coordinating workflow Skill")
+  .option("-o, --output-dir <directory>", "directory in which to create the Package", ".")
+  .option("--version <version>", "initial Package version", "0.1.0")
+  .action(async (name: string, options: { outputDir: string; version: string }) => {
+    const result = await createWorkflowSkeleton(name, {
+      outputDirectory: options.outputDir,
+      version: options.version,
+    });
+    console.log(`Created workflow skeleton ${result.name}@${result.version}`);
+    console.log(`  recipe  ${result.root}`);
   });
 
 const envCommand = program.command("env").description("manage isolated Agent environments");

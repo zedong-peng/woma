@@ -26,6 +26,8 @@ Existing ordinary Agent Skills enter Harness only through explicit `harness migr
 
 Every installable locator is first materialized as a local directory and then passed through one Source Adapter. A root `harness.yaml` passes through unchanged. Otherwise, only a root standalone `SKILL.md` or direct conventional `skills/*/SKILL.md` children are copied into temporary staging with a deterministic generated manifest. Git metadata, Harness project state, dependency caches, and OS metadata are excluded by the same copy policy used for Package publication. The original source is never modified.
 
+Optional Package scaffolding follows the provider shape of `conda skeleton`, which is supplied by the separate `conda-build` toolchain rather than `conda init`. Harness ships `skeleton workflow <name>` because a coordinating Agent Skill is a domain-specific recipe type with no Conda equivalent. It generates an editable explicit Package under an output directory and deliberately does not resolve sources, install dependencies, or replace the full `harness-package-builder` authoring capability.
+
 The adapter is shared by direct installation, inspection, recursive dependency resolution, and lock repair. Consequently an implicit Package has the same identity and normalized bytes when installed repeatedly or reconstructed by `sync`. No recursive candidate search occurs: nested repositories, examples, vendored Skills, and Package collections cannot silently expand the ownership boundary of one install command.
 
 ## Portable Environment bundles

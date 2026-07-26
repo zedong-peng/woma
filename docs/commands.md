@@ -133,11 +133,14 @@ Pass `--name` to inspect another Environment; otherwise the command uses the act
 ## Package authoring
 
 ```bash
+harness skeleton workflow <name> [-o|--output-dir <directory>] [--version <version>]
 harness inspect <source>
 harness capture <directory> --from codex|claude [--name <name>]
 ```
 
-`capture` exports supported resources from an existing Agent project configuration without copying literal credential values; its output directory must not already exist. The foundational `harness-package-builder` Skill owns Package creation and authoring. It can wrap existing Skills and Agent resources, update a Package, aggregate dependencies, or author an optional coordinating entrypoint Skill before validating the result with `inspect`. Package authoring is intentionally separate from the core Environment-management CLI, following Conda's separation between `conda` and `conda-build`.
+Conda's separately installed `conda-build` adds provider-oriented commands such as `conda skeleton pypi <package> --output-dir <directory>`. Harness uses the same command shape while adapting providers to Agent capabilities. `skeleton workflow` creates `<output-directory>/<name>/harness.yaml` and a coordinating `<name>-workflow` Skill. Names are normalized to Harness Package identifiers, `--version` must be an exact SemVer, the output directory defaults to the current directory, and an existing non-empty destination is never overwritten. Additional source-aware providers can be added without changing the top-level interface.
+
+`capture` exports supported resources from an existing Agent project configuration without copying literal credential values; its output directory must not already exist. The foundational `harness-package-builder` Skill remains the full Package authoring capability. It can wrap existing Skills and Agent resources, update a Package, aggregate dependencies, or author an optional coordinating entrypoint Skill before validating the result with `inspect`. `skeleton` is intentionally limited to deterministic recipe generation rather than becoming a second Package builder.
 
 ## Shell integration
 
