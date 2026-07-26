@@ -110,6 +110,43 @@ ${dependencyYaml}  skills:
   return packageRoot;
 }
 
+async function resourcePackageFixture(root: string, name: string): Promise<string> {
+  const packageRoot = path.join(root, name);
+  await write(
+    path.join(packageRoot, "harness.yaml"),
+    `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: ${name}
+  version: 1.0.0
+  description: ${name} resource fixture.
+spec:
+  platforms: [codex, claude]
+  skills:
+    - name: ${name}
+      path: ./skills/${name}
+  mcpServers:
+    - name: shared-tools
+      transport: stdio
+      command: node
+    - name: claude-docs
+      transport: http
+      url: https://example.com/mcp
+      platforms: [claude]
+  hooks:
+    - event: PostToolUse
+      matcher: Edit
+      command: npm test
+      platforms: [codex]
+    - event: Stop
+      command: npm run check
+      platforms: [claude]
+`,
+  );
+  await write(path.join(packageRoot, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name}.\n---\n\n${name}.\n`);
+  return packageRoot;
+}
+
 test("built CLI entrypoint is executable", async () => {
   await access(path.resolve("dist/src/cli.js"), constants.X_OK);
 });
@@ -146,24 +183,42 @@ test("CLI exports and imports a portable Environment bundle", { concurrency: fal
   }
 });
 
-test("CLI lists packages and visible Skills in a selected Environment", { concurrency: false }, async () => {
+test("CLI lists all Package-managed resources in a selected Environment", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-list-"));
   const home = path.join(root, "home");
+  const previousEnvironment = process.env.HARNESS_ENV;
   try {
-    const pkg = await packageFixture(root, "listed-skill");
-    assert.equal((await runCli(["env", "create", "listed", "--target", "codex"], root, home)).code, 0);
+    delete process.env.HARNESS_ENV;
+    const pkg = await resourcePackageFixture(root, "listed-resources");
+    assert.equal((await runCli(["env", "create", "listed", "--target", "both"], root, home)).code, 0);
     assert.equal((await runCli(["install", "-n", "listed", pkg], root, home)).code, 0);
 
     const selected = await runCli(["list", "-n", "listed"], root, home);
     assert.equal(selected.code, 0, selected.stderr);
     assert.match(selected.stdout, /Environment: listed/);
-    assert.match(selected.stdout, /packages\s+.*listed-skill@1\.0\.0/);
-    assert.match(selected.stdout, /listed-skill\s+listed-skill@1\.0\.0\s+codex/);
+    assert.match(selected.stdout, /packages\s+.*listed-resources@1\.0\.0/);
+    assert.match(selected.stdout, /skills\n[\s\S]*listed-resources\s+listed-resources@1\.0\.0\s+codex, claude/);
+    assert.match(selected.stdout, /mcp servers\n[\s\S]*shared-tools\s+stdio\s+listed-resources@1\.0\.0\s+codex, claude/);
+    assert.match(selected.stdout, /claude-docs\s+http\s+listed-resources@1\.0\.0\s+claude/);
+    assert.match(selected.stdout, /hooks\n[\s\S]*PostToolUse\s+Edit\s+listed-resources@1\.0\.0\s+codex/);
+    assert.match(selected.stdout, /Stop\s+\*\s+listed-resources@1\.0\.0\s+claude/);
+    assert.doesNotMatch(selected.stdout, /unavailable packages/);
+
+    assert.equal((await runCli(["env", "create", "listed-codex", "--target", "codex"], root, home)).code, 0);
+    assert.equal((await runCli(["install", "-n", "listed-codex", pkg], root, home)).code, 0);
+    const codexOnly = await runCli(["list", "-n", "listed-codex"], root, home);
+    assert.equal(codexOnly.code, 0, codexOnly.stderr);
+    assert.match(codexOnly.stdout, /claude-docs\s+http\s+listed-resources@1\.0\.0\s+none/);
+    assert.match(codexOnly.stdout, /Stop\s+\*\s+listed-resources@1\.0\.0\s+none/);
 
     const current = await runCli(["list"], root, home);
     assert.equal(current.code, 0, current.stderr);
     assert.match(current.stdout, /Environment: base/);
+    assert.match(current.stdout, /mcp servers\n    none/);
+    assert.match(current.stdout, /hooks\n    none/);
   } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
@@ -387,7 +442,8 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     const listWithMissingCache = await runCli(["--project", project, "list", "--name", "research"], root, home);
     assert.equal(listWithMissingCache.code, 0, listWithMissingCache.stderr);
     assert.match(listWithMissingCache.stdout, /packages\s+.*paper-search@1\.0\.0/);
-    assert.match(listWithMissingCache.stdout, /\[unavailable\]\s+paper-search@1\.0\.0\s+Package paper-search@1\.0\.0 is not cached/);
+    assert.match(listWithMissingCache.stdout, /unavailable packages\n\s+paper-search@1\.0\.0\s+Package paper-search@1\.0\.0 is not cached/);
+    assert.doesNotMatch(listWithMissingCache.stdout, /\[unavailable\]/);
     assert.match(listWithMissingCache.stdout, /auto-research\s+auto-research@1\.0\.0\s+codex/);
     const repair = await runCli(["--project", project, "sync", "-n", "research"], root, home);
     assert.equal(repair.code, 0, repair.stderr);
