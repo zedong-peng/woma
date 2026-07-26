@@ -313,3 +313,92 @@ test("local and Git sources use the same implicit normalization", { concurrency:
     await removeTestTree(root);
   }
 });
+
+test("Git subdirectory installs preserve immutable provenance and sync after a branch moves", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-git-subdir-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  const repository = path.join(root, "research-studio.git");
+  try {
+    await write(path.join(repository, "ResearchStudio-Idea", "skills", "idea", "SKILL.md"), skill("idea"));
+    await run("git", ["init", "-b", "main"], { cwd: repository });
+    await run("git", ["add", "."], { cwd: repository });
+    await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "first"], { cwd: repository });
+    const firstCommit = (await run("git", ["rev-parse", "HEAD"], { cwd: repository })).stdout.trim();
+    await run("git", ["tag", "v1"], { cwd: repository });
+
+    const installed = await installPackageSource(repository, root, { ref: "main", subdirectory: "ResearchStudio-Idea" });
+    assert.equal(installed.lock.source, repository);
+    assert.equal(installed.lock.subdirectory, "ResearchStudio-Idea");
+    assert.equal(installed.lock.requestedRef, "main");
+    assert.equal(installed.lock.commit, firstCommit);
+    assert.equal(installed.lock.resolved, firstCommit);
+    assert.equal(installed.manifest.metadata.name, "researchstudio-idea");
+    assert.equal(installed.manifest.metadata.version, `0.0.0+git.${firstCommit.slice(0, 12)}`);
+
+    await write(path.join(repository, "README.md"), "branch moved\n");
+    await run("git", ["add", "."], { cwd: repository });
+    await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "second"], { cwd: repository });
+    await removeTestTree(installed.root);
+    const restored = await syncLockedPackage(installed.lock);
+    assert.equal(restored.lock.commit, firstCommit);
+    assert.equal(await hashDirectory(restored.root), installed.lock.integrity);
+
+    const fromTag = await installPackageSource(repository, root, { ref: "v1", subdirectory: "ResearchStudio-Idea" });
+    const fromCommit = await installPackageSource(repository, root, { ref: firstCommit, subdirectory: "ResearchStudio-Idea" });
+    assert.equal(fromTag.lock.commit, firstCommit);
+    assert.equal(fromCommit.lock.commit, firstCommit);
+
+    const inspected = await runCli(
+      ["inspect", repository, "--ref", "v1", "--subdir", "ResearchStudio-Idea"],
+      root,
+      path.join(root, "cli-home"),
+    );
+    assert.equal(inspected.code, 0, inspected.stderr);
+    assert.match(inspected.stdout, new RegExp(`commit\\s+${firstCommit}`));
+    assert.match(inspected.stdout, /subdir\s+ResearchStudio-Idea/);
+    assert.match(inspected.stdout, /ref\s+v1/);
+
+    const project = path.join(root, "project");
+    await createEnvironment(project, "research", ["codex"]);
+    await installIntoEnvironment(project, "research", repository, root, {
+      sourceOptions: { ref: "v1", subdirectory: "ResearchStudio-Idea" },
+    });
+    const shown = await runCli(
+      ["--project", project, "list", "--name", "research"],
+      root,
+      process.env.HARNESS_HOME!,
+    );
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.match(shown.stdout, /^\s+researchstudio-idea@/m);
+    assert.match(shown.stdout, new RegExp(`commit\\s+${firstCommit}`));
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("Git subdirectory installs reject unsafe paths and symlinks", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-git-subdir-safety-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  const repository = path.join(root, "repository.git");
+  try {
+    await write(path.join(repository, "package", "SKILL.md"), skill("safe"));
+    await symlink("package", path.join(repository, "linked-package"));
+    await run("git", ["init", "-b", "main"], { cwd: repository });
+    await run("git", ["add", "."], { cwd: repository });
+    await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "fixture"], { cwd: repository });
+
+    for (const subdirectory of ["../package", "/package", "package/../package", "-package", "package\\child"]) {
+      await assert.rejects(installPackageSource(repository, root, { subdirectory }), /Unsafe Git subdirectory/);
+    }
+    await assert.rejects(
+      installPackageSource(repository, root, { subdirectory: "missing" }),
+      /Git subdirectory does not exist/,
+    );
+    await assert.rejects(
+      installPackageSource(repository, root, { subdirectory: "linked-package" }),
+      /Git subdirectory is an unsupported symlink/,
+    );
+  } finally {
+    await removeTestTree(root);
+  }
+});

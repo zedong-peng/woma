@@ -15,7 +15,15 @@ interface MaterializedSource {
   root: string;
   source: string;
   resolved: string;
+  requestedRef?: string;
+  commit?: string;
+  subdirectory?: string;
   cleanup?: () => Promise<void>;
+}
+
+export interface PackageSourceOptions {
+  ref?: string;
+  subdirectory?: string;
 }
 
 interface SkillMetadata {
@@ -95,7 +103,20 @@ function normalizeGitSource(source: string): { url: string; canonical: string; r
   return undefined;
 }
 
-async function materializeSource(source: string, cwd: string): Promise<MaterializedSource> {
+function normalizedSubdirectory(input: string): string {
+  if (
+    input === "" ||
+    input.startsWith("-") ||
+    input.startsWith("/") ||
+    input.includes("\\") ||
+    /^[A-Za-z]:/.test(input) ||
+    path.posix.normalize(input) !== input ||
+    input.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) throw new Error(`Unsafe Git subdirectory: ${input}`);
+  return input;
+}
+
+async function materializeSource(source: string, cwd: string, options: PackageSourceOptions = {}): Promise<MaterializedSource> {
   if (source.startsWith("builtin:")) {
     const name = source.slice("builtin:".length);
     const root = builtinPath(name);
@@ -103,27 +124,48 @@ async function materializeSource(source: string, cwd: string): Promise<Materiali
     return { root, source: `builtin:${name}`, resolved: "builtin" };
   }
   const git = normalizeGitSource(source);
+  if ((options.ref || options.subdirectory) && !git) throw new Error("--ref and --subdir require a Git source");
   if (!git) {
     const root = path.resolve(cwd, source.replace(/^file:/, ""));
     if (!(await pathExists(root))) throw new Error(`Local source does not exist: ${root}`);
     return { root, source: `file:${root}`, resolved: "local" };
   }
 
+  const requestedRef = options.ref ?? git.ref;
+  if (options.ref && git.ref && options.ref !== git.ref) throw new Error("Specify the Git ref either in the source or with --ref, not both");
+  if (requestedRef && /^[\s-]|[\u0000-\u001f\u007f]/.test(requestedRef)) throw new Error(`Unsafe Git ref: ${requestedRef}`);
+  const subdirectory = options.subdirectory ? normalizedSubdirectory(options.subdirectory) : undefined;
+
   const temp = await mkdtemp(path.join(os.tmpdir(), "harness-conda-"));
   try {
-    if (git.ref) {
-      await run("git", ["clone", "--filter=blob:none", "--no-checkout", "--", git.url, temp]);
-      await run("git", ["fetch", "--depth", "1", "origin", git.ref], temp);
+    if (requestedRef) {
+      await run("git", ["init", "--", temp]);
+      await run("git", ["fetch", "--filter=blob:none", "--depth", "1", "--", git.url, requestedRef], temp);
       await run("git", ["checkout", "--detach", "FETCH_HEAD"], temp);
     } else {
       await rm(temp, { recursive: true, force: true });
       await run("git", ["clone", "--depth", "1", "--", git.url, temp]);
     }
     const resolved = await run("git", ["rev-parse", "HEAD"], temp);
+    let root = temp;
+    if (subdirectory) {
+      const candidate = path.join(temp, ...subdirectory.split("/"));
+      const info = await lstat(candidate).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") throw new Error(`Git subdirectory does not exist: ${subdirectory}`);
+        throw error;
+      });
+      if (info.isSymbolicLink()) throw new Error(`Git subdirectory is an unsupported symlink: ${subdirectory}`);
+      if (!info.isDirectory()) throw new Error(`Git subdirectory is not a directory: ${subdirectory}`);
+      assertInside(await realpath(temp), await realpath(candidate), "Git subdirectory");
+      root = candidate;
+    }
     return {
-      root: temp,
-      source: git.canonical,
+      root,
+      source: splitRef(git.canonical).locator,
       resolved,
+      ...(requestedRef ? { requestedRef } : {}),
+      commit: resolved,
+      ...(subdirectory ? { subdirectory } : {}),
       cleanup: () => rm(temp, { recursive: true, force: true }),
     };
   } catch (error) {
@@ -133,6 +175,7 @@ async function materializeSource(source: string, cwd: string): Promise<Materiali
 }
 
 function sourceDirectoryName(materialized: MaterializedSource): string {
+  if (materialized.subdirectory) return path.posix.basename(materialized.subdirectory);
   if (materialized.source.startsWith("file:") || materialized.source.startsWith("builtin:")) {
     return path.basename(materialized.root);
   }
@@ -281,8 +324,8 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
   }
 }
 
-async function materializePackageSource(source: string, cwd: string): Promise<MaterializedSource> {
-  const materialized = await materializeSource(source, cwd);
+async function materializePackageSource(source: string, cwd: string, options: PackageSourceOptions = {}): Promise<MaterializedSource> {
+  const materialized = await materializeSource(source, cwd, options);
   try {
     return await normalizeMaterializedSource(materialized);
   } catch (error) {
@@ -485,6 +528,9 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
     version: manifest.metadata.version,
     source: materialized.source,
     resolved,
+    ...(materialized.requestedRef ? { requestedRef: materialized.requestedRef } : {}),
+    ...(materialized.commit ? { commit: materialized.commit } : {}),
+    ...(materialized.subdirectory ? { subdirectory: materialized.subdirectory } : {}),
     integrity,
     cacheKey: key,
     dependencies: manifest.spec.dependencies.map((dependency) => dependency.name),
@@ -493,8 +539,8 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
   return { manifest, root: cacheRoot, lock };
 }
 
-export async function installPackageSource(source: string, cwd = process.cwd()): Promise<InstalledPackage> {
-  const materialized = await materializePackageSource(source, cwd);
+export async function installPackageSource(source: string, cwd = process.cwd(), options: PackageSourceOptions = {}): Promise<InstalledPackage> {
+  const materialized = await materializePackageSource(source, cwd, options);
   try {
     return await cacheMaterializedPackage(materialized);
   } finally {
@@ -515,13 +561,13 @@ function assertDependency(dependency: PackageDependency, pkg: InstalledPackage):
   }
 }
 
-export async function installPackageTree(source: string, cwd = process.cwd()): Promise<PackageInstallPlan> {
+export async function installPackageTree(source: string, cwd = process.cwd(), options: PackageSourceOptions = {}): Promise<PackageInstallPlan> {
   const resolved = new Map<string, InstalledPackage>();
   const visiting: string[] = [];
   const ordered: InstalledPackage[] = [];
 
   async function visit(candidateSource: string, candidateCwd: string, dependency?: PackageDependency): Promise<InstalledPackage> {
-    const materialized = await materializePackageSource(candidateSource, candidateCwd);
+    const materialized = await materializePackageSource(candidateSource, candidateCwd, candidateSource === source ? options : {});
     try {
       const pkg = await cacheMaterializedPackage(materialized);
       if (dependency) assertDependency(dependency, pkg);
@@ -660,10 +706,10 @@ export async function validateBuiltinPackageLock(lock: LockedPackage): Promise<v
   }
 }
 
-function sourceAtRevision(source: string, resolved: string): string {
+function sourceAtCommit(source: string, commit: string): string {
   if (source.startsWith("file:") || source.startsWith("builtin:")) return source;
   const { locator } = splitRef(source);
-  return `${locator}#${resolved}`;
+  return `${locator}#${commit}`;
 }
 
 export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
@@ -675,7 +721,10 @@ export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledP
       } catch {}
     }
 
-    const materialized = await materializePackageSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
+    const commit = lock.commit ?? lock.resolved;
+    const materialized = await materializePackageSource(sourceAtCommit(lock.source, commit), process.cwd(), {
+      ...(lock.subdirectory ? { subdirectory: lock.subdirectory } : {}),
+    });
     try {
       const manifest = await loadManifest(materialized.root);
       await validatePackage(materialized.root, manifest);
@@ -689,7 +738,7 @@ export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledP
         throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
       }
       if (!lock.source.startsWith("file:") && !lock.source.startsWith("builtin:") && materialized.resolved !== lock.resolved) {
-        throw new Error(`Locked revision mismatch for ${lock.name}: expected ${lock.resolved}, got ${materialized.resolved}`);
+        throw new Error(`Locked commit mismatch for ${lock.name}: expected ${commit}, got ${materialized.resolved}`);
       }
       await populateCache(materialized.root, expectedRoot, manifest, integrity);
       await verifyCache(expectedRoot, manifest, integrity);

@@ -79,6 +79,9 @@ export interface LockedPackage {
   version: string;
   source: string;
   resolved: string;
+  requestedRef?: string | undefined;
+  commit?: string | undefined;
+  subdirectory?: string | undefined;
   integrity: string;
   cacheKey: string;
   dependencies: string[];

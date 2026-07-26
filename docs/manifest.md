@@ -68,7 +68,7 @@ dependencies:
     source: ../paper-search
 ```
 
-Local sources are useful during development but are not portable across machines. For security, packages installed from Git or the built-in catalog cannot declare local dependency sources; their dependencies must also use Git or built-in sources. Published packages should use immutable Git tags or revisions until registry-backed resolution is available.
+Local sources are useful during development but are not portable across machines. For security, packages installed from Git or the built-in catalog cannot declare local dependency sources; their dependencies must also use Git or built-in sources. Published packages should use immutable Git tags or commits until registry-backed resolution is available.
 
 `entrypoints` identifies a Package's user-facing starting Skills. It does not define workflow steps or create a DAG. When a Package teaches an end-to-end method, an ordinary coordinating Skill keeps its ordering, branching rules, interruption behavior, and expected output in `SKILL.md`; Harness Conda only manages the Packages needed to make that method available.
 
@@ -101,7 +101,7 @@ mcpServers:
 
 Pi currently consumes Harness Skills through its Agent Skills support. A Package that includes Pi in `spec.platforms` must restrict every MCP server and Hook to supported platforms such as `platforms: [codex, claude]`; validation rejects resources that target Pi. Omitting `spec.platforms` retains the compatibility default `[codex, claude]`.
 
-`~/.harness-conda/environments/<environment>/lock.json` records source, resolved revision, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. The active Environment belongs to the current shell and is selected by `HARNESS_ENV`; no Environment state is stored in a project.
+`~/.harness-conda/environments/<environment>/lock.json` records source, requested ref, resolved full commit, Git subdirectory, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. Git-only provenance fields are omitted for local and built-in Packages. The active Environment belongs to the current shell and is selected by `HARNESS_ENV`; no Environment state is stored in a project.
 
 ## Requirements
 

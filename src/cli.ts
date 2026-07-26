@@ -29,7 +29,7 @@ import { scaffoldHarness } from "./scaffold.js";
 import { renderShellHook, resolveShell } from "./shell.js";
 import { migrateExistingSkills, type SkillMigrationSource } from "./migrate-skills.js";
 import { migrateExistingSessions } from "./migrate-sessions.js";
-import type { Action, Platform } from "./types.js";
+import type { Action, LockedPackage, Platform } from "./types.js";
 
 const EXISTING_AGENT_STATE_NOTICE = `Harness created an isolated base Environment.
 
@@ -99,6 +99,21 @@ function printActions(actions: Action[]): void {
 
 function printChecks(checks: EnvironmentCheck[]): void {
   for (const check of checks) console.log(`  [${check.status}] ${check.label}: ${check.detail}`);
+}
+
+function packageSourceOptions(options: { ref?: string; subdir?: string }) {
+  return {
+    ...(options.ref ? { ref: options.ref } : {}),
+    ...(options.subdir ? { subdirectory: options.subdir } : {}),
+  };
+}
+
+function printPackageProvenance(lock: LockedPackage, indent = "  "): void {
+  console.log(`${indent}source        ${lock.source}`);
+  if (lock.subdirectory) console.log(`${indent}subdir        ${lock.subdirectory}`);
+  if (lock.requestedRef) console.log(`${indent}ref           ${lock.requestedRef}`);
+  if (lock.commit) console.log(`${indent}commit        ${lock.commit}`);
+  console.log(`${indent}integrity     ${lock.integrity}`);
 }
 
 program
@@ -238,6 +253,10 @@ program
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
     console.log(`  packages  ${lockedPackages.map((pkg) => `${pkg.name}@${pkg.version}`).join(", ") || "none"}`);
+    for (const locked of lockedPackages) {
+      console.log(`    ${locked.name}@${locked.version}`);
+      printPackageProvenance(locked, "      ");
+    }
     console.log("  skills");
     let resourceCount = 0;
     for (const loaded of available) {
@@ -327,13 +346,17 @@ program
   .command("install <source>")
   .description("install a package and its dependencies into an environment")
   .option("-n, --name <environment>", "destination environment; defaults to the active environment, then base")
-  .action(async (source: string, options: { name?: string }, command: Command) => {
+  .option("--ref <ref>", "Git branch, tag, or commit to resolve")
+  .option("--subdir <path>", "Package subdirectory within the Git repository")
+  .action(async (source: string, options: { name?: string; ref?: string; subdir?: string }, command: Command) => {
     const project = projectRoot(command);
     const environmentName = selectedEnvironment(options.name);
     await ensureSelectedBase(project, environmentName);
-    const result = await installIntoEnvironment(project, environmentName, source, process.cwd());
+    const result = await installIntoEnvironment(project, environmentName, source, process.cwd(), {
+      sourceOptions: packageSourceOptions(options),
+    });
     console.log(`Installed ${result.root.lock.name}@${result.root.lock.version} into ${environmentName}`);
-    console.log(`  source        ${result.root.lock.source}`);
+    printPackageProvenance(result.root.lock);
     if (result.packages.length > 1) {
       console.log(`  dependencies  ${result.packages.slice(0, -1).map((pkg) => `${pkg.lock.name}@${pkg.lock.version}`).join(", ")}`);
     }
@@ -453,7 +476,9 @@ program
   .command("inspect <source-or-name>")
   .description("show a package manifest from a source or environment lock")
   .option("-n, --name <environment>", "environment containing the locked package")
-  .action(async (sourceOrName: string, options: { name?: string }, command: Command) => {
+  .option("--ref <ref>", "Git branch, tag, or commit to resolve")
+  .option("--subdir <path>", "Package subdirectory within the Git repository")
+  .action(async (sourceOrName: string, options: { name?: string; ref?: string; subdir?: string }, command: Command) => {
     let pkg;
     if (options.name) {
       const lock = await readEnvironmentLock(projectRoot(command), options.name);
@@ -461,11 +486,12 @@ program
       if (!locked) throw new Error(`${sourceOrName} is not installed in environment ${options.name}`);
       pkg = await loadCachedPackage(locked);
     } else {
-      pkg = await installPackageSource(sourceOrName, process.cwd());
+      pkg = await installPackageSource(sourceOrName, process.cwd(), packageSourceOptions(options));
     }
     const manifest = pkg.manifest;
     console.log(`${manifest.metadata.name}@${manifest.metadata.version}`);
     console.log(manifest.metadata.description);
+    printPackageProvenance(pkg.lock);
     console.log(`  platforms     ${manifest.spec.platforms.join(", ")}`);
     console.log(`  dependencies  ${manifest.spec.dependencies.map((dependency) => `${dependency.name}@${dependency.version}`).join(", ") || "none"}`);
     console.log(`  entrypoints   ${manifest.spec.entrypoints.map((entrypoint) => entrypoint.name).join(", ") || "none"}`);

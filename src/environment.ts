@@ -7,7 +7,7 @@ import { z } from "zod";
 import { AGENT_SESSION_ENTRIES, AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
 import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
 import { withEnvironmentLock, withProjectLock } from "./environment-lock.js";
-import { installPackageTree, loadCachedPackage, syncLockedPackage, type PackageInstallPlan } from "./package.js";
+import { installPackageTree, loadCachedPackage, syncLockedPackage, type PackageInstallPlan, type PackageSourceOptions } from "./package.js";
 import {
   prepareProjectMemoryInitialization,
   localMemoryPath,
@@ -37,6 +37,9 @@ const lockedPackageSchema = z
     version: z.string().min(1),
     source: z.string().min(1),
     resolved: z.string().min(1),
+    requestedRef: z.string().min(1).optional(),
+    commit: z.string().regex(/^[a-f0-9]{40,64}$/, "must be a full lowercase hexadecimal commit SHA").optional(),
+    subdirectory: z.string().min(1).optional(),
     integrity: z.string().min(1),
     cacheKey: z.string().regex(/^[a-f0-9]{20}$/, "must be a 20-character lowercase hexadecimal cache key"),
     dependencies: z.array(environmentName),
@@ -111,6 +114,7 @@ interface LoadedEnvironment {
 }
 
 interface EnvironmentInstallHooks {
+  sourceOptions?: PackageSourceOptions;
   onResourcesApplied?: () => Promise<void> | void;
   onViewPrepared?: () => Promise<void> | void;
   onMetadataPrepared?: () => Promise<void> | void;
@@ -561,7 +565,9 @@ export async function installPackagesIntoEnvironment(
     validateEnvironmentLockGraph(environment, currentLock);
     const previous = await loadEnvironmentSnapshot(environment, currentLock);
     const installations: PackageInstallPlan[] = [];
-    for (const source of sources) installations.push(await installPackageTree(source, cwd));
+    for (const source of sources) {
+      installations.push(await installPackageTree(source, cwd, sources.length === 1 ? hooks.sourceOptions : {}));
+    }
     const resolved = new Map<string, InstalledPackage>();
     for (const installation of installations) {
       const foundationalSource = FOUNDATIONAL_SOURCES.get(installation.root.lock.name as typeof FOUNDATIONAL_PACKAGES[number]);

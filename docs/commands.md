@@ -60,7 +60,7 @@ Bundles contain Package files, Skills, MCP definitions, Hooks, source provenance
 ## Package installation
 
 ```bash
-harness install [-n <environment>] <source>
+harness install [-n <environment>] [--ref <ref>] [--subdir <path>] <source>
 ```
 
 When `--name` is omitted, installation uses the current shell's `HARNESS_ENV` and falls back to `base` when it is unset.
@@ -70,9 +70,9 @@ Supported sources:
 ```text
 builtin:<name>
 ./local/path
-gh:<owner>/<repository>#<revision>
-https://host/repository.git#<revision>
-git@host:owner/repository.git#<revision>
+gh:<owner>/<repository>#<ref>
+https://host/repository.git#<ref>
+git@host:owner/repository.git#<ref>
 ```
 
 Each materialized source resolves to exactly one Package by the following ordered rules:
@@ -84,7 +84,9 @@ Each materialized source resolves to exactly one Package by the following ordere
 
 Recognition is intentionally non-recursive. A repository root containing several nested Package directories is a collection, not an installable Package; install one child directory explicitly. Harness does not invoke an Agent, infer MCP servers, Hooks, dependencies, or entrypoints, or write a generated manifest into the source.
 
-For an implicit Package, Harness parses each Skill's `name` and `description` from YAML frontmatter, copies the selected self-contained Skill directories into temporary staging, and generates a deterministic `harness.yaml` supporting Codex, Claude, and Pi. A standalone Package uses the Skill name as its Package name. A multi-Skill Package derives its name from the local source directory or Git repository. Its informational version is `0.0.0+local.<content>` for local content or `0.0.0+git.<commit>` for Git. The ordinary manifest, symlink, identity, ownership, cache, and Environment transaction validation then applies.
+For a Package below a Git repository root, pass `--subdir` with a normalized repository-relative path. `--ref` accepts a branch, tag, or full commit SHA and defaults to the repository's default branch. Harness resolves the requested ref to one immutable full commit before publication. The Environment lock keeps the source repository, subdirectory, requested ref, full commit, and normalized content integrity as distinct provenance. `harness sync` uses the locked commit even after a branch or tag moves, and the original clone is not required after installation.
+
+For an implicit Package, Harness parses each Skill's `name` and `description` from YAML frontmatter, copies the selected self-contained Skill directories into temporary staging, and generates a deterministic `harness.yaml` supporting Codex, Claude, and Pi. A standalone Package uses the Skill name as its Package name. A multi-Skill Package derives its name from the selected local or Git source directory. Its informational version is `0.0.0+local.<content>` for local content or `0.0.0+git.<commit>` for Git. The ordinary manifest, symlink, identity, ownership, cache, and Environment transaction validation then applies.
 
 Installation recursively resolves dependencies, validates Package and Skill identities and SemVer constraints, rejects cycles and source conflicts, and publishes one complete global Agent view generation atomically. Package Store entries are read-only after publication. Every project using that Environment observes the new view without reactivation; already-running Agent processes may need a restart to rediscover Skills.
 
