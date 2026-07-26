@@ -21,6 +21,7 @@ import {
   readEnvironmentLock,
   removeEnvironment,
   syncEnvironment,
+  uninstallFromEnvironment,
   type BaseEnvironmentInitializationOptions,
   type EnvironmentCheck,
 } from "./environment.js";
@@ -359,6 +360,29 @@ program
     if (result.packages.length > 1) {
       console.log(`  dependencies  ${result.packages.slice(0, -1).map((pkg) => `${pkg.lock.name}@${pkg.lock.version}`).join(", ")}`);
     }
+  });
+
+program
+  .command("uninstall <package>")
+  .description("remove a root Package and dependencies no longer required by an environment")
+  .option("-n, --name <environment>", "environment to update; defaults to the active environment, then base")
+  .option("-d, --dry-run", "show the removal plan without changing files", false)
+  .action(async (packageName: string, options: { name?: string; dryRun: boolean }, command: Command) => {
+    const project = projectRoot(command);
+    const environmentName = selectedEnvironment(options.name);
+    if (!options.dryRun) await ensureSelectedBase(project, environmentName);
+    const result = await uninstallFromEnvironment(project, environmentName, packageName, { dryRun: options.dryRun });
+    console.log(
+      options.dryRun
+        ? `Uninstall plan for ${packageName} from ${environmentName}`
+        : `Uninstalled ${packageName} from ${environmentName}`,
+    );
+    console.log(`  ${options.dryRun ? "remove" : "removed"} root       ${result.root.lock.name}`);
+    console.log(`  ${options.dryRun ? "prune" : "pruned"} packages    ${result.packages.map((pkg) => pkg.lock.name).join(", ") || "none"}`);
+    console.log(`  ${options.dryRun ? "remove" : "removed"} Skills     ${result.skills.join(", ") || "none"}`);
+    console.log(`  ${options.dryRun ? "remove" : "removed"} MCP servers ${result.mcpServers.join(", ") || "none"}`);
+    console.log(`  ${options.dryRun ? "remove" : "removed"} Hooks      ${result.hooks.join(", ") || "none"}`);
+    if (options.dryRun) console.log("No changes made.");
   });
 
 program

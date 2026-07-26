@@ -592,3 +592,69 @@ test("CLI atomically switches environments", { concurrency: false }, async () =>
     await removeTestTree(root);
   }
 });
+
+test("CLI uninstalls from active and explicitly named inactive Environments with a dry-run preview", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-uninstall-"));
+  const home = path.join(root, "home");
+  const project = path.join(root, "project");
+  const previousEnvironment = process.env.HARNESS_ENV;
+  try {
+    const removable = await packageFixture(root, "removable-package");
+    for (const name of ["active-tools", "inactive-tools"]) {
+      const create = await runCli(["--project", project, "env", "create", name], root, home);
+      assert.equal(create.code, 0, create.stderr);
+      const install = await runCli(["--project", project, "install", "-n", name, removable], root, home);
+      assert.equal(install.code, 0, install.stderr);
+    }
+    const inactiveRecipe = path.join(home, "environments", "inactive-tools", "environment.yaml");
+    const beforePreview = await readFile(inactiveRecipe, "utf8");
+
+    const preview = await runCli(
+      ["--project", project, "uninstall", "removable-package", "-n", "inactive-tools", "-d"],
+      root,
+      home,
+    );
+    assert.equal(preview.code, 0, preview.stderr);
+    assert.match(preview.stdout, /Uninstall plan for removable-package from inactive-tools/);
+    assert.match(preview.stdout, /remove root\s+removable-package/);
+    assert.match(preview.stdout, /prune packages\s+removable-package/);
+    assert.match(preview.stdout, /remove Skills\s+removable-package/);
+    assert.match(preview.stdout, /No changes made\./);
+    assert.equal(await readFile(inactiveRecipe, "utf8"), beforePreview);
+
+    const inactive = await runCli(
+      ["--project", project, "uninstall", "removable-package", "--name", "inactive-tools"],
+      root,
+      home,
+    );
+    assert.equal(inactive.code, 0, inactive.stderr);
+    assert.match(inactive.stdout, /Uninstalled removable-package from inactive-tools/);
+    await assert.rejects(
+      access(path.join(home, "environments", "inactive-tools", "view", "codex", "skills", "removable-package")),
+      /ENOENT/,
+    );
+
+    process.env.HARNESS_ENV = "active-tools";
+    const active = await runCli(["--project", project, "uninstall", "removable-package"], root, home);
+    assert.equal(active.code, 0, active.stderr);
+    assert.match(active.stdout, /Uninstalled removable-package from active-tools/);
+    await assert.rejects(
+      access(path.join(home, "environments", "active-tools", "view", "claude", "skills", "removable-package")),
+      /ENOENT/,
+    );
+
+    const baseInstall = await runCli(["--project", project, "install", "--name", "base", removable], root, home);
+    assert.equal(baseInstall.code, 0, baseInstall.stderr);
+    const base = await runCli(["--project", project, "uninstall", "--name", "base", "removable-package"], root, home);
+    assert.equal(base.code, 0, base.stderr);
+    assert.match(base.stdout, /Uninstalled removable-package from base/);
+    const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
+      packages: Record<string, unknown>;
+    };
+    assert.deepEqual(Object.keys(baseLock.packages), ["harness-project-memory", "harness-package-builder"]);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
+    await removeTestTree(root);
+  }
+});
