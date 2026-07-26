@@ -147,6 +147,83 @@ spec:
   return packageRoot;
 }
 
+test("CLI reports existing Agent state once without contaminating stdout", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-existing-state-"));
+  const home = path.join(root, "home");
+  const codex = path.join(root, "codex-private-name");
+  const previous = {
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    await mkdir(path.join(codex, "skills"), { recursive: true });
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+
+    const first = await runCli(["info", "--json"], root, home);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal((JSON.parse(first.stdout) as { environment: { name: string } }).environment.name, "base");
+    assert.match(first.stderr, /Harness created an isolated base Environment/);
+    assert.match(first.stderr, /harness migrate skills --dry-run/);
+    assert.match(first.stderr, /harness migrate sessions --dry-run/);
+    assert.doesNotMatch(first.stderr, /codex-private-name/);
+
+    const second = await runCli(["list"], root, home);
+    assert.equal(second.code, 0, second.stderr);
+    assert.match(second.stdout, /Environment: base/);
+    assert.equal(second.stderr, "");
+  } finally {
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
+test("CLI shell hook keeps existing-state guidance off stdout", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-hook-existing-state-"));
+  const home = path.join(root, "home");
+  const previous = {
+    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  try {
+    const codex = path.join(root, "codex");
+    await mkdir(path.join(codex, "sessions"), { recursive: true });
+    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
+    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+
+    const hook = await runCli(["shell", "hook", "bash"], root, home);
+    assert.equal(hook.code, 0, hook.stderr);
+    assert.match(hook.stdout, /^# harness-conda shell hook \(bash\)/);
+    assert.doesNotMatch(hook.stdout, /isolated base Environment|migrate skills/);
+    assert.match(hook.stderr, /Harness created an isolated base Environment/);
+
+    const script = path.join(root, "hook.sh");
+    await write(script, hook.stdout);
+    const syntax = await new Promise<CommandResult>((resolve, reject) => {
+      const child = spawn("bash", ["-n", script], { stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.on("error", reject);
+      child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    });
+    assert.equal(syntax.code, 0, syntax.stderr);
+
+    const repeated = await runCli(["shell", "hook", "bash"], root, home);
+    assert.equal(repeated.stderr, "");
+  } finally {
+    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    await removeTestTree(root);
+  }
+});
+
 test("built CLI entrypoint is executable", async () => {
   await access(path.resolve("dist/src/cli.js"), constants.X_OK);
 });

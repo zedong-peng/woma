@@ -65,6 +65,10 @@ pi
 
 If Harness detects a running Agent process for the current user, it lists the process and requires an interactive `yes` confirmation. Non-interactive migration stops with an error.
 
+If the first implicit `base` creation detects known existing Codex or Claude Skill/session locations, Harness prints a one-time notice to stderr. The check reads filesystem metadata only: it does not enumerate names, read contents, or import anything. Original Agent homes remain unchanged, while supported credentials and provider configuration continue to seed separately.
+
+This follows Conda's conservative model: discovering compatible existing state does not adopt it. Just as Conda does not silently turn an arbitrary Python or `venv` installation into a Conda Environment, Harness does not turn an existing Agent home into a Harness Environment.
+
 **Run a dry run first, then repeat without `--dry-run`:**
 
 ```bash
