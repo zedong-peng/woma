@@ -78,7 +78,12 @@ export interface LockedPackage {
   name: string;
   version: string;
   source: string;
-  resolved: string;
+  commit?: string | undefined;
+  subdirectory?: string | undefined;
+  /** Legacy lock compatibility. New locks use commit for Git Packages. */
+  resolved?: string | undefined;
+  /** Legacy lock compatibility. New locks do not preserve moving refs. */
+  requestedRef?: string | undefined;
   integrity: string;
   cacheKey: string;
   dependencies: string[];
