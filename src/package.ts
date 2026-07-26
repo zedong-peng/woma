@@ -14,8 +14,14 @@ import type { HarnessManifest, InstalledPackage, LockedPackage, PackageDependenc
 interface MaterializedSource {
   root: string;
   source: string;
-  resolved: string;
+  commit?: string;
+  subdirectory?: string;
   cleanup?: () => Promise<void>;
+}
+
+export interface PackageSourceOptions {
+  commit?: string;
+  subdirectory?: string;
 }
 
 interface SkillMetadata {
@@ -95,35 +101,71 @@ function normalizeGitSource(source: string): { url: string; canonical: string; r
   return undefined;
 }
 
-async function materializeSource(source: string, cwd: string): Promise<MaterializedSource> {
+function normalizedSubdirectory(input: string): string {
+  if (
+    input === "" ||
+    input.startsWith("-") ||
+    input.startsWith("/") ||
+    input.includes("\\") ||
+    /^[A-Za-z]:/.test(input) ||
+    path.posix.normalize(input) !== input ||
+    input.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) throw new Error(`Unsafe Git subdirectory: ${input}`);
+  return input;
+}
+
+async function materializeSource(source: string, cwd: string, options: PackageSourceOptions = {}): Promise<MaterializedSource> {
   if (source.startsWith("builtin:")) {
     const name = source.slice("builtin:".length);
     const root = builtinPath(name);
     if (!(await pathExists(root))) throw new Error(`Built-in Harness is missing from this installation: ${name}`);
-    return { root, source: `builtin:${name}`, resolved: "builtin" };
+    return { root, source: `builtin:${name}` };
   }
   const git = normalizeGitSource(source);
+  if ((options.commit || options.subdirectory) && !git) throw new Error("--commit and --subdir require a Git source");
   if (!git) {
     const root = path.resolve(cwd, source.replace(/^file:/, ""));
     if (!(await pathExists(root))) throw new Error(`Local source does not exist: ${root}`);
-    return { root, source: `file:${root}`, resolved: "local" };
+    return { root, source: `file:${root}` };
   }
+
+  if (options.commit && !/^[a-f0-9]{40,64}$/.test(options.commit)) {
+    throw new Error("--commit must be a full lowercase hexadecimal commit SHA");
+  }
+  const requestedCommit = options.commit ?? git.ref;
+  if (options.commit && git.ref && options.commit !== git.ref) {
+    throw new Error("Specify the Git commit either in the source or with --commit, not both");
+  }
+  const subdirectory = options.subdirectory ? normalizedSubdirectory(options.subdirectory) : undefined;
 
   const temp = await mkdtemp(path.join(os.tmpdir(), "harness-conda-"));
   try {
-    if (git.ref) {
-      await run("git", ["clone", "--filter=blob:none", "--no-checkout", "--", git.url, temp]);
-      await run("git", ["fetch", "--depth", "1", "origin", git.ref], temp);
+    if (requestedCommit) {
+      await run("git", ["init", "--", temp]);
+      await run("git", ["fetch", "--filter=blob:none", "--depth", "1", "--", git.url, requestedCommit], temp);
       await run("git", ["checkout", "--detach", "FETCH_HEAD"], temp);
     } else {
       await rm(temp, { recursive: true, force: true });
       await run("git", ["clone", "--depth", "1", "--", git.url, temp]);
     }
-    const resolved = await run("git", ["rev-parse", "HEAD"], temp);
+    const commit = await run("git", ["rev-parse", "HEAD"], temp);
+    let root = temp;
+    if (subdirectory) {
+      const candidate = path.join(temp, ...subdirectory.split("/"));
+      const info = await lstat(candidate).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") throw new Error(`Git subdirectory does not exist: ${subdirectory}`);
+        throw error;
+      });
+      if (info.isSymbolicLink()) throw new Error(`Git subdirectory is an unsupported symlink: ${subdirectory}`);
+      if (!info.isDirectory()) throw new Error(`Git subdirectory is not a directory: ${subdirectory}`);
+      assertInside(await realpath(temp), await realpath(candidate), "Git subdirectory");
+      root = candidate;
+    }
     return {
-      root: temp,
-      source: git.canonical,
-      resolved,
+      root,
+      source: splitRef(git.canonical).locator,
+      commit,
+      ...(subdirectory ? { subdirectory } : {}),
       cleanup: () => rm(temp, { recursive: true, force: true }),
     };
   } catch (error) {
@@ -133,6 +175,7 @@ async function materializeSource(source: string, cwd: string): Promise<Materiali
 }
 
 function sourceDirectoryName(materialized: MaterializedSource): string {
+  if (materialized.subdirectory) return path.posix.basename(materialized.subdirectory);
   if (materialized.source.startsWith("file:") || materialized.source.startsWith("builtin:")) {
     return path.basename(materialized.root);
   }
@@ -246,13 +289,13 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
       await copyImplicitSkill(skill.sourceRoot, path.join(stagingRoot, "skills", skill.targetName));
     }
     const contentHash = (await hashDirectory(stagingRoot)).slice("sha256-".length);
-    const revision = materialized.resolved === "local" ? `local.${contentHash.slice(0, 12)}` : `git.${materialized.resolved.slice(0, 12)}`;
+    const versionIdentity = materialized.commit ? `git.${materialized.commit.slice(0, 12)}` : `local.${contentHash.slice(0, 12)}`;
     const manifest: HarnessManifest = {
       apiVersion: "harness.conda/v1",
       kind: "Harness",
       metadata: {
         name: packageName,
-        version: `0.0.0+${revision}`,
+        version: `0.0.0+${versionIdentity}`,
         description,
         tags: [],
       },
@@ -281,8 +324,8 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
   }
 }
 
-async function materializePackageSource(source: string, cwd: string): Promise<MaterializedSource> {
-  const materialized = await materializeSource(source, cwd);
+async function materializePackageSource(source: string, cwd: string, options: PackageSourceOptions = {}): Promise<MaterializedSource> {
+  const materialized = await materializeSource(source, cwd, options);
   try {
     return await normalizeMaterializedSource(materialized);
   } catch (error) {
@@ -383,8 +426,12 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
   }
 }
 
-export function packageCacheKey(source: string, resolved: string, integrity: string): string {
-  return createHash("sha256").update(`${source}\0${resolved}\0${integrity}`).digest("hex").slice(0, 20);
+export function packageCacheKey(source: string, identity: string, integrity: string): string {
+  return createHash("sha256").update(`${source}\0${identity}\0${integrity}`).digest("hex").slice(0, 20);
+}
+
+function lockedIdentity(lock: LockedPackage): string {
+  return lock.commit ?? lock.resolved ?? lock.integrity;
 }
 
 function copyFilter(source: string): boolean {
@@ -465,8 +512,7 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
   const manifest = await loadManifest(materialized.root);
   await validatePackage(materialized.root, manifest);
   const integrity = await hashDirectory(materialized.root);
-  const resolved = materialized.resolved === "local" || materialized.resolved === "builtin" ? integrity : materialized.resolved;
-  const key = packageCacheKey(materialized.source, resolved, integrity);
+  const key = packageCacheKey(materialized.source, materialized.commit ?? integrity, integrity);
   const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
   await withPackageLock(manifest.metadata.name, key, async () => {
     if (await pathExists(cacheRoot)) {
@@ -484,7 +530,8 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
     name: manifest.metadata.name,
     version: manifest.metadata.version,
     source: materialized.source,
-    resolved,
+    ...(materialized.commit ? { commit: materialized.commit } : {}),
+    ...(materialized.subdirectory ? { subdirectory: materialized.subdirectory } : {}),
     integrity,
     cacheKey: key,
     dependencies: manifest.spec.dependencies.map((dependency) => dependency.name),
@@ -493,8 +540,8 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
   return { manifest, root: cacheRoot, lock };
 }
 
-export async function installPackageSource(source: string, cwd = process.cwd()): Promise<InstalledPackage> {
-  const materialized = await materializePackageSource(source, cwd);
+export async function installPackageSource(source: string, cwd = process.cwd(), options: PackageSourceOptions = {}): Promise<InstalledPackage> {
+  const materialized = await materializePackageSource(source, cwd, options);
   try {
     return await cacheMaterializedPackage(materialized);
   } finally {
@@ -515,13 +562,13 @@ function assertDependency(dependency: PackageDependency, pkg: InstalledPackage):
   }
 }
 
-export async function installPackageTree(source: string, cwd = process.cwd()): Promise<PackageInstallPlan> {
+export async function installPackageTree(source: string, cwd = process.cwd(), options: PackageSourceOptions = {}): Promise<PackageInstallPlan> {
   const resolved = new Map<string, InstalledPackage>();
   const visiting: string[] = [];
   const ordered: InstalledPackage[] = [];
 
   async function visit(candidateSource: string, candidateCwd: string, dependency?: PackageDependency): Promise<InstalledPackage> {
-    const materialized = await materializePackageSource(candidateSource, candidateCwd);
+    const materialized = await materializePackageSource(candidateSource, candidateCwd, candidateSource === source ? options : {});
     try {
       const pkg = await cacheMaterializedPackage(materialized);
       if (dependency) assertDependency(dependency, pkg);
@@ -537,7 +584,7 @@ export async function installPackageTree(source: string, cwd = process.cwd()): P
         const sameResolution =
           existing.lock.version === pkg.lock.version &&
           existing.lock.source === pkg.lock.source &&
-          existing.lock.resolved === pkg.lock.resolved &&
+          existing.lock.commit === pkg.lock.commit &&
           existing.lock.integrity === pkg.lock.integrity;
         if (!sameResolution) {
           throw new Error(
@@ -598,7 +645,7 @@ export function loadCachedPackage(lock: LockedPackage): Promise<InstalledPackage
 }
 
 export async function validateLockedPackageDirectory(lock: LockedPackage, root: string): Promise<HarnessManifest> {
-  if (packageCacheKey(lock.source, lock.resolved, lock.integrity) !== lock.cacheKey) {
+  if (packageCacheKey(lock.source, lockedIdentity(lock), lock.integrity) !== lock.cacheKey) {
     throw new Error(`Package ${lock.name} has a cache key that does not match its locked source and integrity`);
   }
   const integrity = await hashDirectory(root);
@@ -645,12 +692,11 @@ export async function validateBuiltinPackageLock(lock: LockedPackage): Promise<v
     name: manifest.metadata.name,
     version: manifest.metadata.version,
     source,
-    resolved: integrity,
     integrity,
     cacheKey: packageCacheKey(source, integrity, integrity),
     dependencies: manifest.spec.dependencies.map((dependency) => dependency.name),
   };
-  for (const key of ["name", "version", "source", "resolved", "integrity", "cacheKey"] as const) {
+  for (const key of ["name", "version", "source", "integrity", "cacheKey"] as const) {
     if (lock[key] !== expected[key]) {
       throw new Error(`Bundled foundational Package ${lock.name} does not match the installed ${source}`);
     }
@@ -660,10 +706,11 @@ export async function validateBuiltinPackageLock(lock: LockedPackage): Promise<v
   }
 }
 
-function sourceAtRevision(source: string, resolved: string): string {
+function sourceAtCommit(source: string, commit?: string): string {
   if (source.startsWith("file:") || source.startsWith("builtin:")) return source;
+  if (!commit) throw new Error("Locked Git Package has no commit");
   const { locator } = splitRef(source);
-  return `${locator}#${resolved}`;
+  return `${locator}#${commit}`;
 }
 
 export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
@@ -675,7 +722,10 @@ export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledP
       } catch {}
     }
 
-    const materialized = await materializePackageSource(sourceAtRevision(lock.source, lock.resolved), process.cwd());
+    const commit = lock.commit ?? lock.resolved;
+    const materialized = await materializePackageSource(sourceAtCommit(lock.source, commit), process.cwd(), {
+      ...(lock.subdirectory ? { subdirectory: lock.subdirectory } : {}),
+    });
     try {
       const manifest = await loadManifest(materialized.root);
       await validatePackage(materialized.root, manifest);
@@ -688,8 +738,8 @@ export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledP
       if (integrity !== lock.integrity) {
         throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
       }
-      if (!lock.source.startsWith("file:") && !lock.source.startsWith("builtin:") && materialized.resolved !== lock.resolved) {
-        throw new Error(`Locked revision mismatch for ${lock.name}: expected ${lock.resolved}, got ${materialized.resolved}`);
+      if (commit && materialized.commit !== commit) {
+        throw new Error(`Locked commit mismatch for ${lock.name}: expected ${commit}, got ${materialized.commit}`);
       }
       await populateCache(materialized.root, expectedRoot, manifest, integrity);
       await verifyCache(expectedRoot, manifest, integrity);
