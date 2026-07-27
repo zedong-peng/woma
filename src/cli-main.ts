@@ -19,6 +19,7 @@ import {
   listEnvironments,
   readEnvironmentLock,
   removeEnvironment,
+  renameEnvironment,
   uninstallFromEnvironment,
   type BaseEnvironmentInitializationOptions,
   type EnvironmentCheck,
@@ -30,6 +31,7 @@ import { initializeShell } from "./shell-init.js";
 import { createWorkflowSkeleton } from "./skeleton.js";
 import { migrateExistingSkills, type SkillMigrationSource } from "./migrate-skills.js";
 import { migrateExistingSessions } from "./migrate-sessions.js";
+import { runInEnvironment } from "./run.js";
 import type { Action, LockedPackage, Platform } from "./types.js";
 
 const EXISTING_AGENT_STATE_NOTICE = `Harness created an isolated base Environment.
@@ -122,7 +124,7 @@ program
   .version("0.6.0")
   .enablePositionalOptions()
   .configureHelp({ sortSubcommands: true })
-  .option("-p, --project <directory>", "project whose Memory is managed; defaults to the current directory");
+  .option("-p, --project <directory>", "project root; defaults to the current directory");
 
 program
   .command("init [shell]")
@@ -162,6 +164,40 @@ skeletonCommand
 
 const envCommand = program.command("env").description("manage isolated Agent environments");
 
+interface CreateOptions {
+  name: string;
+  target?: string;
+  file?: string;
+}
+
+async function createCommand(options: CreateOptions, command: Command): Promise<void> {
+  const project = projectRoot(command);
+  if (options.file) {
+    if (options.target) throw new Error("--target cannot be combined with --file");
+    const result = await importEnvironmentBundle(project, options.file, options.name);
+    console.log(`Created environment ${result.snapshot.environment.metadata.name} from ${result.path}`);
+    console.log(`  targets   ${result.snapshot.environment.spec.targets.join(", ")}`);
+    console.log(`  packages  ${result.packages}`);
+    return;
+  }
+  await ensureSelectedBase(project, options.name);
+  const environment = await createEnvironment(project, options.name, targets(options.target ?? "both"));
+  const lock = await readEnvironmentLock(project, options.name);
+  console.log(`Created global environment ${options.name}`);
+  console.log(`  recipe  ${environmentPath(project, options.name)}`);
+  console.log(`  lock    ${environmentLockPath(project, options.name)}`);
+  console.log(`  foundational ${FOUNDATIONAL_PACKAGES.map((packageName) => `${packageName}@${lock.packages[packageName]?.version}`).join(", ")}`);
+  console.log(`  targets ${environment.spec.targets.join(", ")}`);
+}
+
+program
+  .command("create")
+  .description("create a new Agent environment")
+  .requiredOption("-n, --name <environment>", "environment name")
+  .option("-t, --target <target>", "codex, claude, pi, both, all, or a comma-separated list")
+  .option("-f, --file <bundle>", "create from a portable .harness-env bundle")
+  .action(createCommand);
+
 function migrationSource(input: string): SkillMigrationSource {
   if (input !== "codex" && input !== "claude" && input !== "both") {
     throw new Error("--from must be codex, claude, or both");
@@ -174,15 +210,7 @@ envCommand
   .description("create a global named environment with the foundational packages")
   .option("-t, --target <target>", "codex, claude, pi, both, all, or a comma-separated list", "both")
   .action(async (name: string, options: { target: string }, command: Command) => {
-    const project = projectRoot(command);
-    await ensureSelectedBase(project, name);
-    const environment = await createEnvironment(project, name, targets(options.target));
-    const lock = await readEnvironmentLock(project, name);
-    console.log(`Created global environment ${name}`);
-    console.log(`  recipe  ${environmentPath(project, name)}`);
-    console.log(`  lock    ${environmentLockPath(project, name)}`);
-    console.log(`  foundational ${FOUNDATIONAL_PACKAGES.map((packageName) => `${packageName}@${lock.packages[packageName]?.version}`).join(", ")}`);
-    console.log(`  targets ${environment.spec.targets.join(", ")}`);
+    await createCommand({ name, target: options.target }, command);
   });
 
 const migrateCommand = program.command("migrate").description("explicitly migrate existing Agent configuration into an Environment");
@@ -372,15 +400,19 @@ envCommand
     console.log(`  bytes     ${result.bytes}`);
   });
 
-envCommand
-  .command("import <bundle>")
-  .description("atomically import a portable Environment bundle")
-  .option("--name <environment>", "destination environment name; defaults to the exported name")
-  .action(async (bundle: string, options: { name?: string }, command: Command) => {
-    const result = await importEnvironmentBundle(projectRoot(command), bundle, options.name);
-    console.log(`Imported environment ${result.snapshot.environment.metadata.name} from ${result.path}`);
-    console.log(`  targets   ${result.snapshot.environment.spec.targets.join(", ")}`);
+program
+  .command("export")
+  .description("export a portable Environment bundle with its complete Package closure")
+  .option("-n, --name <environment>", "environment to export; defaults to the active environment, then base")
+  .requiredOption("-f, --file <file>", "destination .harness-env file")
+  .action(async (options: { name?: string; file: string }, command: Command) => {
+    const project = projectRoot(command);
+    const name = selectedEnvironment(options.name);
+    await ensureSelectedBase(project, name);
+    const result = await exportEnvironmentBundle(project, name, options.file);
+    console.log(`Exported environment ${result.environment} to ${result.path}`);
     console.log(`  packages  ${result.packages}`);
+    console.log(`  bytes     ${result.bytes}`);
   });
 
 program
@@ -403,7 +435,8 @@ program
   });
 
 program
-  .command("uninstall <package>")
+  .command("remove <package>")
+  .alias("uninstall")
   .description("remove a root Package and dependencies no longer required by an environment")
   .option("-n, --name <environment>", "environment to update; defaults to the active environment, then base")
   .option("-d, --dry-run", "show the removal plan without changing files", false)
@@ -414,8 +447,8 @@ program
     const result = await uninstallFromEnvironment(project, environmentName, packageName, { dryRun: options.dryRun });
     console.log(
       options.dryRun
-        ? `Uninstall plan for ${packageName} from ${environmentName}`
-        : `Uninstalled ${packageName} from ${environmentName}`,
+        ? `Removal plan for ${packageName} from ${environmentName}`
+        : `Removed ${packageName} from ${environmentName}`,
     );
     console.log(`  ${options.dryRun ? "remove" : "removed"} root       ${result.root.lock.name}`);
     console.log(`  ${options.dryRun ? "prune" : "pruned"} packages    ${result.packages.map((pkg) => pkg.lock.name).join(", ") || "none"}`);
@@ -423,6 +456,34 @@ program
     console.log(`  ${options.dryRun ? "remove" : "removed"} MCP servers ${result.mcpServers.join(", ") || "none"}`);
     console.log(`  ${options.dryRun ? "remove" : "removed"} Hooks      ${result.hooks.join(", ") || "none"}`);
     if (options.dryRun) console.log("No changes made.");
+  });
+
+program
+  .command("rename <destination>")
+  .description("rename an existing Agent environment")
+  .requiredOption("-n, --name <environment>", "environment to rename")
+  .action(async (destination: string, options: { name: string }, command: Command) => {
+    await renameEnvironment(projectRoot(command), options.name, destination);
+    console.log(`Renamed environment ${options.name} to ${destination}`);
+  });
+
+program
+  .command("run <executable> [args...]")
+  .description("run a command in an Agent environment")
+  .option("-n, --name <environment>", "environment to use; defaults to the active environment, then base")
+  .option("--cwd <directory>", "working directory for the command")
+  .passThroughOptions()
+  .action(async (executable: string, args: string[], options: { name?: string; cwd?: string }, command: Command) => {
+    const project = projectRoot(command);
+    const name = selectedEnvironment(options.name);
+    await ensureSelectedBase(project, name);
+    process.exitCode = await runInEnvironment({
+      projectRoot: project,
+      environment: name,
+      executable,
+      args,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+    });
   });
 
 program

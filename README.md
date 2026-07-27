@@ -55,7 +55,7 @@ codex
 Use `claude` instead of `codex` to start Claude Code. Pi is opt-in because the existing `base` compatibility default targets Codex and Claude; create a Pi Environment explicitly:
 
 ```bash
-harness env create pi-work --target pi
+harness create --name pi-work --target pi
 harness activate pi-work
 pi
 ```
@@ -88,16 +88,15 @@ Use `--from codex` or `--from claude` to migrate one Agent only. Use `--name <en
 Create, inspect, activate, and remove an Environment:
 
 ```bash
-harness env create performance --target codex
+harness create --name performance --target codex
 harness install --name performance builtin:performance-engineering
 harness list --name performance
-harness uninstall --name performance performance-engineering --dry-run
-harness uninstall --name performance performance-engineering
-harness activate performance
-codex
+harness remove --name performance performance-engineering --dry-run
+harness remove --name performance performance-engineering
+harness run --name performance codex
 
-harness deactivate
-harness env remove performance
+harness rename --name performance performance-v2
+harness env remove performance-v2
 ```
 
 **Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex, Claude, or Pi process after switching Environments or installing Packages.
@@ -108,10 +107,10 @@ harness env remove performance
 harness install ./downloaded-skill
 harness install gh:owner/skill-repository#v1.0.0
 harness install ./ResearchStudio/ResearchStudio-Idea
-harness uninstall downloaded-skill
+harness remove downloaded-skill
 ```
 
-`uninstall` removes one root Package, preserves dependencies still needed by other roots, and prunes dependencies that become unreachable. It never deletes immutable Package Store entries. Use `--name <environment>` to select an inactive Environment and `--dry-run` to preview the complete resource impact.
+`remove` removes one root Package, preserves dependencies still needed by other roots, and prunes dependencies that become unreachable. `uninstall` remains an alias. Neither command deletes immutable Package Store entries. Use `--name <environment>` to select an inactive Environment and `--dry-run` to preview the complete resource impact.
 
 ## Configure Agents
 
@@ -121,18 +120,16 @@ harness uninstall downloaded-skill
 
 Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time; their Agent homes, credentials, provider configuration, sessions, and Codex system Skills remain isolated. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
 
-## Export and Import
+## Export and Recreate
 
 ```bash
 # Source machine
-harness env export --name performance --output performance.harness-env
+harness export --name performance --file performance.harness-env
 
 # Destination machine
-harness env import performance.harness-env
-harness activate performance
+harness create --name performance --file performance.harness-env
+harness run --name performance codex
 ```
-
-Use `--name <new-environment>` during import to choose a different name.
 
 ## Inspect and Repair
 

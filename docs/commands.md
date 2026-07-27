@@ -6,11 +6,14 @@ Before `migrate skills` or `migrate sessions`, Harness checks the current user's
 
 ```bash
 harness env list
-harness env create <name> [--target codex|claude|pi|both|all|<comma-separated-list>]
+harness create --name <name> [--target codex|claude|pi|both|all|<comma-separated-list>]
+harness rename --name <environment> <new-name>
 harness env remove <name>
 ```
 
 `base` is initialized automatically and cannot be explicitly created or removed. For backward compatibility, `base`, `both`, and an omitted `--target` select Codex and Claude. Use `--target pi`, a comma-separated combination such as `codex,pi`, or `--target all` explicitly. Every Environment contains `harness-project-memory` and `harness-package-builder` as foundational root Packages.
+
+`env create <name>` remains a compatibility spelling for `create --name <name>`. `rename` refuses `base`, an active source Environment, and every existing destination. It moves the complete Environment directory, including Agent-owned credentials, sessions, databases, and other opaque state, then validates the renamed managed view before succeeding.
 
 On the first successful implicit creation of `base`, Harness uses `lstat`-style metadata checks on only the documented Codex/Claude `skills` and session migration paths. If a real supported file or directory exists, it writes one migration notice to stderr. It does not enumerate children, read contents, follow symlinks, print private names or paths, or import any state. Empty supported directories count as existing state. Supported credentials and provider configuration seed separately through the normal Environment view construction; Skills and sessions remain explicit migrations. The published base recipe is the durable one-time boundary, so no notice marker or discovered-state metadata is stored. Shell-hook and JSON stdout remain machine-readable.
 
@@ -44,16 +47,16 @@ The command rejects source symbolic links and special files so the destination c
 
 `history.jsonl` and `session_index.jsonl` use a structured merge instead of whole-file conflict detection. Every non-empty line must be a JSON object. Codex history records additionally require a non-empty `session_id` and finite numeric `ts`; Claude history records require a non-empty `sessionId` and finite numeric `timestamp`. The merger preserves complete objects and unknown fields, hashes canonical key-sorted objects to remove exact duplicates, combines records from independent sessions, and sorts history by the platform's timestamp field. A verified temporary ordinary file atomically replaces the target, with rollback on ordinary publication failure. Dry-run output reports added and deduplicated record counts. Explicit migration also replaces legacy target links that point directly to the corresponding path in the selected original session tree with Environment-owned ordinary files or directories; unrelated target links remain conflicts. Original Agent files remain unchanged. Stop the source and destination Agent processes before migrating so their session files remain stable throughout the snapshot and merge.
 
-## Environment migration
+## Environment export and recreation
 
 ```bash
-harness env export --name <environment> --output <file.harness-env>
-harness env import <file.harness-env> [--name <new-environment>]
+harness export [--name <environment>] --file <file.harness-env>
+harness create --name <new-environment> --file <file.harness-env>
 ```
 
-`env export` creates one deterministic, gzip-compressed bundle containing the Environment recipe, exact lock, and byte-complete Package dependency closure. It therefore remains importable when an original Git remote is unavailable or a `file:` Package source no longer exists.
+`export` creates one deterministic, gzip-compressed bundle containing the Environment recipe, exact lock, and byte-complete Package dependency closure. It defaults to the active Environment and then `base`, and remains reproducible when an original Git remote is unavailable or a `file:` Package source no longer exists. `env export` remains a compatibility spelling that requires an explicit name.
 
-`env import` validates the complete bundle before publishing a new global Environment. The exported name is used by default; `--name` selects another name. Import refuses `base` and every existing destination instead of merging or overwriting them.
+`create --file` validates the complete bundle before publishing a new global Environment. The required `--name` follows Conda's create interface and may differ from the exported name. Creation refuses `base` and every existing destination instead of merging or overwriting them. There is no `env import` command.
 
 Bundles contain Package files, Skills, MCP definitions, Hooks, source provenance, and integrity metadata. They do not contain per-Environment Agent homes, authentication, sessions, databases, environment-variable values, Project Memory, machine-local Memory, `AGENTS.md`, or `CLAUDE.md`. Package instructions and Hooks are executable trust input, so inspect bundles received from another person before activation.
 
@@ -93,14 +96,14 @@ Installation recursively resolves dependencies, validates Package and Skill iden
 ## Package removal
 
 ```bash
-harness uninstall <package> [-n <environment>] [-d|--dry-run]
+harness remove <package> [-n <environment>] [-d|--dry-run]
 ```
 
-When `--name` is omitted, removal uses the current shell's `HARNESS_ENV` and falls back to `base`. Only a Package recorded as a root in the Environment recipe can be requested. If the name identifies only a dependency, Harness reports every root that still requires it; unknown names fail without changing the Environment. The foundational `harness-project-memory` and `harness-package-builder` roots cannot be uninstalled.
+When `--name` is omitted, removal uses the current shell's `HARNESS_ENV` and falls back to `base`. Only a Package recorded as a root in the Environment recipe can be requested. If the name identifies only a dependency, Harness reports every root that still requires it; unknown names fail without changing the Environment. The foundational `harness-project-memory` and `harness-package-builder` roots cannot be removed.
 
-Uninstall removes the requested root from the recipe, recomputes the exact dependency closure of all remaining roots, and prunes newly unreachable Packages from the lock and complete Codex, Claude, and Pi views. Shared dependencies and their resources remain. Managed Skills, MCP servers, and Hooks are reconciled through the same ownership-aware stable-home and atomic view transaction as installation. A normal failure restores the recipe, lock, managed stable-home state, and previous view generation. Immutable Package Store entries are retained for other Environments and future garbage collection.
+Removal removes the requested root from the recipe, recomputes the exact dependency closure of all remaining roots, and prunes newly unreachable Packages from the lock and complete Codex, Claude, and Pi views. Shared dependencies and their resources remain. Managed Skills, MCP servers, and Hooks are reconciled through the same ownership-aware stable-home and atomic view transaction as installation. A normal failure restores the recipe, lock, managed stable-home state, and previous view generation. Immutable Package Store entries are retained for other Environments and future garbage collection.
 
-`-d`/`--dry-run` reports the root, pruned Packages, Skills, MCP servers, and Hooks without publishing a view or changing Environment metadata. Like Conda, Harness uses `-n`/`--name` for Environment selection and `-d`/`--dry-run` for preview. Conda names package removal `remove` with `uninstall` as an alias and accepts arbitrary package lists; Harness intentionally exposes the singular `uninstall` command because its safe operation removes one explicit root, while `harness env remove` remains the command for deleting an entire Environment. Harness has no force-removal mode that can leave a broken dependency graph.
+`-d`/`--dry-run` reports the root, pruned Packages, Skills, MCP servers, and Hooks without publishing a view or changing Environment metadata. Like Conda, Harness names Package removal `remove`, retains `uninstall` as an alias, and uses `-n`/`--name` for Environment selection. Harness accepts one explicit root per operation, while `harness env remove` remains the command for deleting an entire Environment. Harness has no force-removal mode that can leave a broken dependency graph.
 
 ## Activation
 
@@ -124,6 +127,14 @@ pi
 ```
 
 `deactivate` leaves Harness Environment management in the current shell: it clears `HARNESS_ENV` and restores the `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `PI_CODING_AGENT_DIR` values captured before the shell hook selected an Environment. Use `harness activate base` when you want to switch explicitly to Harness's `base` Environment. Harness does not currently associate Codex, Claude, or Pi session IDs with Environments; activate the intended Environment before resuming an existing session.
+
+## Run
+
+```bash
+harness run [-n <environment>] [--cwd <directory>] <executable> [args...]
+```
+
+`run` starts one child process with the selected Environment's `HARNESS_ENV` and supported Agent home variables without changing the parent shell. Unsupported Agent targets use their original configuration homes. Standard input, output, and error are inherited directly, and the child exit status becomes the Harness exit status.
 
 ## Inspection and repair
 
