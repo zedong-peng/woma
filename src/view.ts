@@ -946,7 +946,7 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
     !equal(metadata.packages, expected) ||
     !equal(metadata.resources, expectedResources)
   ) {
-    throw new Error(`Environment view is missing or stale at ${root}; run harness sync --name ${environment.metadata.name}`);
+    throw new Error(`Environment view is missing or stale at ${root}; reinstall one of the Environment's root Packages`);
   }
   for (const target of environment.spec.targets) {
     const home = environmentAgentHomePath(environment.metadata.name, target);

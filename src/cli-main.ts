@@ -20,11 +20,11 @@ import {
   listEnvironments,
   readEnvironmentLock,
   removeEnvironment,
-  syncEnvironment,
   uninstallFromEnvironment,
   type BaseEnvironmentInitializationOptions,
   type EnvironmentCheck,
 } from "./environment.js";
+import { inspectEnvironmentLocalSkills } from "./environment-skills.js";
 import { installPackageSource, loadCachedPackage } from "./package.js";
 import { renderShellHook, resolveShell } from "./shell.js";
 import { initializeShell } from "./shell-init.js";
@@ -261,7 +261,7 @@ envCommand
 
 program
   .command("list")
-  .description("list packages and Package-managed resources in an environment")
+  .description("list packages and installed resources in an environment")
   .option("-n, --name <environment>", "environment to list; defaults to the active environment, then base")
   .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);
@@ -278,6 +278,11 @@ program
     }));
     const available = packages.filter((loaded) => loaded.status === "ok");
     const unavailable = packages.filter((loaded) => loaded.status === "error");
+    const managedSkillNames = new Set<string>();
+    for (const loaded of available) {
+      for (const skill of loaded.pkg.manifest.spec.skills) managedSkillNames.add(skill.name);
+    }
+    const localSkills = await inspectEnvironmentLocalSkills(environment, managedSkillNames);
     console.log(`Environment: ${name}${active === name ? " (active)" : ""}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
@@ -298,7 +303,15 @@ program
         resourceCount += 1;
       }
     }
+    for (const skill of localSkills.skills) {
+      console.log(`    ${skill.name}  external  codex`);
+      resourceCount += 1;
+    }
     if (resourceCount === 0) console.log("    none");
+    if (localSkills.issues.length > 0) {
+      console.log("  Environment-local Skill warnings");
+      for (const issue of localSkills.issues) console.log(`    ${issue.entry}  ${issue.detail}`);
+    }
 
     console.log("  mcp servers");
     resourceCount = 0;
@@ -380,7 +393,6 @@ program
   .action(async (source: string, options: { name?: string; commit?: string; subdir?: string }, command: Command) => {
     const project = projectRoot(command);
     const environmentName = selectedEnvironment(options.name);
-    await ensureSelectedBase(project, environmentName);
     const result = await installIntoEnvironment(project, environmentName, source, process.cwd(), {
       sourceOptions: packageSourceOptions(options),
     });
@@ -466,22 +478,6 @@ shellCommand
   .description("print a bash or zsh hook for eval")
   .action((shell: string | undefined) => {
     process.stdout.write(renderShellHook(resolveShell(shell)));
-  });
-
-program
-  .command("sync")
-  .description("restore exact locked packages for one or every environment")
-  .option("-n, --name <environment>", "environment to restore")
-  .action(async (options: { name?: string }, command: Command) => {
-    const project = projectRoot(command);
-    if (!options.name) await ensureBaseEnvironment(project, baseInitializationOptions);
-    else await ensureSelectedBase(project, options.name);
-    const names = options.name ? [options.name] : await listEnvironments(project);
-    if (names.length === 0) throw new Error("No environments to sync");
-    for (const name of names) {
-      const packages = await syncEnvironment(project, name);
-      console.log(`Synced ${name}: ${packages.length} package${packages.length === 1 ? "" : "s"}`);
-    }
   });
 
 program

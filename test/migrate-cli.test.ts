@@ -129,8 +129,8 @@ test("CLI explicitly migrates existing sessions into the active Environment", as
   }
 });
 
-test("CLI sync adopts ordinary Skills installed by Codex into the selected Environment", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-sync-runtime-skill-"));
+test("CLI immediately lists ordinary Skills installed inside a Codex Environment", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-environment-skill-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   try {
@@ -153,27 +153,38 @@ test("CLI sync adopts ordinary Skills installed by Codex into the selected Envir
     );
     await write(path.join(skills, ".system", ".codex-system-skills.marker"), "runtime\n");
 
-    const synchronized = await run(process.execPath, [cli, "--project", project, "sync", "--name", "tools"], {
+    const listed = await run(process.execPath, [cli, "--project", project, "list", "--name", "tools"], { cwd: root, env });
+    assert.match(listed.stdout, /installed-in-window\s+external\s+codex/);
+    assert.doesNotMatch(listed.stdout, /\.system/);
+
+    const info = await run(process.execPath, [cli, "--project", project, "info", "--json"], { cwd: root, env });
+    const context = JSON.parse(info.stdout) as {
+      packages: { name: string }[];
+      environmentSkills: { name: string; origin: string; platform: string }[];
+    };
+    assert.deepEqual(context.environmentSkills, [
+      {
+        name: "installed-in-window",
+        description: "Installed from a Codex window.",
+        entry: "installed-in-window",
+        path: path.join(skills, "installed-in-window"),
+        origin: "external",
+        platform: "codex",
+      },
+    ]);
+
+    const doctor = await run(process.execPath, [cli, "--project", project, "doctor", "--name", "tools"], {
       cwd: root,
-      env,
+      env: { ...env, HARNESS_ENV: "base" },
     });
-    assert.match(synchronized.stdout, /Adopting 1 Codex runtime Skill into tools/);
-    assert.match(synchronized.stdout, /installed-in-window@0\.0\.0-migrate\./);
-    assert.match(synchronized.stdout, /Synced tools: 3 packages/);
+    assert.match(doctor.stdout, /\[ok\] environment-skill:installed-in-window: external at/);
 
     const lock = JSON.parse(await readFile(path.join(home, "environments", "tools", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
-    assert.deepEqual(Object.keys(lock.packages), [
-      "harness-project-memory",
-      "harness-package-builder",
-      "installed-in-window",
-    ]);
-    assert.equal((await lstat(path.join(skills, "installed-in-window"))).isSymbolicLink(), true);
+    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.equal((await lstat(path.join(skills, "installed-in-window"))).isDirectory(), true);
     assert.equal(await readFile(path.join(skills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime\n");
-
-    const listed = await run(process.execPath, [cli, "--project", project, "list", "--name", "tools"], { cwd: root, env });
-    assert.match(listed.stdout, /installed-in-window\s+installed-in-window@0\.0\.0-migrate\.[a-f0-9]+\s+codex/);
   } finally {
     await removeTestTree(root);
   }

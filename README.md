@@ -10,7 +10,7 @@ Conda-style Environment and Package management for Codex, Claude Code, and Pi.
 - **Named Environments** for Codex, Claude Code, Pi, or any combination.
 - **Reusable Packages** containing Skills, MCP servers, hooks, and dependencies.
 - **Direct Skill installation** from standalone and conventional multi-Skill sources.
-- **Explicit migration and synchronization** of existing and Environment-local Skills.
+- **Immediate Environment-local Skill discovery** alongside explicit migration into reusable Packages.
 - **Portable Environment bundles** for moving complete Package closures between machines.
 - **Project Memory** and Package authoring tools in every Environment.
 
@@ -115,7 +115,7 @@ harness uninstall downloaded-skill
 
 ## Configure Agents
 
-- **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. Codex owns `$CODEX_HOME/skills/.system`; Harness never adopts it. When Codex installs an ordinary Skill into `$CODEX_HOME/skills`, run `harness sync --name <environment>` to capture it as a content-addressed Package in that Environment.
+- **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. Codex owns `$CODEX_HOME/skills/.system`; Harness never adopts it. An ordinary Skill added to `$CODEX_HOME/skills` immediately belongs to that Environment and appears in `harness list` as `external`, without another Harness command.
 - **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
 - **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Harness manages only `$PI_CODING_AGENT_DIR/skills`; Pi owns every other file in that Environment home.
 
@@ -141,13 +141,12 @@ harness info
 harness env list
 harness list --name base
 harness doctor --name base
-harness sync --name base
 harness inspect builtin:auto-research
 ```
 
 `harness env list` shows registered Environment names and marks the one selected by the current shell; it does not perform a health check. Use `harness doctor --name <environment>` to validate an Environment.
 
-`harness sync` also adopts ordinary Skills added by Codex inside the selected Environment. The adopted Skills become locked Packages and appear in `harness list`; hidden runtime entries, including `.system`, remain private Codex state. Synchronization never crosses Environment boundaries.
+`harness list` and `harness info --json` inspect ordinary Environment-local Skills directly from the selected Codex home. They do not copy those external Skills into the Package Store, recipe, lock, or bundle. Install a Skill through `harness install` only when it should become a reusable, locked Harness Package. Hidden entries, including `.system`, remain private Codex state, and Environment-local Skills never cross Environment boundaries.
 
 ## Author Packages
 

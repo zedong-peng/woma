@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
-import { installPackageSource, installPackageTree, loadCachedPackage, syncLockedPackage } from "../src/package.js";
+import { installPackageSource, installPackageTree, loadCachedPackage, repairLockedPackage } from "../src/package.js";
 import { createEnvironment, installIntoEnvironment, readEnvironmentLock } from "../src/environment.js";
 import { removeTestTree } from "./helpers.js";
 
@@ -485,13 +485,13 @@ test("install repairs a modified content-addressed cache", { concurrency: false 
   }
 });
 
-test("sync restores a locked package after cache loss", { concurrency: false }, async () => {
+test("repair restores a locked package after cache loss", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     const pkg = await installPackageSource(await packageFixture(root));
     await removeTestTree(pkg.root);
-    const restored = await syncLockedPackage(pkg.lock);
+    const restored = await repairLockedPackage(pkg.lock);
     assert.equal(restored.manifest.metadata.name, "integrity-test");
     assert.equal(restored.root, pkg.root);
     await loadCachedPackage(pkg.lock);
@@ -500,7 +500,7 @@ test("sync restores a locked package after cache loss", { concurrency: false }, 
   }
 });
 
-test("sync refuses a local source that drifted from its lock", { concurrency: false }, async () => {
+test("repair refuses a local source that drifted from its lock", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
@@ -512,13 +512,13 @@ test("sync refuses a local source that drifted from its lock", { concurrency: fa
       "---\nname: integrity-skill\ndescription: Drifted.\n---\nDrifted.\n",
       "utf8",
     );
-    await assert.rejects(syncLockedPackage(pkg.lock), /Locked integrity mismatch/);
+    await assert.rejects(repairLockedPackage(pkg.lock), /Locked integrity mismatch/);
   } finally {
     await removeTestTree(root);
   }
 });
 
-test("failed sync preserves the last locked cache bytes", { concurrency: false }, async () => {
+test("failed repair preserves the last locked cache bytes", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-preserve-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
@@ -528,7 +528,7 @@ test("failed sync preserves the last locked cache bytes", { concurrency: false }
     const before = await readFile(skillPath);
     await chmod(skillPath, 0o600);
     await rm(packageRoot, { recursive: true, force: true });
-    await assert.rejects(syncLockedPackage(pkg.lock), /Local source does not exist/);
+    await assert.rejects(repairLockedPackage(pkg.lock), /Local source does not exist/);
     assert.deepEqual(await readFile(skillPath), before);
   } finally {
     await removeTestTree(root);
@@ -548,7 +548,7 @@ test("identity and integrity mismatches preserve the old cache", { concurrency: 
     await chmod(cachedSkill, 0o600);
 
     await writeFile(manifestPath, sourceManifest.replace("name: integrity-test", "name: other-package"), "utf8");
-    await assert.rejects(syncLockedPackage(pkg.lock), /Locked identity mismatch/);
+    await assert.rejects(repairLockedPackage(pkg.lock), /Locked identity mismatch/);
     assert.deepEqual(await readFile(cachedSkill), before);
 
     await writeFile(manifestPath, sourceManifest, "utf8");
@@ -557,7 +557,7 @@ test("identity and integrity mismatches preserve the old cache", { concurrency: 
       "---\nname: integrity-skill\ndescription: Drifted.\n---\nDrifted.\n",
       "utf8",
     );
-    await assert.rejects(syncLockedPackage(pkg.lock), /Locked integrity mismatch/);
+    await assert.rejects(repairLockedPackage(pkg.lock), /Locked integrity mismatch/);
     assert.deepEqual(await readFile(cachedSkill), before);
   } finally {
     await removeTestTree(root);

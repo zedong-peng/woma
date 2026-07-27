@@ -8,11 +8,11 @@ import {
   activateEnvironment,
   createEnvironment,
   doctorEnvironment,
+  environmentInfo,
   installIntoEnvironment,
   readEnvironment,
-  syncEnvironment,
 } from "../src/environment.js";
-import { reconcileEnvironmentRuntimeSkills } from "../src/migrate-skills.js";
+import { inspectEnvironmentLocalSkills } from "../src/environment-skills.js";
 import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 
@@ -219,7 +219,7 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     assert.equal(updatedClaude.mcpServers.existing.command, "keep");
     assert.equal(updatedClaude.mcpServers["view-server"], undefined);
 
-    await syncEnvironment(root, "tools");
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite")), sqlite);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-wal")), wal);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-shm")), shm);
@@ -307,7 +307,7 @@ test("Codex can replace legacy projected system Skills without invalidating the 
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
     await write(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "runtime-v2\n");
     await write(path.join(homeSkills, "future-codex-runtime", "state.bin"), Buffer.from([0, 255, 39]));
-    await syncEnvironment(root, "tools");
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
     assert.equal(await readFile(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime-v2\n");
     assert.deepEqual(await readFile(path.join(homeSkills, "future-codex-runtime", "state.bin")), Buffer.from([0, 255, 39]));
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
@@ -329,8 +329,8 @@ test("Codex can replace legacy projected system Skills without invalidating the 
   }
 });
 
-test("Codex-installed ordinary Skills synchronize into only the selected Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-codex-runtime-skill-sync-"));
+test("Codex-installed ordinary Skills immediately belong to only their Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-codex-environment-skill-"));
   const previous = {
     harnessHome: process.env.HARNESS_HOME,
     harnessEnvironment: process.env.HARNESS_ENV,
@@ -354,53 +354,41 @@ test("Codex-installed ordinary Skills synchronize into only the selected Environ
       path.join(skills, ".hidden-runtime", "SKILL.md"),
       "---\nname: hidden-runtime\ndescription: Hidden runtime state.\n---\nHidden.\n",
     );
+    await write(path.join(skills, "broken-local", "SKILL.md"), "missing frontmatter\n");
+    await write(
+      path.join(skills, "conflicting-local", "SKILL.md"),
+      "---\nname: harness-project-memory\ndescription: Conflicts with a managed Skill.\n---\nConflict.\n",
+    );
     const lockPath = path.join(process.env.HARNESS_HOME, "environments", "tools", "lock.json");
+    const recipePath = path.join(process.env.HARNESS_HOME, "environments", "tools", "environment.yaml");
     const beforeLock = await readFile(lockPath);
-    let planned: string[] = [];
+    const beforeRecipe = await readFile(recipePath);
 
-    await assert.rejects(
-      reconcileEnvironmentRuntimeSkills({
-        projectRoot: root,
-        environment: "tools",
-        beforeAdopt: (names) => {
-          planned = names;
-        },
-        hooks: {
-          onMetadataPrepared: () => {
-            throw new Error("injected runtime Skill synchronization failure");
-          },
-        },
-      }),
-      /injected runtime Skill synchronization failure/,
-    );
-    assert.deepEqual(planned, ["window-installed"]);
+    const inventory = await inspectEnvironmentLocalSkills(await readEnvironment(root, "tools"));
+    assert.deepEqual(inventory.skills.map((skill) => ({ name: skill.name, origin: skill.origin })), [
+      { name: "window-installed", origin: "external" },
+    ]);
+    assert.deepEqual(inventory.issues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
+    const context = await environmentInfo(root);
+    assert.deepEqual(context.environmentSkills.map((skill) => skill.name), ["window-installed"]);
+    assert.deepEqual(context.environmentSkillIssues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
+
+    const checks = await doctorEnvironment(root, "tools");
+    assert.equal(checks.find((check) => check.label === "environment-skill:window-installed")?.status, "ok");
+    assert.equal(checks.find((check) => check.label === "environment-skill:broken-local")?.status, "warn");
+    assert.equal(checks.find((check) => check.label === "environment-skill:conflicting-local")?.status, "fail");
+
     assert.equal((await lstat(runtimeSkill)).isDirectory(), true);
-    assert.deepEqual(await readFile(path.join(runtimeSkill, "data.bin")), Buffer.from([39, 0, 255]));
-    assert.deepEqual(await readFile(lockPath), beforeLock);
-
-    const synchronized = await reconcileEnvironmentRuntimeSkills({ projectRoot: root, environment: "tools" });
-    assert.deepEqual(synchronized.packages.map((pkg) => pkg.name), ["window-installed"]);
-    assert.equal((await lstat(runtimeSkill)).isSymbolicLink(), true);
-    assert.equal(
-      path.resolve(path.dirname(runtimeSkill), await readlink(runtimeSkill)),
-      path.join(environmentViewPath("tools"), "codex", "skills", "window-installed"),
-    );
     assert.deepEqual(await readFile(path.join(runtimeSkill, "data.bin")), Buffer.from([39, 0, 255]));
     assert.equal(await readFile(path.join(skills, ".system", ".codex-system-skills.marker"), "utf8"), "system-state\n");
     await access(path.join(skills, ".hidden-runtime", "SKILL.md"));
     await assert.rejects(access(path.join(environmentAgentHomePath("isolated", "codex"), "skills", "window-installed")));
-
-    const lock = JSON.parse(await readFile(lockPath, "utf8")) as { packages: Record<string, { source: string }> };
-    assert.match(lock.packages["window-installed"]?.source ?? "", /migrations\/skills\/window-installed/);
-    assert.equal(
-      (await readEnvironment(root, "tools")).spec.roots.some((item) => item.name === "window-installed"),
-      true,
-    );
-    await syncEnvironment(root, "tools");
+    assert.deepEqual(await readFile(lockPath), beforeLock);
+    assert.deepEqual(await readFile(recipePath), beforeRecipe);
+    assert.equal((await readEnvironment(root, "tools")).spec.roots.some((item) => item.name === "window-installed"), false);
+    await assert.rejects(access(path.join(process.env.HARNESS_HOME, "migrations", "skills", "window-installed")));
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
-    const repeated = await reconcileEnvironmentRuntimeSkills({ projectRoot: root, environment: "tools" });
-    assert.equal(repeated.unchanged, true);
-    assert.deepEqual(repeated.packages, []);
+    assert.deepEqual((await inspectEnvironmentLocalSkills(await readEnvironment(root, "isolated"))).skills, []);
   } finally {
     if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous.harnessHome;
@@ -445,7 +433,7 @@ test("Pi uses a stable Agent home with only Skills managed by the Environment vi
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.deepEqual((await readdir(path.join(view, "pi"))).sort(), ["skills"]);
 
-    await syncEnvironment(root, "pi-tools");
+    await installIntoEnvironment(root, "pi-tools", "builtin:harness-project-memory");
     assert.equal(await readFile(path.join(home, "settings.json"), "utf8"), '{"theme":"light"}\n');
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.equal((await doctorEnvironment(root, "pi-tools")).find((check) => check.label === "view")?.status, "ok");
@@ -514,7 +502,7 @@ test("shared credential links migrate into Environment views", { concurrency: fa
     await symlink(path.join(originalCodex, "auth.json"), codexCredential);
     await symlink(path.join(originalClaude, ".credentials.json"), claudeCredential);
 
-    await syncEnvironment(root, "tools");
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
 
     assert.equal(
       path.resolve(path.dirname(codexCredential), await readlink(codexCredential)),
