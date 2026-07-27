@@ -129,7 +129,7 @@ test("CLI explicitly migrates existing sessions into the active Environment", as
   }
 });
 
-test("CLI immediately lists ordinary Skills installed inside a Codex Environment", async () => {
+test("CLI immediately lists a Claude-installed Skill shared with Codex in the Environment", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-environment-skill-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
@@ -145,31 +145,36 @@ test("CLI immediately lists ordinary Skills installed inside a Codex Environment
     };
     delete env.NODE_TEST_CONTEXT;
 
-    await run(process.execPath, [cli, "--project", project, "env", "create", "tools", "--target", "codex"], { cwd: root, env });
-    const skills = path.join(home, "environments", "tools", "home", "codex", "skills");
+    await run(process.execPath, [cli, "--project", project, "env", "create", "tools", "--target", "both"], { cwd: root, env });
+    const skills = path.join(home, "environments", "tools", "home", "claude", "skills");
     await write(
       path.join(skills, "installed-in-window", "SKILL.md"),
-      "---\nname: installed-in-window\ndescription: Installed from a Codex window.\n---\nWindow Skill.\n",
+      "---\nname: installed-in-window\ndescription: Installed from a Claude Code window.\n---\nWindow Skill.\n",
     );
     await write(path.join(skills, ".system", ".codex-system-skills.marker"), "runtime\n");
+    assert.match(
+      await readFile(path.join(home, "environments", "tools", "home", "codex", "skills", "installed-in-window", "SKILL.md"), "utf8"),
+      /Claude Code window/,
+    );
 
     const listed = await run(process.execPath, [cli, "--project", project, "list", "--name", "tools"], { cwd: root, env });
-    assert.match(listed.stdout, /installed-in-window\s+external\s+codex/);
+    assert.match(listed.stdout, /installed-in-window\s+external\s+codex, claude/);
     assert.doesNotMatch(listed.stdout, /\.system/);
 
     const info = await run(process.execPath, [cli, "--project", project, "info", "--json"], { cwd: root, env });
     const context = JSON.parse(info.stdout) as {
       packages: { name: string }[];
-      environmentSkills: { name: string; origin: string; platform: string }[];
+      environmentSkills: { name: string; origin: string; platform: string; platforms: string[] }[];
     };
     assert.deepEqual(context.environmentSkills, [
       {
         name: "installed-in-window",
-        description: "Installed from a Codex window.",
+        description: "Installed from a Claude Code window.",
         entry: "installed-in-window",
-        path: path.join(skills, "installed-in-window"),
+        path: path.join(home, "environments", "tools", "home", "skills", "installed-in-window"),
         origin: "external",
-        platform: "codex",
+        platform: "environment",
+        platforms: ["codex", "claude"],
       },
     ]);
 

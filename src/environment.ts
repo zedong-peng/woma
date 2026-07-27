@@ -22,7 +22,13 @@ import {
   type EnvironmentLocalSkill,
   type EnvironmentLocalSkillIssue,
 } from "./environment-skills.js";
-import { environmentViewPath, materializeEnvironmentView, sourceAgentHome, validateEnvironmentView } from "./view.js";
+import {
+  environmentViewNeedsUpgrade,
+  environmentViewPath,
+  materializeEnvironmentView,
+  sourceAgentHome,
+  validateEnvironmentView,
+} from "./view.js";
 import type { Action, CodexClaudePlatform, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
 
 const environmentName = z
@@ -392,12 +398,16 @@ export function ensureBaseEnvironment(
       const lock = await readEnvironmentLockFile(projectRoot, DEFAULT_ENVIRONMENT);
       const loaded = await loadEnvironmentSnapshot(environment, lock);
       const packages = loaded.names.map((name) => loaded.packages.get(name)!);
-      try {
-        await validateEnvironmentView(environment, packages);
-      } catch {
+      if (await environmentViewNeedsUpgrade(DEFAULT_ENVIRONMENT)) {
         await materializeEnvironmentView(environment, packages, { previousPackages: packages });
-        await validateEnvironmentView(environment, packages);
+      } else {
+        try {
+          await validateEnvironmentView(environment, packages);
+        } catch {
+          await materializeEnvironmentView(environment, packages, { previousPackages: packages });
+        }
       }
+      await validateEnvironmentView(environment, packages);
       return environment;
     } catch (error) {
       throw new Error(`The base Environment is incomplete or corrupt: ${(error as Error).message}`);
@@ -1055,7 +1065,11 @@ export async function activateEnvironment(
   if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
   return withEnvironmentLock(name, async () => {
     const loaded = await loadOrderedPackages(projectRoot, name);
-    await validateEnvironmentView(loaded.environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
+    const packages = loaded.names.map((packageName) => loaded.packages.get(packageName)!);
+    if (await environmentViewNeedsUpgrade(name)) {
+      await materializeEnvironmentView(loaded.environment, packages, { previousPackages: packages });
+    }
+    await validateEnvironmentView(loaded.environment, packages);
     return withProjectLock(projectRoot, async () => {
       const transition = await prepareEnvironmentTransition(projectRoot, name, loaded);
       const applied = await transition.apply();
