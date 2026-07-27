@@ -10,7 +10,7 @@ Conda-style Environment and Package management for Codex, Claude Code, Pi, and Q
 - **Named Environments** for Codex, Claude Code, Pi, Qoder CLI, or any combination.
 - **Reusable Packages** containing Skills, MCP servers, hooks, and dependencies.
 - **Direct Skill installation** from standalone and conventional multi-Skill sources.
-- **Immediate Environment-local Skill discovery** alongside explicit migration into reusable Packages.
+- **Immediate cross-Agent Skill sharing** inside each Environment alongside explicit migration into reusable Packages.
 - **Portable Environment bundles** for moving complete Package closures between machines.
 - **Project Memory** and Package authoring tools in every Environment.
 
@@ -118,10 +118,12 @@ harness remove downloaded-skill
 
 ## Configure Agents
 
-- **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. Codex owns `$CODEX_HOME/skills/.system`; Harness never adopts it. An ordinary Skill added to `$CODEX_HOME/skills` immediately belongs to that Environment and appears in `harness list` as `external`, without another Harness command.
+Every target Agent's `skills` path resolves to one stable Environment-level directory. An ordinary Skill installed through Codex, Claude Code, Pi, or Qoder CLI is therefore immediately visible to every other target in the same Environment without `harness sync`. It remains isolated from other Environments and appears in `harness list` as `external`.
+
+- **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. Codex owns the hidden `$CODEX_HOME/skills/.system` entry; Harness preserves it as opaque Environment state and never adopts it as an ordinary Skill.
 - **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
-- **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Harness manages only `$PI_CODING_AGENT_DIR/skills`; Pi owns every other file in that Environment home.
-- **Qoder CLI:** log in through `qodercli` in the activated Environment. Harness manages `$QODER_CONFIG_DIR/settings.json` (Package MCP servers and Hooks) and `$QODER_CONFIG_DIR/skills`; Qoder owns every other file in that Environment home. A new Qoder Environment does not copy the original `~/.qoder` state.
+- **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Harness links `$PI_CODING_AGENT_DIR/skills` to the shared Environment Skill directory; Pi owns every other file in that Environment home.
+- **Qoder CLI:** log in through `qodercli` in the activated Environment. Harness manages `$QODER_CONFIG_DIR/settings.json` (Package MCP servers and Hooks) and links `$QODER_CONFIG_DIR/skills` to the shared Environment Skill directory; Qoder owns every other file in that Environment home. A new Qoder Environment does not copy the original `~/.qoder` state.
 
 Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time; their Agent homes, credentials, provider configuration, sessions, and Codex system Skills remain isolated. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
 
@@ -148,7 +150,7 @@ harness inspect builtin:auto-research
 
 `harness env list` shows registered Environment names and marks the one selected by the current shell; it does not perform a health check. Use `harness doctor --name <environment>` to validate an Environment.
 
-`harness list` and `harness info --json` inspect ordinary Environment-local Skills directly from the selected Codex home. They do not copy those external Skills into the Package Store, recipe, lock, or bundle. Install a Skill through `harness install` only when it should become a reusable, locked Harness Package. Hidden entries, including `.system`, remain private Codex state, and Environment-local Skills never cross Environment boundaries.
+`harness list` and `harness info --json` inspect ordinary Environment-local Skills directly from the shared Skill directory and report every target that can use them. They do not copy those external Skills into the Package Store, recipe, lock, or bundle. Install a Skill through `harness install` only when it should become a reusable, locked Harness Package. Hidden entries, including `.system`, remain opaque Agent-owned state, and Environment-local Skills never cross Environment boundaries.
 
 ## Author Packages
 

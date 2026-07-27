@@ -333,7 +333,7 @@ program
       }
     }
     for (const skill of localSkills.skills) {
-      console.log(`    ${skill.name}  external  codex`);
+      console.log(`    ${skill.name}  external  ${skill.platforms.join(", ")}`);
       resourceCount += 1;
     }
     if (resourceCount === 0) console.log("    none");

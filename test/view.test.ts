@@ -13,7 +13,7 @@ import {
   readEnvironment,
 } from "../src/environment.js";
 import { inspectEnvironmentLocalSkills } from "../src/environment-skills.js";
-import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
+import { environmentAgentHomePath, environmentSkillsPath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 
 async function write(filePath: string, content: string | Buffer): Promise<void> {
@@ -55,6 +55,19 @@ ${mcp}  hooks:
     "---\nname: view-skill\ndescription: Stable home fixture.\n---\n\nUse the fixture.\n",
   );
   return packageRoot;
+}
+
+async function projectLegacySkillsLayout(environmentName: string, targets: readonly ("codex" | "claude" | "pi" | "qoder")[]): Promise<void> {
+  for (const target of targets) {
+    const skills = path.join(environmentAgentHomePath(environmentName, target), "skills");
+    await rm(skills, { force: true });
+    await symlink(path.join(environmentViewPath(environmentName), target, "skills"), skills);
+  }
+  await rm(environmentSkillsPath(environmentName), { recursive: true, force: true });
+  const metadataPath = path.join(environmentViewPath(environmentName), "view.json");
+  const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+  metadata.viewVersion = 1;
+  await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
 }
 
 test("stable Agent homes isolate opaque state from atomic managed views", { concurrency: false }, async () => {
@@ -113,7 +126,7 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     await writeFile(path.join(claudeHome, ".credentials.json"), '{"oauth":"environment"}\n');
     for (const [platform, names] of [
       ["codex", ["auth.json", "config.toml", "hooks.json"]],
-      ["claude", [".credentials.json", "settings.json", "skills"]],
+      ["claude", [".credentials.json", "settings.json"]],
     ] as const) {
       for (const name of names) {
         const link = path.join(environmentAgentHomePath("tools", platform), name);
@@ -124,14 +137,20 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
         );
       }
     }
+    const sharedSkills = environmentSkillsPath("tools");
+    assert.equal((await lstat(sharedSkills)).isDirectory(), true);
+    assert.equal((await lstat(sharedSkills)).isSymbolicLink(), false);
     const codexSkills = path.join(codexHome, "skills");
-    assert.equal((await lstat(codexSkills)).isDirectory(), true);
-    assert.equal((await lstat(codexSkills)).isSymbolicLink(), false);
+    const claudeSkills = path.join(claudeHome, "skills");
+    for (const skills of [codexSkills, claudeSkills]) {
+      assert.equal((await lstat(skills)).isSymbolicLink(), true);
+      assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), sharedSkills);
+    }
     const managedSkill = path.join(codexSkills, "view-skill");
     assert.equal((await lstat(managedSkill)).isSymbolicLink(), true);
     assert.equal(
       path.resolve(path.dirname(managedSkill), await readlink(managedSkill)),
-      path.join(toolsView, "codex", "skills", "view-skill"),
+      path.join(toolsView, "skills", "view-skill"),
     );
 
     const codexConfig = parseToml(await readFile(path.join(codexHome, "config.toml"), "utf8")) as Record<string, any>;
@@ -262,19 +281,19 @@ test("Codex can replace legacy projected system Skills without invalidating the 
 
     const codexHome = environmentAgentHomePath("tools", "codex");
     const homeSkills = path.join(codexHome, "skills");
+    const sharedSkills = environmentSkillsPath("tools");
     const viewSkills = path.join(environmentViewPath("tools"), "codex", "skills");
-    const legacySystemRoot = path.join(path.dirname(codexHome), "codex-system-skills");
-    await mkdir(legacySystemRoot, { recursive: true });
-    await symlink(legacySystemRoot, path.join(viewSkills, ".system"));
-    await rm(homeSkills, { recursive: true, force: true });
+    await rm(homeSkills, { force: true });
+    await rm(sharedSkills, { recursive: true, force: true });
     await symlink(viewSkills, homeSkills);
-
-    await rm(path.join(viewSkills, ".system"), { force: true });
     await write(path.join(viewSkills, ".system", ".codex-system-skills.marker"), "runtime-v1\n");
     await write(path.join(viewSkills, ".system", "skill-installer", "SKILL.md"), "Codex runtime Skill\n");
+    const metadataPath = path.join(environmentViewPath("tools"), "view.json");
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+    metadata.viewVersion = 1;
+    await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
 
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
-    await activateEnvironment(root, "tools");
 
     const additionalSkill = path.join(root, "additional-skill");
     await write(
@@ -296,8 +315,10 @@ test("Codex can replace legacy projected system Skills without invalidating the 
 
     await installIntoEnvironment(root, "tools", additionalSkill);
 
-    assert.equal((await lstat(homeSkills)).isDirectory(), true);
-    assert.equal((await lstat(homeSkills)).isSymbolicLink(), false);
+    assert.equal((await lstat(sharedSkills)).isDirectory(), true);
+    assert.equal((await lstat(sharedSkills)).isSymbolicLink(), false);
+    assert.equal((await lstat(homeSkills)).isSymbolicLink(), true);
+    assert.equal(path.resolve(path.dirname(homeSkills), await readlink(homeSkills)), sharedSkills);
     assert.equal(await readFile(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime-v1\n");
     assert.match(await readFile(path.join(homeSkills, ".system", "skill-installer", "SKILL.md"), "utf8"), /runtime Skill/);
     assert.match(await readFile(path.join(homeSkills, "additional-skill", "SKILL.md"), "utf8"), /additional Skill/);
@@ -317,7 +338,7 @@ test("Codex can replace legacy projected system Skills without invalidating the 
     await mkdir(managedSkill);
     const drifted = (await doctorEnvironment(root, "tools")).find((check) => check.label === "view");
     assert.equal(drifted?.status, "fail");
-    assert.match(drifted?.detail ?? "", /Harness-managed Codex Skill link/);
+    assert.match(drifted?.detail ?? "", /Harness-managed shared Skill link/);
   } finally {
     if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous.harnessHome;
@@ -329,34 +350,143 @@ test("Codex can replace legacy projected system Skills without invalidating the 
   }
 });
 
-test("Codex-installed ordinary Skills immediately belong to only their Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-codex-environment-skill-"));
+test("activating a legacy Environment merges Agent-installed Skills into the shared root", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-legacy-shared-skills-"));
   const previous = {
     harnessHome: process.env.HARNESS_HOME,
     harnessEnvironment: process.env.HARNESS_ENV,
     codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ENV = "base";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  try {
+    const targets = ["codex", "claude"] as const;
+    await createEnvironment(root, "tools", [...targets]);
+    await projectLegacySkillsLayout("tools", targets);
+    await write(
+      path.join(environmentAgentHomePath("tools", "codex"), "skills", "codex-local", "SKILL.md"),
+      "---\nname: codex-local\ndescription: Installed by legacy Codex.\n---\nCodex.\n",
+    );
+    await write(
+      path.join(environmentAgentHomePath("tools", "claude"), "skills", "claude-local", "SKILL.md"),
+      "---\nname: claude-local\ndescription: Installed by legacy Claude.\n---\nClaude.\n",
+    );
+    await write(
+      path.join(environmentAgentHomePath("tools", "codex"), "skills", ".system", "marker"),
+      "codex-system-state\n",
+    );
+
+    await activateEnvironment(root, "tools");
+
+    const shared = environmentSkillsPath("tools");
+    assert.equal((await lstat(shared)).isDirectory(), true);
+    for (const target of targets) {
+      const skills = path.join(environmentAgentHomePath("tools", target), "skills");
+      assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), shared);
+      assert.match(await readFile(path.join(skills, "codex-local", "SKILL.md"), "utf8"), /legacy Codex/);
+      assert.match(await readFile(path.join(skills, "claude-local", "SKILL.md"), "utf8"), /legacy Claude/);
+    }
+    assert.equal(await readFile(path.join(shared, ".system", "marker"), "utf8"), "codex-system-state\n");
+    assert.equal(JSON.parse(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8")).viewVersion, 2);
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
+  } finally {
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previous.harnessEnvironment;
+    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    await removeTestTree(root);
+  }
+});
+
+test("legacy same-name Agent Skills fail without moving either source", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-legacy-shared-skills-conflict-"));
+  const previous = {
+    harnessHome: process.env.HARNESS_HOME,
+    harnessEnvironment: process.env.HARNESS_ENV,
+    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ENV = "base";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  try {
+    const targets = ["codex", "claude"] as const;
+    await createEnvironment(root, "tools", [...targets]);
+    await projectLegacySkillsLayout("tools", targets);
+    const codexSkill = path.join(environmentAgentHomePath("tools", "codex"), "skills", "same-name", "SKILL.md");
+    const claudeSkill = path.join(environmentAgentHomePath("tools", "claude"), "skills", "same-name", "SKILL.md");
+    await write(codexSkill, "---\nname: same-name\ndescription: Codex copy.\n---\nCodex.\n");
+    await write(claudeSkill, "---\nname: same-name\ndescription: Claude copy.\n---\nClaude.\n");
+    const beforeView = await readlink(environmentViewPath("tools"));
+
+    await assert.rejects(activateEnvironment(root, "tools"), /Skill entry same-name exists in multiple Agent homes/);
+
+    assert.match(await readFile(codexSkill, "utf8"), /Codex copy/);
+    assert.match(await readFile(claudeSkill, "utf8"), /Claude copy/);
+    await assert.rejects(access(environmentSkillsPath("tools")));
+    assert.equal(await readlink(environmentViewPath("tools")), beforeView);
+    assert.equal(JSON.parse(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8")).viewVersion, 1);
+    await assert.rejects(access(path.join(root, "AGENTS.md")));
+    await assert.rejects(access(path.join(root, "CLAUDE.md")));
+  } finally {
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previous.harnessEnvironment;
+    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    await removeTestTree(root);
+  }
+});
+
+test("a Skill installed by any Agent is immediately visible to every target in only that Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shared-environment-skill-"));
+  const previous = {
+    harnessHome: process.env.HARNESS_HOME,
+    harnessEnvironment: process.env.HARNESS_ENV,
+    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    piHome: process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR,
+    qoderHome: process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR,
   };
   process.env.HARNESS_HOME = path.join(root, "home");
   process.env.HARNESS_ENV = "tools";
   process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR = path.join(root, "original-pi");
+  process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR = path.join(root, "original-qoder");
   try {
-    await createEnvironment(root, "tools", ["codex"]);
-    await createEnvironment(root, "isolated", ["codex"]);
-    const skills = path.join(environmentAgentHomePath("tools", "codex"), "skills");
-    const runtimeSkill = path.join(skills, "window-installed");
+    const targets = ["codex", "claude", "pi", "qoder"] as const;
+    await createEnvironment(root, "tools", [...targets]);
+    await createEnvironment(root, "isolated", [...targets]);
+    for (const platform of targets) {
+      const skills = path.join(environmentAgentHomePath("tools", platform), "skills");
+      const runtimeSkill = path.join(skills, `${platform}-installed`);
+      await write(
+        path.join(runtimeSkill, "SKILL.md"),
+        `---\nname: ${platform}-installed\ndescription: Installed by ${platform} in its runtime window.\n---\n\nUse the runtime Skill.\n`,
+      );
+      await write(path.join(runtimeSkill, "data.bin"), Buffer.from([39, 0, targets.indexOf(platform)]));
+    }
+    const codexSkills = path.join(environmentAgentHomePath("tools", "codex"), "skills");
+    await write(path.join(codexSkills, ".system", ".codex-system-skills.marker"), "system-state\n");
     await write(
-      path.join(runtimeSkill, "SKILL.md"),
-      "---\nname: window-installed\ndescription: Installed by Codex in its runtime window.\n---\n\nUse the runtime Skill.\n",
-    );
-    await write(path.join(runtimeSkill, "data.bin"), Buffer.from([39, 0, 255]));
-    await write(path.join(skills, ".system", ".codex-system-skills.marker"), "system-state\n");
-    await write(
-      path.join(skills, ".hidden-runtime", "SKILL.md"),
+      path.join(codexSkills, ".hidden-runtime", "SKILL.md"),
       "---\nname: hidden-runtime\ndescription: Hidden runtime state.\n---\nHidden.\n",
     );
-    await write(path.join(skills, "broken-local", "SKILL.md"), "missing frontmatter\n");
+    await write(path.join(codexSkills, "broken-local", "SKILL.md"), "missing frontmatter\n");
     await write(
-      path.join(skills, "conflicting-local", "SKILL.md"),
+      path.join(codexSkills, "conflicting-local", "SKILL.md"),
       "---\nname: harness-project-memory\ndescription: Conflicts with a managed Skill.\n---\nConflict.\n",
     );
     const lockPath = path.join(process.env.HARNESS_HOME, "environments", "tools", "lock.json");
@@ -365,28 +495,36 @@ test("Codex-installed ordinary Skills immediately belong to only their Environme
     const beforeRecipe = await readFile(recipePath);
 
     const inventory = await inspectEnvironmentLocalSkills(await readEnvironment(root, "tools"));
-    assert.deepEqual(inventory.skills.map((skill) => ({ name: skill.name, origin: skill.origin })), [
-      { name: "window-installed", origin: "external" },
-    ]);
+    assert.deepEqual(inventory.skills.map((skill) => skill.name), targets.map((platform) => `${platform}-installed`).sort());
+    assert.equal(inventory.skills.every((skill) => skill.origin === "external" && skill.platform === "environment"), true);
+    assert.deepEqual(inventory.skills[0]?.platforms, targets);
     assert.deepEqual(inventory.issues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
     const context = await environmentInfo(root);
-    assert.deepEqual(context.environmentSkills.map((skill) => skill.name), ["window-installed"]);
+    assert.deepEqual(context.environmentSkills.map((skill) => skill.name), targets.map((platform) => `${platform}-installed`).sort());
     assert.deepEqual(context.environmentSkillIssues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
 
     const checks = await doctorEnvironment(root, "tools");
-    assert.equal(checks.find((check) => check.label === "environment-skill:window-installed")?.status, "ok");
+    for (const platform of targets) {
+      assert.equal(checks.find((check) => check.label === `environment-skill:${platform}-installed`)?.status, "ok");
+    }
     assert.equal(checks.find((check) => check.label === "environment-skill:broken-local")?.status, "warn");
     assert.equal(checks.find((check) => check.label === "environment-skill:conflicting-local")?.status, "fail");
 
-    assert.equal((await lstat(runtimeSkill)).isDirectory(), true);
-    assert.deepEqual(await readFile(path.join(runtimeSkill, "data.bin")), Buffer.from([39, 0, 255]));
-    assert.equal(await readFile(path.join(skills, ".system", ".codex-system-skills.marker"), "utf8"), "system-state\n");
-    await access(path.join(skills, ".hidden-runtime", "SKILL.md"));
-    await assert.rejects(access(path.join(environmentAgentHomePath("isolated", "codex"), "skills", "window-installed")));
+    for (const source of targets) {
+      for (const target of targets) {
+        assert.deepEqual(
+          await readFile(path.join(environmentAgentHomePath("tools", target), "skills", `${source}-installed`, "data.bin")),
+          Buffer.from([39, 0, targets.indexOf(source)]),
+        );
+      }
+      await assert.rejects(access(path.join(environmentAgentHomePath("isolated", "codex"), "skills", `${source}-installed`)));
+    }
+    assert.equal(await readFile(path.join(codexSkills, ".system", ".codex-system-skills.marker"), "utf8"), "system-state\n");
+    await access(path.join(codexSkills, ".hidden-runtime", "SKILL.md"));
     assert.deepEqual(await readFile(lockPath), beforeLock);
     assert.deepEqual(await readFile(recipePath), beforeRecipe);
-    assert.equal((await readEnvironment(root, "tools")).spec.roots.some((item) => item.name === "window-installed"), false);
-    await assert.rejects(access(path.join(process.env.HARNESS_HOME, "migrations", "skills", "window-installed")));
+    assert.equal((await readEnvironment(root, "tools")).spec.roots.some((item) => item.name.endsWith("-installed")), false);
+    await assert.rejects(access(path.join(process.env.HARNESS_HOME, "migrations", "skills", "codex-installed")));
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
     assert.deepEqual((await inspectEnvironmentLocalSkills(await readEnvironment(root, "isolated"))).skills, []);
   } finally {
@@ -396,6 +534,12 @@ test("Codex-installed ordinary Skills immediately belong to only their Environme
     else process.env.HARNESS_ENV = previous.harnessEnvironment;
     if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
     else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    if (previous.piHome === undefined) delete process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR;
+    else process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR = previous.piHome;
+    if (previous.qoderHome === undefined) delete process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR = previous.qoderHome;
     await removeTestTree(root);
   }
 });
@@ -415,7 +559,7 @@ test("Pi uses a stable Agent home with only Skills managed by the Environment vi
     const skills = path.join(home, "skills");
     assert.equal((await lstat(home)).isDirectory(), true);
     assert.equal((await lstat(skills)).isSymbolicLink(), true);
-    assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), path.join(view, "pi", "skills"));
+    assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), environmentSkillsPath("pi-tools"));
 
     await write(path.join(home, "settings.json"), '{"theme":"light"}\n');
     await write(path.join(home, "auth.json"), '{"openai":{"type":"api_key","key":"environment"}}\n');
@@ -466,7 +610,7 @@ test("Qoder merges MCP servers and Hooks into a managed settings.json view", { c
     const skills = path.join(home, "skills");
     const settingsLink = path.join(home, "settings.json");
     assert.equal((await lstat(skills)).isSymbolicLink(), true);
-    assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), path.join(view, "qoder", "skills"));
+    assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), environmentSkillsPath("qoder-tools"));
     assert.equal((await lstat(settingsLink)).isSymbolicLink(), true);
     assert.equal(path.resolve(path.dirname(settingsLink), await readlink(settingsLink)), path.join(view, "qoder", "settings.json"));
 

@@ -1272,7 +1272,7 @@ test("managed Agent home drift is rejected before project activation", { concurr
     await rm(toolsSkills, { force: true });
     await mkdir(toolsSkills);
 
-    await assert.rejects(activateEnvironment(project, "tools"), /Managed Agent home link is missing/);
+    await assert.rejects(activateEnvironment(project, "tools"), /Agent Skills link does not use the shared Environment root/);
 
     assert.equal(await readFile(baseOpaque, "utf8"), "stable\n");
     await assert.rejects(access(path.join(project, ".harness")));
