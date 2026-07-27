@@ -10,7 +10,6 @@ import {
   environmentLockPath,
   environmentPath,
   parseEnvironment,
-  deactivateEnvironment,
   activateEnvironment,
   doctorEnvironment,
   installIntoEnvironment,
@@ -928,7 +927,7 @@ test("doctor reports modified Agent Memory discovery instructions", { concurrenc
     const checks = await doctorEnvironment(root, "research");
 
     assert.equal(checks.find((check) => check.label === "memory-bootstrap")?.status, "fail");
-    await assert.rejects(deactivateEnvironment(root), /discovery block was modified/);
+    await assert.rejects(activateEnvironment(root, "base"), /discovery block was modified/);
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;

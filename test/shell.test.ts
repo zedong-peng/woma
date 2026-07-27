@@ -110,7 +110,7 @@ test("zsh hook updates the parent shell after activate", async (context) => {
   }
 });
 
-test("bash hook updates the parent shell after activate and deactivate", async () => {
+test("bash hook restores the original Agent homes after deactivate", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-activation-"));
   try {
     const hookPath = path.join(root, "hook.bash");
@@ -119,6 +119,9 @@ test("bash hook updates the parent shell after activate and deactivate", async (
     await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(executable, 0o755);
     const harnessHome = path.join(root, "home");
+    const originalCodex = path.join(root, "original-codex");
+    const originalClaude = path.join(root, "original-claude");
+    const originalPi = path.join(root, "original-pi");
     await fakeEnvironment(harnessHome, "research", ["codex"]);
     await fakeEnvironment(harnessHome, "base", ["codex", "claude"]);
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
@@ -127,17 +130,57 @@ test("bash hook updates the parent shell after activate and deactivate", async (
       "harness --project /tmp/project activate research",
       'printf \'%s|%s\\n\' "$HARNESS_ENV" "$CODEX_HOME"',
       "harness deactivate",
-      'printf \'%s|%s\\n\' "$HARNESS_ENV" "$CLAUDE_CONFIG_DIR"',
+      "__harness_prompt_update",
+      'printf \'%s|%s|%s|%s|%s\\n\' "${HARNESS_ENV-unset}" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$PI_CODING_AGENT_DIR" "$HARNESS_PROMPT_PREFIX"',
     ].join("\n");
     const { stdout } = await run(
       "bash",
       ["--noprofile", "--norc", "-c", script, "bash", hookPath],
-      { env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome } },
+      {
+        env: {
+          ...process.env,
+          PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`,
+          HARNESS_HOME: harnessHome,
+          HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
+          HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+          HARNESS_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
+          CODEX_HOME: originalCodex,
+          CLAUDE_CONFIG_DIR: originalClaude,
+          PI_CODING_AGENT_DIR: originalPi,
+        },
+      },
     );
     assert.equal(
       stdout,
-      `research|${path.join(harnessHome, "environments", "research", "home", "codex")}\nbase|${path.join(harnessHome, "environments", "base", "home", "claude")}\n`,
+      `research|${path.join(harnessHome, "environments", "research", "home", "codex")}\nunset|${originalCodex}|${originalClaude}|${originalPi}|\n`,
     );
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("bash hook keeps activate base distinct from deactivate", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-base-activation-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const executable = path.join(root, "bin", "harness");
+    const harnessHome = path.join(root, "home");
+    await mkdir(path.dirname(executable), { recursive: true });
+    await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(executable, 0o755);
+    await fakeEnvironment(harnessHome, "base", ["codex", "claude"]);
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const script = [
+      'source "$1"',
+      "harness deactivate",
+      "harness activate base",
+      "__harness_prompt_update",
+      'printf \'%s|%s|%s\' "$HARNESS_ENV" "$CODEX_HOME" "$HARNESS_PROMPT_PREFIX"',
+    ].join("\n");
+    const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
+      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome },
+    });
+    assert.equal(stdout, `base|${path.join(harnessHome, "environments", "base", "home", "codex")}|(harness:base) `);
   } finally {
     await removeTestTree(root);
   }

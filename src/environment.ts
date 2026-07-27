@@ -967,10 +967,6 @@ export async function activateEnvironment(
   });
 }
 
-export async function deactivateEnvironment(projectRoot: string): Promise<EnvironmentActivationResult> {
-  return activateEnvironment(projectRoot, DEFAULT_ENVIRONMENT);
-}
-
 async function findCommand(command: string): Promise<boolean> {
   if (command.includes(path.sep)) {
     return access(command, constants.X_OK).then(

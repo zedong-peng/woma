@@ -6,7 +6,6 @@ import path from "node:path";
 import {
   activateEnvironment,
   createEnvironment,
-  deactivateEnvironment,
   installIntoEnvironment,
 } from "../dist/src/environment.js";
 
@@ -41,7 +40,7 @@ try {
     await activateEnvironment(project, target);
     samples.push(performance.now() - started);
   }
-  await deactivateEnvironment(project);
+  await activateEnvironment(project, "base");
 
   samples.sort((left, right) => left - right);
   const quantile = (fraction) => {

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Changed `harness deactivate` to leave Harness Environment management, restore the original Agent homes, and clear the shell selection; use `harness activate base` to select Harness `base` explicitly.
 - Removed the public `harness shell` command; `harness init` is now the sole shell-integration entrypoint and continues to install a static startup hook.
 - Moved Codex-managed `skills/.system` into the stable per-Environment Agent home, retained atomic Package Skill projection and compatibility with existing linked layouts, and made ordinary external Skills immediately visible as Environment-local state without a second command.
 - Removed the public `harness sync` command; install and non-dry-run uninstall now repair the existing locked Package closure before applying their requested mutation.

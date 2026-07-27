@@ -112,6 +112,27 @@ test("CLI help lists commands alphabetically", { concurrency: false }, async () 
   }
 });
 
+test("CLI deactivate does not initialize base or write project state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-deactivate-"));
+  const home = path.join(root, "home");
+  const previousEnvironment = process.env.HARNESS_ENV;
+  try {
+    process.env.HARNESS_ENV = "research";
+    const result = await runCli(["deactivate"], root, home);
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Deactivated environment research/);
+    await assert.rejects(access(home));
+    await assert.rejects(access(path.join(root, ".harness")));
+    await assert.rejects(access(path.join(root, "AGENTS.md")));
+    await assert.rejects(access(path.join(root, "CLAUDE.md")));
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
+    await removeTestTree(root);
+  }
+});
+
 async function packageFixture(
   root: string,
   name: string,
@@ -397,6 +418,8 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     assert.match(activateDefault.stdout, /Activated environment base/);
     const deactivate = await runCli(["--project", project, "deactivate"], nested, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
+    assert.match(deactivate.stdout, /Deactivated environment base/);
+    assert.doesNotMatch(deactivate.stdout, /using base/);
   } finally {
     await removeTestTree(root);
   }

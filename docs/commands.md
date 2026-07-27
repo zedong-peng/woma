@@ -123,7 +123,7 @@ claude
 pi
 ```
 
-`deactivate` returns to `base`. Harness does not currently associate Codex, Claude, or Pi session IDs with Environments; activate the intended Environment before resuming an existing session.
+`deactivate` leaves Harness Environment management in the current shell: it clears `HARNESS_ENV` and restores the `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, and `PI_CODING_AGENT_DIR` values captured before the shell hook selected an Environment. Use `harness activate base` when you want to switch explicitly to Harness's `base` Environment. Harness does not currently associate Codex, Claude, or Pi session IDs with Environments; activate the intended Environment before resuming an existing session.
 
 ## Inspection and repair
 

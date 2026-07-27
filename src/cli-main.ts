@@ -9,7 +9,6 @@ import {
   createEnvironment,
   environmentInfo,
   environmentSnapshot,
-  deactivateEnvironment,
   doctorEnvironment,
   DEFAULT_ENVIRONMENT,
   environmentLockPath,
@@ -442,14 +441,10 @@ program
 
 program
   .command("deactivate")
-  .description("leave the selected environment and return to base")
-  .action(async (_options: unknown, command: Command) => {
-    const project = projectRoot(command);
+  .description("leave the selected Harness environment and restore the original Agent homes")
+  .action(() => {
     const previous = selectedEnvironment();
-    await ensureBaseEnvironment(project, baseInitializationOptions);
-    const result = await deactivateEnvironment(project);
-    printActions(result.actions);
-    console.log(`Deactivated environment ${previous ?? DEFAULT_ENVIRONMENT}; using ${DEFAULT_ENVIRONMENT}`);
+    console.log(`Deactivated environment ${previous}`);
   });
 
 program
