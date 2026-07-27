@@ -24,7 +24,7 @@ export interface PackageSourceOptions {
   subdirectory?: string;
 }
 
-interface SkillMetadata {
+export interface SkillMetadata {
   name: string;
   description: string;
 }
@@ -193,7 +193,7 @@ function implicitPackageName(input: string): string {
   return normalized;
 }
 
-function skillMetadata(input: string, label: string): SkillMetadata {
+export function parseSkillMetadata(input: string, label: string): SkillMetadata {
   const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(input);
   if (!frontmatter?.[1]) throw new Error(`${label} has invalid or missing YAML frontmatter`);
   let document: unknown;
@@ -236,7 +236,7 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
   let description: string;
   let selected: { sourceRoot: string; targetName: string; metadata: SkillMetadata }[];
   if (await pathExists(standaloneDocument)) {
-    const metadata = skillMetadata(await readFile(standaloneDocument, "utf8"), standaloneDocument);
+    const metadata = parseSkillMetadata(await readFile(standaloneDocument, "utf8"), standaloneDocument);
     packageName = metadata.name;
     description = metadata.description.slice(0, 300);
     selected = [{ sourceRoot: materialized.root, targetName: "standalone", metadata }];
@@ -268,7 +268,7 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
       selected.push({
         sourceRoot,
         targetName: entry.name,
-        metadata: skillMetadata(await readFile(document, "utf8"), document),
+        metadata: parseSkillMetadata(await readFile(document, "utf8"), document),
       });
     }
     if (selected.length === 0) {
@@ -357,7 +357,7 @@ export async function validatePackage(root: string, manifest: HarnessManifest): 
     if (!(await pathExists(skillDocument))) {
       throw new Error(`Skill ${skill.name} has no SKILL.md at ${skill.path}`);
     }
-    const metadata = skillMetadata(await readFile(skillDocument, "utf8"), `Skill ${skill.name}`);
+    const metadata = parseSkillMetadata(await readFile(skillDocument, "utf8"), `Skill ${skill.name}`);
     if (metadata.name !== skill.name) {
       throw new Error(`Skill ${skill.name} frontmatter name must match the manifest name`);
     }
@@ -713,7 +713,7 @@ function sourceAtCommit(source: string, commit?: string): string {
   return `${locator}#${commit}`;
 }
 
-export async function syncLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
+export async function repairLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
   return withPackageLock(lock.name, lock.cacheKey, async () => {
     const expectedRoot = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
     if (await pathExists(expectedRoot)) {

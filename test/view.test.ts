@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parse as parseToml } from "smol-toml";
-import { createEnvironment, doctorEnvironment, installIntoEnvironment, syncEnvironment } from "../src/environment.js";
+import {
+  activateEnvironment,
+  createEnvironment,
+  doctorEnvironment,
+  environmentInfo,
+  installIntoEnvironment,
+  readEnvironment,
+} from "../src/environment.js";
+import { inspectEnvironmentLocalSkills } from "../src/environment-skills.js";
 import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 
@@ -104,7 +112,7 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     await writeFile(path.join(codexHome, "auth.json"), '{"api_key":"environment"}\n');
     await writeFile(path.join(claudeHome, ".credentials.json"), '{"oauth":"environment"}\n');
     for (const [platform, names] of [
-      ["codex", ["auth.json", "config.toml", "hooks.json", "skills"]],
+      ["codex", ["auth.json", "config.toml", "hooks.json"]],
       ["claude", [".credentials.json", "settings.json", "skills"]],
     ] as const) {
       for (const name of names) {
@@ -116,6 +124,15 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
         );
       }
     }
+    const codexSkills = path.join(codexHome, "skills");
+    assert.equal((await lstat(codexSkills)).isDirectory(), true);
+    assert.equal((await lstat(codexSkills)).isSymbolicLink(), false);
+    const managedSkill = path.join(codexSkills, "view-skill");
+    assert.equal((await lstat(managedSkill)).isSymbolicLink(), true);
+    assert.equal(
+      path.resolve(path.dirname(managedSkill), await readlink(managedSkill)),
+      path.join(toolsView, "codex", "skills", "view-skill"),
+    );
 
     const codexConfig = parseToml(await readFile(path.join(codexHome, "config.toml"), "utf8")) as Record<string, any>;
     assert.equal(codexConfig.model, "gpt-test");
@@ -141,10 +158,7 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     };
     await writeFile(claudeSettingsPath, `${JSON.stringify(claudeSettings, null, 2)}\n`);
     assert.match(await readFile(path.join(codexHome, "skills", "view-skill", "SKILL.md"), "utf8"), /Stable home fixture/);
-    assert.equal(
-      await realpath(path.join(codexHome, "skills", ".system")),
-      await realpath(path.join(home, "environments", "tools", "home", "codex-system-skills")),
-    );
+    await write(path.join(codexHome, "skills", ".system", ".codex-system-skills.marker"), "tools\n");
 
     const claudeStatePath = path.join(claudeHome, ".claude.json");
     const claudeState = JSON.parse(await readFile(claudeStatePath, "utf8")) as Record<string, any>;
@@ -194,17 +208,18 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     assert.deepEqual(await readFile(path.join(claudeHome, "future-state.bin")), unknown);
     await assert.rejects(readFile(path.join(toolsView, "codex", "goals_1.sqlite")), /ENOENT/);
     await assert.rejects(readFile(path.join(environmentAgentHomePath("isolated", "codex"), "goals_1.sqlite")), /ENOENT/);
-    assert.notEqual(
-      await realpath(path.join(environmentViewPath("isolated"), "codex", "skills", ".system")),
-      await realpath(path.join(toolsView, "codex", "skills", ".system")),
-    );
+    const isolatedSystem = path.join(environmentAgentHomePath("isolated", "codex"), "skills", ".system");
+    await write(path.join(isolatedSystem, ".codex-system-skills.marker"), "isolated\n");
+    assert.notEqual(await realpath(isolatedSystem), await realpath(path.join(codexHome, "skills", ".system")));
+    assert.equal(await readFile(path.join(codexHome, "skills", ".system", ".codex-system-skills.marker"), "utf8"), "tools\n");
+    await assert.rejects(access(path.join(toolsView, "codex", "skills", ".system")));
 
     const updatedClaude = JSON.parse(await readFile(claudeStatePath, "utf8")) as Record<string, any>;
     assert.equal(updatedClaude.runtimeMarker, "original");
     assert.equal(updatedClaude.mcpServers.existing.command, "keep");
     assert.equal(updatedClaude.mcpServers["view-server"], undefined);
 
-    await syncEnvironment(root, "tools");
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite")), sqlite);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-wal")), wal);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-shm")), shm);
@@ -226,6 +241,161 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
     if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
     else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    await removeTestTree(root);
+  }
+});
+
+test("Codex can replace legacy projected system Skills without invalidating the Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-codex-system-skills-"));
+  const previous = {
+    harnessHome: process.env.HARNESS_HOME,
+    harnessEnvironment: process.env.HARNESS_ENV,
+    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+  };
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ENV = "tools";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    const packageRoot = await packageFixture(root, "1.0.0", false);
+    await installIntoEnvironment(root, "tools", packageRoot);
+
+    const codexHome = environmentAgentHomePath("tools", "codex");
+    const homeSkills = path.join(codexHome, "skills");
+    const viewSkills = path.join(environmentViewPath("tools"), "codex", "skills");
+    const legacySystemRoot = path.join(path.dirname(codexHome), "codex-system-skills");
+    await mkdir(legacySystemRoot, { recursive: true });
+    await symlink(legacySystemRoot, path.join(viewSkills, ".system"));
+    await rm(homeSkills, { recursive: true, force: true });
+    await symlink(viewSkills, homeSkills);
+
+    await rm(path.join(viewSkills, ".system"), { force: true });
+    await write(path.join(viewSkills, ".system", ".codex-system-skills.marker"), "runtime-v1\n");
+    await write(path.join(viewSkills, ".system", "skill-installer", "SKILL.md"), "Codex runtime Skill\n");
+
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
+    await activateEnvironment(root, "tools");
+
+    const additionalSkill = path.join(root, "additional-skill");
+    await write(
+      path.join(additionalSkill, "SKILL.md"),
+      "---\nname: additional-skill\ndescription: Added after Codex runtime state.\n---\n\nUse the additional Skill.\n",
+    );
+    const legacyView = await readlink(environmentViewPath("tools"));
+    await assert.rejects(
+      installIntoEnvironment(root, "tools", additionalSkill, process.cwd(), {
+        onMetadataPrepared: () => {
+          throw new Error("injected legacy migration failure");
+        },
+      }),
+      /injected legacy migration failure/,
+    );
+    assert.equal((await lstat(homeSkills)).isSymbolicLink(), true);
+    assert.equal(await readlink(environmentViewPath("tools")), legacyView);
+    assert.equal(await readFile(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime-v1\n");
+
+    await installIntoEnvironment(root, "tools", additionalSkill);
+
+    assert.equal((await lstat(homeSkills)).isDirectory(), true);
+    assert.equal((await lstat(homeSkills)).isSymbolicLink(), false);
+    assert.equal(await readFile(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime-v1\n");
+    assert.match(await readFile(path.join(homeSkills, ".system", "skill-installer", "SKILL.md"), "utf8"), /runtime Skill/);
+    assert.match(await readFile(path.join(homeSkills, "additional-skill", "SKILL.md"), "utf8"), /additional Skill/);
+    assert.equal((await readdir(path.join(environmentViewPath("tools"), "codex", "skills"))).includes(".system"), false);
+
+    await rm(path.join(homeSkills, ".system"), { recursive: true, force: true });
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
+    await write(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "runtime-v2\n");
+    await write(path.join(homeSkills, "future-codex-runtime", "state.bin"), Buffer.from([0, 255, 39]));
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
+    assert.equal(await readFile(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime-v2\n");
+    assert.deepEqual(await readFile(path.join(homeSkills, "future-codex-runtime", "state.bin")), Buffer.from([0, 255, 39]));
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
+
+    const managedSkill = path.join(homeSkills, "harness-project-memory");
+    await rm(managedSkill, { force: true });
+    await mkdir(managedSkill);
+    const drifted = (await doctorEnvironment(root, "tools")).find((check) => check.label === "view");
+    assert.equal(drifted?.status, "fail");
+    assert.match(drifted?.detail ?? "", /Harness-managed Codex Skill link/);
+  } finally {
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previous.harnessEnvironment;
+    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
+    await removeTestTree(root);
+  }
+});
+
+test("Codex-installed ordinary Skills immediately belong to only their Environment", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-codex-environment-skill-"));
+  const previous = {
+    harnessHome: process.env.HARNESS_HOME,
+    harnessEnvironment: process.env.HARNESS_ENV,
+    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+  };
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ENV = "tools";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    await createEnvironment(root, "isolated", ["codex"]);
+    const skills = path.join(environmentAgentHomePath("tools", "codex"), "skills");
+    const runtimeSkill = path.join(skills, "window-installed");
+    await write(
+      path.join(runtimeSkill, "SKILL.md"),
+      "---\nname: window-installed\ndescription: Installed by Codex in its runtime window.\n---\n\nUse the runtime Skill.\n",
+    );
+    await write(path.join(runtimeSkill, "data.bin"), Buffer.from([39, 0, 255]));
+    await write(path.join(skills, ".system", ".codex-system-skills.marker"), "system-state\n");
+    await write(
+      path.join(skills, ".hidden-runtime", "SKILL.md"),
+      "---\nname: hidden-runtime\ndescription: Hidden runtime state.\n---\nHidden.\n",
+    );
+    await write(path.join(skills, "broken-local", "SKILL.md"), "missing frontmatter\n");
+    await write(
+      path.join(skills, "conflicting-local", "SKILL.md"),
+      "---\nname: harness-project-memory\ndescription: Conflicts with a managed Skill.\n---\nConflict.\n",
+    );
+    const lockPath = path.join(process.env.HARNESS_HOME, "environments", "tools", "lock.json");
+    const recipePath = path.join(process.env.HARNESS_HOME, "environments", "tools", "environment.yaml");
+    const beforeLock = await readFile(lockPath);
+    const beforeRecipe = await readFile(recipePath);
+
+    const inventory = await inspectEnvironmentLocalSkills(await readEnvironment(root, "tools"));
+    assert.deepEqual(inventory.skills.map((skill) => ({ name: skill.name, origin: skill.origin })), [
+      { name: "window-installed", origin: "external" },
+    ]);
+    assert.deepEqual(inventory.issues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
+    const context = await environmentInfo(root);
+    assert.deepEqual(context.environmentSkills.map((skill) => skill.name), ["window-installed"]);
+    assert.deepEqual(context.environmentSkillIssues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
+
+    const checks = await doctorEnvironment(root, "tools");
+    assert.equal(checks.find((check) => check.label === "environment-skill:window-installed")?.status, "ok");
+    assert.equal(checks.find((check) => check.label === "environment-skill:broken-local")?.status, "warn");
+    assert.equal(checks.find((check) => check.label === "environment-skill:conflicting-local")?.status, "fail");
+
+    assert.equal((await lstat(runtimeSkill)).isDirectory(), true);
+    assert.deepEqual(await readFile(path.join(runtimeSkill, "data.bin")), Buffer.from([39, 0, 255]));
+    assert.equal(await readFile(path.join(skills, ".system", ".codex-system-skills.marker"), "utf8"), "system-state\n");
+    await access(path.join(skills, ".hidden-runtime", "SKILL.md"));
+    await assert.rejects(access(path.join(environmentAgentHomePath("isolated", "codex"), "skills", "window-installed")));
+    assert.deepEqual(await readFile(lockPath), beforeLock);
+    assert.deepEqual(await readFile(recipePath), beforeRecipe);
+    assert.equal((await readEnvironment(root, "tools")).spec.roots.some((item) => item.name === "window-installed"), false);
+    await assert.rejects(access(path.join(process.env.HARNESS_HOME, "migrations", "skills", "window-installed")));
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
+    assert.deepEqual((await inspectEnvironmentLocalSkills(await readEnvironment(root, "isolated"))).skills, []);
+  } finally {
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previous.harnessEnvironment;
+    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
     await removeTestTree(root);
   }
 });
@@ -263,7 +433,7 @@ test("Pi uses a stable Agent home with only Skills managed by the Environment vi
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.deepEqual((await readdir(path.join(view, "pi"))).sort(), ["skills"]);
 
-    await syncEnvironment(root, "pi-tools");
+    await installIntoEnvironment(root, "pi-tools", "builtin:harness-project-memory");
     assert.equal(await readFile(path.join(home, "settings.json"), "utf8"), '{"theme":"light"}\n');
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.equal((await doctorEnvironment(root, "pi-tools")).find((check) => check.label === "view")?.status, "ok");
@@ -332,7 +502,7 @@ test("shared credential links migrate into Environment views", { concurrency: fa
     await symlink(path.join(originalCodex, "auth.json"), codexCredential);
     await symlink(path.join(originalClaude, ".credentials.json"), claudeCredential);
 
-    await syncEnvironment(root, "tools");
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
 
     assert.equal(
       path.resolve(path.dirname(codexCredential), await readlink(codexCredential)),

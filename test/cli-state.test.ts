@@ -463,15 +463,18 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
   try {
     const result = await runCliProcess(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
-    for (const command of ["env", "migrate", "install", "list", "activate", "deactivate", "info", "sync", "doctor", "shell"]) {
+    for (const command of ["env", "migrate", "install", "list", "activate", "deactivate", "info", "doctor", "shell"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
     }
-    for (const command of ["bind", "current", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
+    for (const command of ["bind", "current", "sync", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
       assert.doesNotMatch(result.stdout, new RegExp(`^  ${command}(?: |$)`, "m"));
     }
     const removed = await runCliProcess(["bind", "test", "npm", "test"], root, path.join(root, "home"));
     assert.notEqual(removed.code, 0);
     assert.match(removed.stderr, /unknown command ['"]bind['"]/);
+    const removedSync = await runCliProcess(["sync"], root, path.join(root, "home"));
+    assert.notEqual(removedSync.code, 0);
+    assert.match(removedSync.stderr, /unknown command ['"]sync['"]/);
   } finally {
     await removeTestTree(root);
   }
@@ -634,12 +637,6 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     const lock = JSON.parse(await readFile(path.join(home, "environments", "research", "lock.json"), "utf8")) as {
       packages: Record<string, { cacheKey: string }>;
     };
-    for (const [name, pkg] of Object.entries(lock.packages)) {
-      await rm(path.join(home, "packages", name, pkg.cacheKey), { recursive: true, force: true });
-    }
-    const sync = await runCli(["--project", project, "sync", "-n", "research"], root, home);
-    assert.equal(sync.code, 0, sync.stderr);
-    assert.match(sync.stdout, /Synced research: 4 packages/);
     const activate = await runCli(["--project", project, "activate", "research"], root, home);
     assert.equal(activate.code, 0, activate.stderr);
     assert.match(activate.stdout, /packages\s+harness-project-memory, harness-package-builder, paper-search, auto-research/);
@@ -681,7 +678,7 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     assert.match(listWithMissingCache.stdout, /unavailable packages\n\s+paper-search@1\.0\.0\s+Package paper-search@1\.0\.0 is not cached/);
     assert.doesNotMatch(listWithMissingCache.stdout, /\[unavailable\]/);
     assert.match(listWithMissingCache.stdout, /auto-research\s+auto-research@1\.0\.0\s+codex/);
-    const repair = await runCli(["--project", project, "sync", "-n", "research"], root, home);
+    const repair = await runCli(["--project", project, "install", "-n", "research", methodPackage], root, home);
     assert.equal(repair.code, 0, repair.stderr);
     const installWhileActive = await runCli(["--project", project, "install", idea], root, home);
     assert.equal(installWhileActive.code, 0, installWhileActive.stderr);

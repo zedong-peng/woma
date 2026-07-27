@@ -81,7 +81,7 @@ test("concurrent explicit first use initializes base exactly once across process
   }
 });
 
-test("different Environments serialize repair of one shared Package cache entry", async () => {
+test("different Environments serialize reinstall of one shared Package cache entry", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-concurrent-cache-repair-"));
   const home = path.join(root, "home");
   const env = { ...process.env, HARNESS_HOME: home };
@@ -99,8 +99,8 @@ test("different Environments serialize repair of one shared Package cache entry"
     await writeFile(skill, "corrupt\n", "utf8");
 
     await Promise.all([
-      run(process.execPath, [cli, "sync", "-n", "a"], { cwd: root, env }),
-      run(process.execPath, [cli, "sync", "-n", "b"], { cwd: root, env }),
+      run(process.execPath, [cli, "install", "-n", "a", "builtin:paper-search"], { cwd: root, env }),
+      run(process.execPath, [cli, "install", "-n", "b", "builtin:paper-search"], { cwd: root, env }),
     ]);
 
     assert.match(await readFile(skill, "utf8"), /paper-search/);

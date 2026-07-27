@@ -13,7 +13,7 @@ import {
   readEnvironmentLock,
 } from "../src/environment.js";
 import { hashDirectory, pathExists } from "../src/fs.js";
-import { installPackageSource, installPackageTree, syncLockedPackage } from "../src/package.js";
+import { installPackageSource, installPackageTree, repairLockedPackage } from "../src/package.js";
 import { environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
 
@@ -233,7 +233,7 @@ test("implicit Packages reject unsafe Skill names and symbolic links", { concurr
   }
 });
 
-test("repeated installation and sync reproduce implicit Package identity and bytes", { concurrency: false }, async () => {
+test("repeated installation and repair reproduce implicit Package identity and bytes", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-repeat-implicit-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   const source = path.join(fixtures, "ResearchStudio", "ResearchStudio-Idea");
@@ -248,7 +248,7 @@ test("repeated installation and sync reproduce implicit Package identity and byt
     );
 
     await removeTestTree(first.root);
-    const restored = await syncLockedPackage(first.lock);
+    const restored = await repairLockedPackage(first.lock);
     assert.equal(restored.root, first.root);
     assert.deepEqual(restored.manifest, first.manifest);
     assert.equal(await hashDirectory(restored.root), first.lock.integrity);
@@ -307,7 +307,7 @@ test("local and Git sources use the same implicit normalization", { concurrency:
     assert.equal(await pathExists(path.join(repository, "harness.yaml")), false);
 
     await removeTestTree(fromGit.root);
-    const restored = await syncLockedPackage(fromGit.lock);
+    const restored = await repairLockedPackage(fromGit.lock);
     assert.deepEqual(restored.manifest, fromGit.manifest);
     assert.equal(await hashDirectory(restored.root), fromGit.lock.integrity);
   } finally {
@@ -315,7 +315,7 @@ test("local and Git sources use the same implicit normalization", { concurrency:
   }
 });
 
-test("Git subdirectory installs preserve immutable provenance and sync after a branch moves", { concurrency: false }, async () => {
+test("Git subdirectory installs preserve immutable provenance and repair after a branch moves", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-git-subdir-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   const repository = path.join(root, "research-studio.git");
@@ -338,7 +338,7 @@ test("Git subdirectory installs preserve immutable provenance and sync after a b
     await run("git", ["add", "."], { cwd: repository });
     await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "second"], { cwd: repository });
     await removeTestTree(installed.root);
-    const restored = await syncLockedPackage(installed.lock);
+    const restored = await repairLockedPackage(installed.lock);
     assert.equal(restored.lock.commit, firstCommit);
     assert.equal(await hashDirectory(restored.root), installed.lock.integrity);
 

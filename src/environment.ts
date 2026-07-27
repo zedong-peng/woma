@@ -7,7 +7,7 @@ import { z } from "zod";
 import { AGENT_SESSION_ENTRIES, AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
 import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
 import { withEnvironmentLock, withProjectLock } from "./environment-lock.js";
-import { installPackageTree, loadCachedPackage, syncLockedPackage, type PackageInstallPlan, type PackageSourceOptions } from "./package.js";
+import { installPackageTree, loadCachedPackage, repairLockedPackage, type PackageInstallPlan, type PackageSourceOptions } from "./package.js";
 import {
   prepareProjectMemoryInitialization,
   localMemoryPath,
@@ -16,6 +16,11 @@ import {
   projectMemoryPath,
 } from "./memory.js";
 import { prepareMemoryBootstrapTransition } from "./memory-bootstrap.js";
+import {
+  inspectEnvironmentLocalSkills,
+  type EnvironmentLocalSkill,
+  type EnvironmentLocalSkillIssue,
+} from "./environment-skills.js";
 import { environmentViewPath, materializeEnvironmentView, sourceAgentHome, validateEnvironmentView } from "./view.js";
 import type { Action, CodexClaudePlatform, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
 
@@ -99,6 +104,8 @@ export interface CurrentEnvironmentContext {
     skills: string[];
     entrypoints: { name: string; skill: string; description: string }[];
   }[];
+  environmentSkills: EnvironmentLocalSkill[];
+  environmentSkillIssues: EnvironmentLocalSkillIssue[];
 }
 
 export interface EnvironmentSnapshot {
@@ -616,13 +623,16 @@ export async function installPackagesIntoEnvironment(
   hooks: EnvironmentInstallHooks = {},
 ): Promise<{ environment: HarnessEnvironment; roots: InstalledPackage[]; packages: InstalledPackage[] }> {
   if (sources.length === 0) throw new Error("Install at least one Package source");
-  if (environmentNameValue === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
+  if (environmentNameValue === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, environmentNameValue)))) {
+    await ensureBaseEnvironment(projectRoot);
+  }
   return withEnvironmentLock(environmentNameValue, async () => {
     const [environment, currentLock] = await Promise.all([
       readEnvironmentFile(projectRoot, environmentNameValue),
       readEnvironmentLockFile(projectRoot, environmentNameValue),
     ]);
-    validateEnvironmentLockGraph(environment, currentLock);
+    const currentNames = validateEnvironmentLockGraph(environment, currentLock);
+    for (const packageName of currentNames) await repairLockedPackage(currentLock.packages[packageName]!);
     const previous = await loadEnvironmentSnapshot(environment, currentLock);
     const installations: PackageInstallPlan[] = [];
     for (const source of sources) {
@@ -760,7 +770,10 @@ export async function uninstallFromEnvironment(
       readEnvironmentFile(projectRoot, environmentNameValue),
       readEnvironmentLockFile(projectRoot, environmentNameValue),
     ]);
-    validateEnvironmentLockGraph(environment, currentLock);
+    const currentNames = validateEnvironmentLockGraph(environment, currentLock);
+    if (!options.dryRun) {
+      for (const currentName of currentNames) await repairLockedPackage(currentLock.packages[currentName]!);
+    }
     const previous = await loadEnvironmentSnapshot(environment, currentLock);
     if (!currentLock.packages[packageName]) {
       throw new Error(`Package ${packageName} is not installed in Environment ${environmentNameValue}`);
@@ -855,6 +868,11 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
   if (selected === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(project);
   return withEnvironmentLock(selected, async () => {
     const loaded = await loadOrderedPackages(project, selected);
+    const managedSkillNames = new Set<string>();
+    for (const pkg of loaded.packages.values()) {
+      for (const skill of pkg.manifest.spec.skills) managedSkillNames.add(skill.name);
+    }
+    const localSkills = await inspectEnvironmentLocalSkills(loaded.environment, managedSkillNames);
     return {
       projectRoot: project,
       environment: { name: loaded.environment.metadata.name, targets: loaded.environment.spec.targets },
@@ -870,6 +888,8 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
           entrypoints: pkg.manifest.spec.entrypoints,
         };
       }),
+      environmentSkills: localSkills.skills,
+      environmentSkillIssues: localSkills.issues,
     };
   });
 }
@@ -951,24 +971,6 @@ export async function deactivateEnvironment(projectRoot: string): Promise<Enviro
   return activateEnvironment(projectRoot, DEFAULT_ENVIRONMENT);
 }
 
-export async function syncEnvironment(projectRoot: string, name: string): Promise<LockedPackage[]> {
-  if (name === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, name)))) {
-    await ensureBaseEnvironment(projectRoot);
-  }
-  return withEnvironmentLock(name, async () => {
-    const environment = await readEnvironmentFile(projectRoot, name);
-    const lock = await readEnvironmentLockFile(projectRoot, name);
-    const names = validateEnvironmentLockGraph(environment, lock);
-    for (const packageName of names) await syncLockedPackage(lock.packages[packageName]!);
-    await validateLock(lock);
-    const loaded = await loadEnvironmentSnapshot(environment, lock);
-    await materializeEnvironmentView(environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!), {
-      previousPackages: loaded.names.map((packageName) => loaded.packages.get(packageName)!),
-    });
-    return Object.values(lock.packages);
-  });
-}
-
 async function findCommand(command: string): Promise<boolean> {
   if (command.includes(path.sep)) {
     return access(command, constants.X_OK).then(
@@ -1008,6 +1010,7 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
     return checks;
   }
   checks.push({ status: "ok", label: "roots", detail: environment.spec.roots.map((root) => root.name).join(", ") || "none" });
+  const managedSkillNames = new Set<string>();
   for (const packageName of names) {
     let pkg: InstalledPackage;
     try {
@@ -1017,6 +1020,7 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
       continue;
     }
     checks.push({ status: "ok", label: `package:${packageName}`, detail: pkg.lock.version });
+    for (const skill of pkg.manifest.spec.skills) managedSkillNames.add(skill.name);
     const unsupportedTargets = environment.spec.targets.filter((target) => !pkg.manifest.spec.platforms.includes(target));
     checks.push({
       status: unsupportedTargets.length === 0 ? "ok" : "fail",
@@ -1044,6 +1048,17 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
         detail: present ? "set" : requirement.optional ? "optional and not set" : "required and not set",
       });
     }
+  }
+  const localSkills = await inspectEnvironmentLocalSkills(environment, managedSkillNames);
+  for (const skill of localSkills.skills) {
+    checks.push({ status: "ok", label: `environment-skill:${skill.name}`, detail: `external at ${skill.path}` });
+  }
+  for (const issue of localSkills.issues) {
+    checks.push({
+      status: issue.kind === "conflict" ? "fail" : "warn",
+      label: `environment-skill:${issue.entry}`,
+      detail: issue.detail,
+    });
   }
   const active = (process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT) === name;
   checks.push({ status: active ? "ok" : "warn", label: "activation", detail: active ? environment.spec.targets.join(", ") : "inactive" });

@@ -95,11 +95,13 @@ mcpServers:
 
 | Package resource | Codex Environment view | Claude Code Environment view | Pi Environment view |
 | --- | --- | --- | --- |
-| Skill | `view/codex/skills/<name>` symlink | `view/claude/skills/<name>` symlink | `view/pi/skills/<name>` symlink |
+| Skill | `home/codex/skills/<name>` link through `view/codex/skills/<name>` | `view/claude/skills/<name>` symlink | `view/pi/skills/<name>` symlink |
 | MCP server | managed block in `view/codex/config.toml` | entry in `home/claude/.claude.json` | unsupported |
 | Hook | entry in `view/codex/hooks.json` | entry in `view/claude/settings.json` | unsupported |
 
 Pi currently consumes Harness Skills through its Agent Skills support. A Package that includes Pi in `spec.platforms` must restrict every MCP server and Hook to supported platforms such as `platforms: [codex, claude]`; validation rejects resources that target Pi. Omitting `spec.platforms` retains the compatibility default `[codex, claude]`.
+
+Codex owns `home/codex/skills/.system` as mutable per-Environment state. It is not a Package Skill and is excluded from Environment-local Skill inventory, Package Store entries, ownership metadata, locks, and bundles. A non-hidden ordinary Skill added beside `.system` immediately belongs to that Environment with origin `external`; it becomes an immutable Package only when installed explicitly through `harness install`.
 
 `~/.harness-conda/environments/<environment>/lock.json` records source, full Git commit, Git subdirectory, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. Git-only provenance fields are omitted for local and built-in Packages. Legacy locks containing `resolved` and `requestedRef` remain readable, but new locks do not write those fields. The active Environment belongs to the current shell and is selected by `HARNESS_ENV`; no Environment state is stored in a project.
 

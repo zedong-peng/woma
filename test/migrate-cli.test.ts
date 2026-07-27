@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -12,6 +12,13 @@ const run = promisify(execFile);
 async function write(filePath: string, content: string): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, content, "utf8");
+}
+
+async function isolatedProcessPath(root: string): Promise<string> {
+  const executable = path.join(root, "test-bin", "ps");
+  await write(executable, "#!/bin/sh\nexit 0\n");
+  await chmod(executable, 0o755);
+  return `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`;
 }
 
 test("CLI explicitly migrates existing Skills into the active Environment", async () => {
@@ -31,6 +38,7 @@ test("CLI explicitly migrates existing Skills into the active Environment", asyn
     const cli = path.resolve("dist/src/cli.js");
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      PATH: await isolatedProcessPath(root),
       HARNESS_HOME: home,
       HARNESS_ENV: "tools",
       HARNESS_ORIGINAL_CODEX_HOME: codex,
@@ -90,6 +98,7 @@ test("CLI explicitly migrates existing sessions into the active Environment", as
     const cli = path.resolve("dist/src/cli.js");
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      PATH: await isolatedProcessPath(root),
       HARNESS_HOME: home,
       HARNESS_ENV: "tools",
       HARNESS_ORIGINAL_CODEX_HOME: codex,
@@ -115,6 +124,67 @@ test("CLI explicitly migrates existing sessions into the active Environment", as
       await readFile(path.join(home, "environments", "tools", "home", "codex", "sessions", "old.jsonl"), "utf8"),
       "old session\n",
     );
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("CLI immediately lists ordinary Skills installed inside a Codex Environment", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-environment-skill-"));
+  const home = path.join(root, "home");
+  const project = path.join(root, "project");
+  try {
+    const cli = path.resolve("dist/src/cli.js");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PATH: await isolatedProcessPath(root),
+      HARNESS_HOME: home,
+      HARNESS_ENV: "tools",
+      HARNESS_ORIGINAL_CODEX_HOME: path.join(root, "codex"),
+      HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "claude"),
+    };
+    delete env.NODE_TEST_CONTEXT;
+
+    await run(process.execPath, [cli, "--project", project, "env", "create", "tools", "--target", "codex"], { cwd: root, env });
+    const skills = path.join(home, "environments", "tools", "home", "codex", "skills");
+    await write(
+      path.join(skills, "installed-in-window", "SKILL.md"),
+      "---\nname: installed-in-window\ndescription: Installed from a Codex window.\n---\nWindow Skill.\n",
+    );
+    await write(path.join(skills, ".system", ".codex-system-skills.marker"), "runtime\n");
+
+    const listed = await run(process.execPath, [cli, "--project", project, "list", "--name", "tools"], { cwd: root, env });
+    assert.match(listed.stdout, /installed-in-window\s+external\s+codex/);
+    assert.doesNotMatch(listed.stdout, /\.system/);
+
+    const info = await run(process.execPath, [cli, "--project", project, "info", "--json"], { cwd: root, env });
+    const context = JSON.parse(info.stdout) as {
+      packages: { name: string }[];
+      environmentSkills: { name: string; origin: string; platform: string }[];
+    };
+    assert.deepEqual(context.environmentSkills, [
+      {
+        name: "installed-in-window",
+        description: "Installed from a Codex window.",
+        entry: "installed-in-window",
+        path: path.join(skills, "installed-in-window"),
+        origin: "external",
+        platform: "codex",
+      },
+    ]);
+
+    const doctor = await run(process.execPath, [cli, "--project", project, "doctor", "--name", "tools"], {
+      cwd: root,
+      env: { ...env, HARNESS_ENV: "base" },
+    });
+    assert.match(doctor.stdout, /\[ok\] environment-skill:installed-in-window: external at/);
+
+    const lock = JSON.parse(await readFile(path.join(home, "environments", "tools", "lock.json"), "utf8")) as {
+      packages: Record<string, unknown>;
+    };
+    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.equal((await lstat(path.join(skills, "installed-in-window"))).isDirectory(), true);
+    assert.equal(await readFile(path.join(skills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime\n");
   } finally {
     await removeTestTree(root);
   }

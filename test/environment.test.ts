@@ -18,7 +18,6 @@ import {
   readEnvironment,
   readEnvironmentLock,
   removeEnvironment,
-  syncEnvironment,
 } from "../src/environment.js";
 import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
@@ -139,17 +138,11 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
     const codexSkills = path.join(environmentViewPath("base"), "codex", "skills");
     await assert.rejects(readFile(path.join(codexSkills, "existing-review", "SKILL.md")), /ENOENT/);
-    const system = path.join(codexSkills, ".system");
-    assert.equal((await lstat(system)).isSymbolicLink(), true);
-    assert.equal(
-      path.resolve(path.dirname(system), await readlink(system)),
-      path.join(home, "environments", "base", "home", "codex-system-skills"),
-    );
+    await assert.rejects(access(path.join(codexSkills, ".system")), /ENOENT/);
+    const system = path.join(environmentAgentHomePath("base", "codex"), "skills", ".system");
+    await mkdir(system);
     await writeFile(path.join(system, "updated-by-codex"), "updated\n");
-    assert.equal(
-      await readFile(path.join(home, "environments", "base", "home", "codex-system-skills", "updated-by-codex"), "utf8"),
-      "updated\n",
-    );
+    assert.equal(await readFile(path.join(system, "updated-by-codex"), "utf8"), "updated\n");
     await assert.rejects(readFile(path.join(codex, "skills", ".system", "updated-by-codex")), /ENOENT/);
 
     await createEnvironment(root, "clean", ["codex"]);
@@ -213,7 +206,7 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
       await readFile(path.join(environmentViewPath("clean"), "codex", "skills", "new-codex-skill", "SKILL.md"), "utf8"),
       /New Skill/,
     );
-    assert.equal((await lstat(path.join(environmentViewPath("clean"), "codex", "skills", ".system"))).isSymbolicLink(), true);
+    await assert.rejects(access(path.join(environmentViewPath("clean"), "codex", "skills", ".system")), /ENOENT/);
   } finally {
     if (previous.home === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous.home;
@@ -825,14 +818,14 @@ test("list and doctor remain useful when current-format base layers are corrupt"
   }
 });
 
-test("sync repairs a missing base view without requiring a healthy view first", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-sync-repair-"));
+test("install repairs a missing base view without requiring a healthy view first", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-install-repair-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await ensureBaseEnvironment(root);
     await rm(environmentViewPath("base"), { force: true });
 
-    await syncEnvironment(root, "base");
+    await installIntoEnvironment(root, "base", "builtin:harness-project-memory");
 
     assert.equal((await lstat(environmentViewPath("base"))).isSymbolicLink(), true);
     await ensureBaseEnvironment(root);
@@ -874,7 +867,7 @@ test("environment locks reject keys that do not match package identities", { con
   }
 });
 
-test("install and sync reject unreachable lock packages before resolving their sources", { concurrency: false }, async () => {
+test("install rejects unreachable lock packages before resolving their sources", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-unreachable-lock-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
@@ -891,7 +884,6 @@ test("install and sync reject unreachable lock packages before resolving their s
     };
     await writeFile(filePath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
 
-    await assert.rejects(syncEnvironment(root, "research"), /packages unreachable from its roots: rogue/);
     await assert.rejects(
       installIntoEnvironment(root, "research", "builtin:idea-gen"),
       /packages unreachable from its roots: rogue/,
