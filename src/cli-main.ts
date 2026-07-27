@@ -123,7 +123,10 @@ program
   .description("Create, reproduce, and switch isolated Agent environments")
   .version("0.6.0")
   .enablePositionalOptions()
-  .configureHelp({ sortSubcommands: true })
+  .configureHelp({
+    sortSubcommands: true,
+    subcommandTerm: (cmd) => (cmd.aliases().length > 0 ? `${cmd.name()} (${cmd.aliases().join(", ")})` : cmd.name()),
+  })
   .option("-p, --project <directory>", "project root; defaults to the current directory");
 
 program
