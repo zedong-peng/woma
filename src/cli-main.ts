@@ -26,7 +26,7 @@ import {
 } from "./environment.js";
 import { inspectEnvironmentLocalSkills } from "./environment-skills.js";
 import { installPackageSource, loadCachedPackage } from "./package.js";
-import { renderShellHook, resolveShell } from "./shell.js";
+import { resolveShell } from "./shell.js";
 import { initializeShell } from "./shell-init.js";
 import { createWorkflowSkeleton } from "./skeleton.js";
 import { migrateExistingSkills, type SkillMigrationSource } from "./migrate-skills.js";
@@ -469,15 +469,6 @@ program
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
     console.log(`  packages  ${Object.keys(lock.packages).join(", ") || "none"}`);
-  });
-
-const shellCommand = program.command("shell").description("print shell integration for Environment selection and the prompt");
-
-shellCommand
-  .command("hook [shell]")
-  .description("print a bash or zsh hook for eval")
-  .action((shell: string | undefined) => {
-    process.stdout.write(renderShellHook(resolveShell(shell)));
   });
 
 program
