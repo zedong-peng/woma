@@ -251,7 +251,7 @@ test("built CLI entrypoint is executable", async () => {
   await access(path.resolve("dist/src/cli.js"), constants.X_OK);
 });
 
-test("CLI exports and imports a portable Environment bundle", { concurrency: false }, async () => {
+test("CLI exports and creates from a portable Environment bundle", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-bundle-"));
   const project = path.join(root, "project");
   const homeA = path.join(root, "home-a");
@@ -259,10 +259,10 @@ test("CLI exports and imports a portable Environment bundle", { concurrency: fal
   const bundle = path.join(root, "portable.harness-env");
   try {
     const pkg = await packageFixture(root, "portable-skill");
-    assert.equal((await runCli(["--project", project, "env", "create", "portable", "--target", "codex"], root, homeA)).code, 0);
+    assert.equal((await runCli(["--project", project, "create", "--name", "portable", "--target", "codex"], root, homeA)).code, 0);
     assert.equal((await runCli(["--project", project, "install", "-n", "portable", pkg], root, homeA)).code, 0);
     const exported = await runCli(
-      ["--project", project, "env", "export", "--name", "portable", "--output", bundle],
+      ["--project", project, "export", "--name", "portable", "--file", bundle],
       root,
       homeA,
     );
@@ -271,9 +271,9 @@ test("CLI exports and imports a portable Environment bundle", { concurrency: fal
     await rm(pkg, { recursive: true, force: true });
     await removeTestTree(homeA);
 
-    const imported = await runCli(["--project", project, "env", "import", bundle, "--name", "restored"], root, homeB);
+    const imported = await runCli(["--project", project, "create", "--name", "restored", "--file", bundle], root, homeB);
     assert.equal(imported.code, 0, imported.stderr);
-    assert.match(imported.stdout, /Imported environment restored/);
+    assert.match(imported.stdout, /Created environment restored/);
     assert.match(
       await readFile(path.join(homeB, "environments", "restored", "view", "codex", "skills", "portable-skill", "SKILL.md"), "utf8"),
       /portable-skill/,
@@ -328,7 +328,7 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
   try {
     const result = await runCliProcess(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
-    for (const command of ["env", "migrate", "install", "list", "activate", "deactivate", "info", "doctor"]) {
+    for (const command of ["activate", "create", "deactivate", "doctor", "env", "export", "info", "install", "list", "migrate", "remove", "rename", "run"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
     }
     for (const command of ["bind", "current", "sync", "shell", "onboard", "project", "profile", "switch", "leave", "handoff", "outcome", "stats", "enter", "use", "eval"]) {
@@ -340,6 +340,8 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
     const removedSync = await runCliProcess(["sync"], root, path.join(root, "home"));
     assert.notEqual(removedSync.code, 0);
     assert.match(removedSync.stderr, /unknown command ['"]sync['"]/);
+    const envHelp = await runCliProcess(["env", "--help"], root, path.join(root, "home"));
+    assert.doesNotMatch(envHelp.stdout, /^  import(?: |$)/m);
   } finally {
     await removeTestTree(root);
   }
@@ -361,10 +363,60 @@ test("CLI creates Pi and all-target Environments", { concurrency: false }, async
 
     const bundle = path.join(root, "all-agents.harness-env");
     assert.equal((await runCli(["env", "export", "--name", "all-agents", "--output", bundle], root, home)).code, 0);
-    const imported = await runCli(["env", "import", bundle, "--name", "all-agents-copy"], root, home);
+    const imported = await runCli(["create", "--file", bundle, "--name", "all-agents-copy"], root, home);
     assert.equal(imported.code, 0, imported.stderr);
     assert.match(await readFile(path.join(home, "environments", "all-agents-copy", "view", "pi", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Harness Project Memory/);
   } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("CLI runs a command in a selected Environment and preserves its exit code", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-run-"));
+  const home = path.join(root, "home");
+  const project = path.join(root, "project");
+  try {
+    const created = await runCli(["--project", project, "create", "-n", "runner", "--target", "codex"], root, home);
+    assert.equal(created.code, 0, created.stderr);
+    const script = "process.stdout.write(JSON.stringify({ environment: process.env.HARNESS_ENV, codex: process.env.CODEX_HOME })); process.exit(7)";
+    const result = await runCliProcess(
+      ["--project", project, "run", "--name", "runner", process.execPath, "-e", script],
+      root,
+      home,
+    );
+    assert.equal(result.code, 7, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      environment: "runner",
+      codex: path.join(home, "environments", "runner", "home", "codex"),
+    });
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("CLI renames an inactive Environment without losing Agent-owned state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-rename-"));
+  const home = path.join(root, "home");
+  const project = path.join(root, "project");
+  const previousEnvironment = process.env.HARNESS_ENV;
+  try {
+    delete process.env.HARNESS_ENV;
+    assert.equal((await runCli(["--project", project, "create", "-n", "before", "--target", "codex"], root, home)).code, 0);
+    const opaque = path.join(home, "environments", "before", "home", "codex", "session.sqlite");
+    await write(opaque, "state\n");
+
+    const renamed = await runCli(["--project", project, "rename", "--name", "before", "after"], root, home);
+    assert.equal(renamed.code, 0, renamed.stderr);
+    assert.match(renamed.stdout, /Renamed environment before to after/);
+    await assert.rejects(access(path.join(home, "environments", "before")), /ENOENT/);
+    assert.equal(await readFile(path.join(home, "environments", "after", "home", "codex", "session.sqlite"), "utf8"), "state\n");
+    assert.match(await readFile(path.join(home, "environments", "after", "environment.yaml"), "utf8"), /name: after/);
+    const doctor = await runCli(["--project", project, "doctor", "--name", "after"], root, home);
+    assert.equal(doctor.code, 0, doctor.stderr || doctor.stdout);
+    assert.match(doctor.stdout, /\[ok\] view:/);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
@@ -634,7 +686,7 @@ test("CLI uninstalls from active and explicitly named inactive Environments with
       home,
     );
     assert.equal(preview.code, 0, preview.stderr);
-    assert.match(preview.stdout, /Uninstall plan for removable-package from inactive-tools/);
+    assert.match(preview.stdout, /Removal plan for removable-package from inactive-tools/);
     assert.match(preview.stdout, /remove root\s+removable-package/);
     assert.match(preview.stdout, /prune packages\s+removable-package/);
     assert.match(preview.stdout, /remove Skills\s+removable-package/);
@@ -642,12 +694,12 @@ test("CLI uninstalls from active and explicitly named inactive Environments with
     assert.equal(await readFile(inactiveRecipe, "utf8"), beforePreview);
 
     const inactive = await runCli(
-      ["--project", project, "uninstall", "removable-package", "--name", "inactive-tools"],
+      ["--project", project, "remove", "removable-package", "--name", "inactive-tools"],
       root,
       home,
     );
     assert.equal(inactive.code, 0, inactive.stderr);
-    assert.match(inactive.stdout, /Uninstalled removable-package from inactive-tools/);
+    assert.match(inactive.stdout, /Removed removable-package from inactive-tools/);
     await assert.rejects(
       access(path.join(home, "environments", "inactive-tools", "view", "codex", "skills", "removable-package")),
       /ENOENT/,
@@ -656,7 +708,7 @@ test("CLI uninstalls from active and explicitly named inactive Environments with
     process.env.HARNESS_ENV = "active-tools";
     const active = await runCli(["--project", project, "uninstall", "removable-package"], root, home);
     assert.equal(active.code, 0, active.stderr);
-    assert.match(active.stdout, /Uninstalled removable-package from active-tools/);
+    assert.match(active.stdout, /Removed removable-package from active-tools/);
     await assert.rejects(
       access(path.join(home, "environments", "active-tools", "view", "claude", "skills", "removable-package")),
       /ENOENT/,
@@ -666,7 +718,7 @@ test("CLI uninstalls from active and explicitly named inactive Environments with
     assert.equal(baseInstall.code, 0, baseInstall.stderr);
     const base = await runCli(["--project", project, "uninstall", "--name", "base", "removable-package"], root, home);
     assert.equal(base.code, 0, base.stderr);
-    assert.match(base.stdout, /Uninstalled removable-package from base/);
+    assert.match(base.stdout, /Removed removable-package from base/);
     const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };

@@ -1,6 +1,7 @@
-import { access, lstat, readdir, readFile, rm } from "node:fs/promises";
+import { access, lstat, readlink, readdir, readFile, rename, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { satisfies } from "semver";
 import { z } from "zod";
@@ -188,7 +189,7 @@ async function readEnvironmentFile(projectRoot: string, name: string): Promise<H
   const filePath = environmentPath(projectRoot, name);
   const input = await readFile(filePath, "utf8").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") {
-      throw new Error(`Unknown environment: ${name}; run harness env create ${name}`);
+      throw new Error(`Unknown environment: ${name}; run harness create --name ${name}`);
     }
     throw error;
   });
@@ -478,6 +479,112 @@ export async function removeEnvironment(projectRoot: string, name: string): Prom
   await withEnvironmentLock(name, async () => {
     await readEnvironmentFile(projectRoot, name);
     await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
+  });
+}
+
+async function rewriteRenamedEnvironmentLinks(root: string, previousRoot: string, nextRoot: string): Promise<void> {
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(entryPath);
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      const target = await readlink(entryPath);
+      if (!path.isAbsolute(target)) continue;
+      const relative = path.relative(previousRoot, target);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) continue;
+      const replacement = path.join(nextRoot, relative);
+      const temporary = `${entryPath}.rename-${process.pid}-${randomUUID()}`;
+      const replacementInfo = await lstat(replacement);
+      await symlink(
+        replacement,
+        temporary,
+        process.platform === "win32" ? (replacementInfo.isDirectory() ? "junction" : "file") : undefined,
+      );
+      try {
+        await rename(temporary, entryPath);
+      } finally {
+        await rm(temporary, { force: true });
+      }
+    }
+  }
+  await visit(root);
+}
+
+async function withEnvironmentPairLock<T>(left: string, right: string, operation: () => Promise<T>): Promise<T> {
+  const [first, second] = [left, right].sort((a, b) => a.localeCompare(b));
+  return withEnvironmentLock(first!, () => withEnvironmentLock(second!, operation));
+}
+
+export async function renameEnvironment(projectRoot: string, source: string, destination: string): Promise<HarnessEnvironment> {
+  environmentName.parse(source);
+  environmentName.parse(destination);
+  if (source === DEFAULT_ENVIRONMENT || destination === DEFAULT_ENVIRONMENT) {
+    throw new Error("The base environment cannot be renamed or replaced");
+  }
+  if (source === destination) throw new Error("Source and destination environment names must differ");
+  if (process.env.HARNESS_ENV === source) {
+    throw new Error(`Environment ${source} is active in this shell; run harness deactivate first`);
+  }
+  return withEnvironmentPairLock(source, destination, async () => {
+    const sourceRoot = path.dirname(environmentPath(projectRoot, source));
+    const destinationRoot = path.dirname(environmentPath(projectRoot, destination));
+    const environment = await readEnvironmentFile(projectRoot, source);
+    const lock = await readEnvironmentLockFile(projectRoot, source);
+    const loaded = await loadEnvironmentSnapshot(environment, lock);
+    if (await pathExists(destinationRoot)) throw new Error(`Environment already exists: ${destination}`);
+    const renamed: HarnessEnvironment = { ...environment, metadata: { name: destination } };
+    let moved = false;
+    try {
+      await rename(sourceRoot, destinationRoot);
+      moved = true;
+      await rewriteRenamedEnvironmentLinks(destinationRoot, sourceRoot, destinationRoot);
+      await writeEnvironment(projectRoot, renamed);
+      const metadataPath = path.join(environmentViewPath(destination), "view.json");
+      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
+      metadata.environment = destination;
+      await writeJsonAtomic(metadataPath, metadata);
+      await validateEnvironmentView(renamed, loaded.names.map((name) => loaded.packages.get(name)!));
+      return renamed;
+    } catch (error) {
+      if (moved) {
+        const rollbackErrors: unknown[] = [];
+        await rewriteRenamedEnvironmentLinks(destinationRoot, destinationRoot, sourceRoot).catch((rollbackError) => {
+          rollbackErrors.push(rollbackError);
+        });
+        let restored = false;
+        try {
+          await rename(destinationRoot, sourceRoot);
+          restored = true;
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+        if (restored) {
+          await writeEnvironment(projectRoot, environment).catch((rollbackError) => {
+            rollbackErrors.push(rollbackError);
+          });
+          const metadataPath = path.join(environmentViewPath(source), "view.json");
+          const metadata = await readFile(metadataPath, "utf8")
+            .then((input) => JSON.parse(input) as Record<string, unknown>)
+            .catch((rollbackError) => {
+              rollbackErrors.push(rollbackError);
+              return undefined;
+            });
+          if (metadata) {
+            metadata.environment = source;
+            await writeJsonAtomic(metadataPath, metadata).catch((rollbackError) => {
+              rollbackErrors.push(rollbackError);
+            });
+          }
+        }
+        if (rollbackErrors.length > 0) {
+          throw new AggregateError([error, ...rollbackErrors], "Environment rename failed and rollback was incomplete");
+        }
+      }
+      throw error;
+    }
   });
 }
 
