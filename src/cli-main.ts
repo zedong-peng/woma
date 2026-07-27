@@ -279,7 +279,6 @@ migrateCommand
 
 envCommand
   .command("list")
-  .alias("ls")
   .description("list named environments")
   .action(async (_options: unknown, command: Command) => {
     const project = projectRoot(command);
