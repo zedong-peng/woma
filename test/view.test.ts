@@ -446,6 +446,91 @@ test("Pi uses a stable Agent home with only Skills managed by the Environment vi
   }
 });
 
+test("Qoder merges MCP servers and Hooks into a managed settings.json view", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-qoder-home-"));
+  const previous = {
+    harnessHome: process.env.HARNESS_HOME,
+    qoderHome: process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR,
+  };
+  process.env.HARNESS_HOME = path.join(root, "home");
+  const originalQoder = path.join(root, "original-qoder");
+  process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR = originalQoder;
+  try {
+    await write(
+      path.join(originalQoder, "settings.json"),
+      '{"model":{"name":"ultimate"},"mcpServers":{"existing":{"type":"stdio","command":"keep","args":[],"env":{}}}}\n',
+    );
+    await createEnvironment(root, "qoder-tools", ["qoder"]);
+    const home = environmentAgentHomePath("qoder-tools", "qoder");
+    const view = environmentViewPath("qoder-tools");
+    const skills = path.join(home, "skills");
+    const settingsLink = path.join(home, "settings.json");
+    assert.equal((await lstat(skills)).isSymbolicLink(), true);
+    assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), path.join(view, "qoder", "skills"));
+    assert.equal((await lstat(settingsLink)).isSymbolicLink(), true);
+    assert.equal(path.resolve(path.dirname(settingsLink), await readlink(settingsLink)), path.join(view, "qoder", "settings.json"));
+
+    const packageRoot = path.join(root, "qoder-package");
+    await write(
+      path.join(packageRoot, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: qoder-package
+  version: 1.0.0
+  description: Qoder adapter fixture.
+spec:
+  platforms: [qoder]
+  skills:
+    - name: qoder-skill
+      path: ./skills/qoder-skill
+  mcpServers:
+    - name: view-server
+      transport: stdio
+      command: node
+      args: [server.mjs]
+  hooks:
+    - event: PostToolUse
+      matcher: Edit
+      command: git diff --check
+`,
+    );
+    await write(
+      path.join(packageRoot, "skills", "qoder-skill", "SKILL.md"),
+      "---\nname: qoder-skill\ndescription: Qoder fixture.\n---\n\nUse the fixture.\n",
+    );
+    await write(path.join(home, "sessions", "project", "session.jsonl"), '{"type":"session"}\n');
+    await installIntoEnvironment(root, "qoder-tools", packageRoot);
+
+    assert.match(await readFile(path.join(skills, "qoder-skill", "SKILL.md"), "utf8"), /Qoder fixture/);
+    const settings = JSON.parse(await readFile(settingsLink, "utf8"));
+    assert.deepEqual(settings.model, { name: "ultimate" });
+    assert.equal(settings.mcpServers.existing.command, "keep");
+    assert.deepEqual(settings.mcpServers["view-server"], { type: "stdio", command: "node", args: ["server.mjs"] });
+    assert.deepEqual(settings.hooks.PostToolUse, [
+      { matcher: "Edit", hooks: [{ type: "command", command: "git diff --check" }] },
+    ]);
+    assert.deepEqual((await readdir(path.join(view, "qoder"))).sort(), ["settings.json", "skills"]);
+    const metadata = JSON.parse(await readFile(path.join(view, "view.json"), "utf8"));
+    assert.deepEqual(metadata.resources.qoderMcpServers, ["view-server"]);
+
+    await installIntoEnvironment(root, "qoder-tools", "builtin:harness-project-memory");
+    const updated = JSON.parse(await readFile(settingsLink, "utf8"));
+    assert.deepEqual(updated.mcpServers["view-server"], { type: "stdio", command: "node", args: ["server.mjs"] });
+    assert.deepEqual(updated.hooks.PostToolUse, [
+      { matcher: "Edit", hooks: [{ type: "command", command: "git diff --check" }] },
+    ]);
+    assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
+    assert.equal((await doctorEnvironment(root, "qoder-tools")).find((check) => check.label === "view")?.status, "ok");
+  } finally {
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.qoderHome === undefined) delete process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR = previous.qoderHome;
+    await removeTestTree(root);
+  }
+});
+
 test("failed publication rolls stable Agent home metadata back without touching opaque state", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-stable-home-rollback-"));
   process.env.HARNESS_HOME = path.join(root, "home");

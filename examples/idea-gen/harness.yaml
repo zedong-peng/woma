@@ -6,7 +6,7 @@ metadata:
   description: Generate one evidence-grounded, falsifiable research idea.
   tags: [research, ideation]
 spec:
-  platforms: [codex, claude, pi]
+  platforms: [codex, claude, pi, qoder]
   entrypoints:
     - name: generate
       skill: idea-gen

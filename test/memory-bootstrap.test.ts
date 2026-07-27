@@ -43,6 +43,17 @@ test("Pi discovers Project Memory through AGENTS.md", async () => {
   }
 });
 
+test("Qoder discovers Project Memory through AGENTS.md", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-memory-bootstrap-qoder-"));
+  try {
+    await (await prepareMemoryBootstrapTransition(root, undefined, environment(["qoder"]))).apply();
+    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
+    await assert.rejects(readFile(path.join(root, "CLAUDE.md"), "utf8"), /ENOENT/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("Memory bootstrap never removes another target's stable discovery pointer", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-memory-bootstrap-switch-"));
   const agentsPath = path.join(root, "AGENTS.md");

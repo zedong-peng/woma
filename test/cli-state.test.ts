@@ -356,10 +356,15 @@ test("CLI creates Pi and all-target Environments", { concurrency: false }, async
     assert.match(piOnly.stdout, /targets pi/);
     assert.match(await readFile(path.join(home, "environments", "pi-only", "environment.yaml"), "utf8"), /targets:[\s\S]*- pi/);
 
+    const qoderOnly = await runCli(["env", "create", "qoder-only", "--target", "qoder"], root, home);
+    assert.equal(qoderOnly.code, 0, qoderOnly.stderr);
+    assert.match(qoderOnly.stdout, /targets qoder/);
+    assert.match(await readFile(path.join(home, "environments", "qoder-only", "environment.yaml"), "utf8"), /targets:[\s\S]*- qoder/);
+
     const all = await runCli(["env", "create", "all-agents", "--target", "all"], root, home);
     assert.equal(all.code, 0, all.stderr);
-    assert.match(all.stdout, /targets codex, claude, pi/);
-    assert.match(await readFile(path.join(home, "environments", "all-agents", "view", "view.json"), "utf8"), /"pi"/);
+    assert.match(all.stdout, /targets codex, claude, pi, qoder/);
+    assert.match(await readFile(path.join(home, "environments", "all-agents", "view", "view.json"), "utf8"), /"qoder"/);
 
     const bundle = path.join(root, "all-agents.harness-env");
     assert.equal((await runCli(["env", "export", "--name", "all-agents", "--output", bundle], root, home)).code, 0);

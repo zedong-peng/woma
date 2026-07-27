@@ -30,7 +30,7 @@ const environmentName = z
   .min(1)
   .max(80)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
-const platform = z.enum(["codex", "claude", "pi"]);
+const platform = z.enum(["codex", "claude", "pi", "qoder"]);
 
 export const DEFAULT_ENVIRONMENT = "base";
 export const FOUNDATIONAL_PACKAGES = ["harness-project-memory", "harness-package-builder"] as const;
@@ -1016,7 +1016,7 @@ async function prepareEnvironmentTransition(
   const contextTransition = await prepareMemoryBootstrapTransition(
     projectRoot,
     undefined,
-    { targets: ["codex", "claude", "pi"], hasMemoryPackage: desired.names.includes(PROJECT_MEMORY_PACKAGE) },
+    { targets: ["codex", "claude", "pi", "qoder"], hasMemoryPackage: desired.names.includes(PROJECT_MEMORY_PACKAGE) },
   );
   return {
     actions: contextTransition.actions,
@@ -1170,8 +1170,8 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
       const hasMemoryPackage = names.includes(PROJECT_MEMORY_PACKAGE);
       const contextCheck = await prepareMemoryBootstrapTransition(
         projectRoot,
-        { targets: ["codex", "claude", "pi"], hasMemoryPackage },
-        { targets: ["codex", "claude", "pi"], hasMemoryPackage },
+        { targets: ["codex", "claude", "pi", "qoder"], hasMemoryPackage },
+        { targets: ["codex", "claude", "pi", "qoder"], hasMemoryPackage },
       );
       checks.push({
         status: contextCheck.actions.length === 0 ? "ok" : "fail",

@@ -149,7 +149,7 @@ function manifest(skill: ExistingSkill, version: string): HarnessManifest {
       tags: ["captured", "migrated"],
     },
     spec: {
-      platforms: ["codex", "claude", "pi"],
+      platforms: ["codex", "claude", "pi", "qoder"],
       dependencies: [],
       entrypoints: [],
       requirements: { env: [], commands: [] },

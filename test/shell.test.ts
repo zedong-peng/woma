@@ -76,6 +76,8 @@ test("zsh hook installs an idempotent precmd prompt prefix", () => {
   assert.match(hook, /CLAUDE_CONFIG_DIR=.*environments.*home\/claude/);
   assert.match(hook, /HARNESS_ORIGINAL_PI_CODING_AGENT_DIR/);
   assert.match(hook, /PI_CODING_AGENT_DIR=.*environments.*home\/pi/);
+  assert.match(hook, /HARNESS_ORIGINAL_QODER_CONFIG_DIR/);
+  assert.match(hook, /QODER_CONFIG_DIR=.*environments.*home\/qoder/);
 });
 
 test("zsh hook updates the parent shell after activate", async (context) => {
@@ -261,6 +263,33 @@ test("shell hook selects Pi home and restores unsupported Agent homes", async ()
       },
     });
     assert.equal(stdout, `${originalCodex}|${originalClaude}|${path.join(home, "environments", "pi-only", "home", "pi")}`);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("shell hook selects Qoder home and restores unsupported Agent homes", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-qoder-target-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const home = path.join(root, "home");
+    const originalCodex = path.join(root, "original-codex");
+    const originalClaude = path.join(root, "original-claude");
+    const originalQoder = path.join(root, "original-qoder");
+    await fakeEnvironment(home, "qoder-only", ["qoder"]);
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const script = 'source "$1"\nprintf \'%s|%s|%s\' "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$QODER_CONFIG_DIR"';
+    const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
+      env: {
+        ...process.env,
+        HARNESS_HOME: home,
+        HARNESS_ENV: "qoder-only",
+        HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
+        HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+        HARNESS_ORIGINAL_QODER_CONFIG_DIR: originalQoder,
+      },
+    });
+    assert.equal(stdout, `${originalCodex}|${originalClaude}|${path.join(home, "environments", "qoder-only", "home", "qoder")}`);
   } finally {
     await removeTestTree(root);
   }

@@ -5,10 +5,11 @@ import { environmentSnapshot } from "./environment.js";
 import { environmentAgentHomePath, sourceAgentHome } from "./view.js";
 import type { Platform } from "./types.js";
 
-const HOME_VARIABLES: Record<Platform, "CODEX_HOME" | "CLAUDE_CONFIG_DIR" | "PI_CODING_AGENT_DIR"> = {
+const HOME_VARIABLES: Record<Platform, "CODEX_HOME" | "CLAUDE_CONFIG_DIR" | "PI_CODING_AGENT_DIR" | "QODER_CONFIG_DIR"> = {
   codex: "CODEX_HOME",
   claude: "CLAUDE_CONFIG_DIR",
   pi: "PI_CODING_AGENT_DIR",
+  qoder: "QODER_CONFIG_DIR",
 };
 
 export async function runInEnvironment(options: {

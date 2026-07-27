@@ -114,6 +114,21 @@ spec:
   assert.deepEqual(manifest.spec.platforms, ["codex", "claude", "pi"]);
 });
 
+test("manifest parser accepts Qoder as a Package platform", () => {
+  const manifest = parseManifest(`
+apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: qoder-skill
+  version: 1.0.0
+  description: Qoder platform fixture.
+spec:
+  platforms: [codex, claude, pi, qoder]
+  skills: []
+`);
+  assert.deepEqual(manifest.spec.platforms, ["codex", "claude", "pi", "qoder"]);
+});
+
 test("manifest parser rejects duplicate platform declarations", () => {
   assert.throws(
     () =>

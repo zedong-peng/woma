@@ -1,13 +1,13 @@
 # harness-conda
 
-Conda-style Environment and Package management for Codex, Claude Code, and Pi.
+Conda-style Environment and Package management for Codex, Claude Code, Pi, and Qoder CLI.
 
 > [!NOTE]
 > **This project is in early development and is not published to the npm Registry.**
 
 ## Features
 
-- **Named Environments** for Codex, Claude Code, Pi, or any combination.
+- **Named Environments** for Codex, Claude Code, Pi, Qoder CLI, or any combination.
 - **Reusable Packages** containing Skills, MCP servers, hooks, and dependencies.
 - **Direct Skill installation** from standalone and conventional multi-Skill sources.
 - **Immediate Environment-local Skill discovery** alongside explicit migration into reusable Packages.
@@ -17,7 +17,7 @@ Conda-style Environment and Package management for Codex, Claude Code, and Pi.
 ## Requirements
 
 - **Node.js 20 or newer**
-- Codex, Claude Code, and/or Pi
+- Codex, Claude Code, Pi, and/or Qoder CLI
 - Bash or Zsh for shell activation
 
 ## Installation
@@ -52,12 +52,16 @@ harness activate base
 codex
 ```
 
-Use `claude` instead of `codex` to start Claude Code. Pi is opt-in because the existing `base` compatibility default targets Codex and Claude; create a Pi Environment explicitly:
+Use `claude` instead of `codex` to start Claude Code. Pi and Qoder are opt-in because the existing `base` compatibility default targets Codex and Claude; create their Environments explicitly:
 
 ```bash
 harness create --name pi-work --target pi
 harness activate pi-work
 pi
+
+harness create --name qoder-work --target qoder
+harness activate qoder-work
+qodercli
 ```
 
 ### Migrate Existing State
@@ -99,7 +103,7 @@ harness rename --name performance performance-v2
 harness env remove performance-v2
 ```
 
-**Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex, Claude, or Pi process after switching Environments or installing Packages.
+**Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex, Claude, Pi, or Qoder process after switching Environments or installing Packages.
 
 ## Manage Packages
 
@@ -117,6 +121,7 @@ harness remove downloaded-skill
 - **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. Codex owns `$CODEX_HOME/skills/.system`; Harness never adopts it. An ordinary Skill added to `$CODEX_HOME/skills` immediately belongs to that Environment and appears in `harness list` as `external`, without another Harness command.
 - **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
 - **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Harness manages only `$PI_CODING_AGENT_DIR/skills`; Pi owns every other file in that Environment home.
+- **Qoder CLI:** log in through `qodercli` in the activated Environment. Harness manages `$QODER_CONFIG_DIR/settings.json` (Package MCP servers and Hooks) and `$QODER_CONFIG_DIR/skills`; Qoder owns every other file in that Environment home. A new Qoder Environment does not copy the original `~/.qoder` state.
 
 Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time; their Agent homes, credentials, provider configuration, sessions, and Codex system Skills remain isolated. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
 

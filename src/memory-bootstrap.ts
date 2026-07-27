@@ -101,7 +101,7 @@ export async function prepareMemoryBootstrapTransition(
   const project = path.resolve(projectRoot);
   const files: PreparedFile[] = [];
   const instructionTargets: { filePlatform: "codex" | "claude"; targets: Platform[] }[] = [
-    { filePlatform: "codex", targets: ["codex", "pi"] },
+    { filePlatform: "codex", targets: ["codex", "pi", "qoder"] },
     { filePlatform: "claude", targets: ["claude"] },
   ];
   for (const { filePlatform, targets } of instructionTargets) {

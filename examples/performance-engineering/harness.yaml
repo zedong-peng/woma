@@ -6,7 +6,7 @@ metadata:
   description: Evidence-first benchmark, profile, optimize, and regression-report loop for existing software.
   tags: [performance, benchmark, profiling]
 spec:
-  platforms: [codex, claude, pi]
+  platforms: [codex, claude, pi, qoder]
   requirements:
     env: []
     commands: [git, node]
