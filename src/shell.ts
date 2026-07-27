@@ -50,7 +50,7 @@ function commandWrapper(name: "harness" | "harness-conda"): string[] {
     "  done",
     '  case "$command_name" in',
     '    activate) __harness_apply_env "${environment_name:-base}" || return 1 ;;',
-    '    deactivate) __harness_apply_env base || return 1 ;;',
+    '    deactivate) __harness_restore_original_env ;;',
     "  esac",
     '  return "$harness_exit_code"',
     "}",
