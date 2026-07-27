@@ -90,6 +90,18 @@ For an implicit Package, Harness parses each Skill's `name` and `description` fr
 
 Installation recursively resolves dependencies, validates Package and Skill identities and SemVer constraints, rejects cycles and source conflicts, and publishes one complete global Agent view generation atomically. Package Store entries are read-only after publication. Every project using that Environment observes the new view without reactivation; already-running Agent processes may need a restart to rediscover Skills.
 
+## Package removal
+
+```bash
+harness uninstall <package> [-n <environment>] [-d|--dry-run]
+```
+
+When `--name` is omitted, removal uses the current shell's `HARNESS_ENV` and falls back to `base`. Only a Package recorded as a root in the Environment recipe can be requested. If the name identifies only a dependency, Harness reports every root that still requires it; unknown names fail without changing the Environment. The foundational `harness-project-memory` and `harness-package-builder` roots cannot be uninstalled.
+
+Uninstall removes the requested root from the recipe, recomputes the exact dependency closure of all remaining roots, and prunes newly unreachable Packages from the lock and complete Codex, Claude, and Pi views. Shared dependencies and their resources remain. Managed Skills, MCP servers, and Hooks are reconciled through the same ownership-aware stable-home and atomic view transaction as installation. A normal failure restores the recipe, lock, managed stable-home state, and previous view generation. Immutable Package Store entries are retained for other Environments and future garbage collection.
+
+`-d`/`--dry-run` reports the root, pruned Packages, Skills, MCP servers, and Hooks without publishing a view or changing Environment metadata. Like Conda, Harness uses `-n`/`--name` for Environment selection and `-d`/`--dry-run` for preview. Conda names package removal `remove` with `uninstall` as an alias and accepts arbitrary package lists; Harness intentionally exposes the singular `uninstall` command because its safe operation removes one explicit root, while `harness env remove` remains the command for deleting an entire Environment. Harness has no force-removal mode that can leave a broken dependency graph.
+
 ## Activation
 
 ```bash

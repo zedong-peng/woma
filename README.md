@@ -91,6 +91,8 @@ Create, inspect, activate, and remove an Environment:
 harness env create performance --target codex
 harness install --name performance builtin:performance-engineering
 harness list --name performance
+harness uninstall --name performance performance-engineering --dry-run
+harness uninstall --name performance performance-engineering
 harness activate performance
 codex
 
@@ -100,13 +102,16 @@ harness env remove performance
 
 **Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex, Claude, or Pi process after switching Environments or installing Packages.
 
-## Install Skills
+## Manage Packages
 
 ```bash
 harness install ./downloaded-skill
 harness install gh:owner/skill-repository#v1.0.0
 harness install ./ResearchStudio/ResearchStudio-Idea
+harness uninstall downloaded-skill
 ```
+
+`uninstall` removes one root Package, preserves dependencies still needed by other roots, and prunes dependencies that become unreachable. It never deletes immutable Package Store entries. Use `--name <environment>` to select an inactive Environment and `--dry-run` to preview the complete resource impact.
 
 ## Configure Agents
 

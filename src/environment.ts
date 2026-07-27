@@ -113,11 +113,29 @@ interface LoadedEnvironment {
   packages: Map<string, InstalledPackage>;
 }
 
-interface EnvironmentInstallHooks {
-  sourceOptions?: PackageSourceOptions;
+interface EnvironmentMutationHooks {
   onResourcesApplied?: () => Promise<void> | void;
   onViewPrepared?: () => Promise<void> | void;
   onMetadataPrepared?: () => Promise<void> | void;
+}
+
+interface EnvironmentInstallHooks extends EnvironmentMutationHooks {
+  sourceOptions?: PackageSourceOptions;
+}
+
+interface EnvironmentUninstallOptions extends EnvironmentMutationHooks {
+  dryRun?: boolean;
+}
+
+export interface EnvironmentUninstallResult {
+  environment: HarnessEnvironment;
+  root: InstalledPackage;
+  packages: InstalledPackage[];
+  dependencies: InstalledPackage[];
+  skills: string[];
+  mcpServers: string[];
+  hooks: string[];
+  dryRun: boolean;
 }
 
 interface EnvironmentActivationHooks {
@@ -537,6 +555,48 @@ async function writeEnvironmentInstall(
   }
 }
 
+async function publishEnvironmentUpdate(
+  projectRoot: string,
+  environmentNameValue: string,
+  previousEnvironment: HarnessEnvironment,
+  previousLock: LockFile,
+  previous: LoadedEnvironment,
+  updatedEnvironment: HarnessEnvironment,
+  updatedLock: LockFile,
+  desired: LoadedEnvironment,
+  hooks: EnvironmentMutationHooks,
+): Promise<void> {
+  await materializeEnvironmentView(
+    updatedEnvironment,
+    desired.names.map((name) => desired.packages.get(name)!),
+    {
+      previousPackages: previous.names.map((name) => previous.packages.get(name)!),
+      ...(hooks.onViewPrepared ? { beforePublish: hooks.onViewPrepared } : {}),
+      beforeSwap: async () => {
+        await hooks.onResourcesApplied?.();
+        await writeEnvironmentInstall(
+          projectRoot,
+          environmentNameValue,
+          updatedEnvironment,
+          updatedLock,
+          previousLock,
+        );
+        try {
+          await hooks.onMetadataPrepared?.();
+        } catch (error) {
+          await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), previousLock);
+          await writeEnvironment(projectRoot, previousEnvironment);
+          throw error;
+        }
+        return async () => {
+          await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), previousLock);
+          await writeEnvironment(projectRoot, previousEnvironment);
+        };
+      },
+    },
+  );
+}
+
 export async function installIntoEnvironment(
   projectRoot: string,
   environmentNameValue: string,
@@ -613,30 +673,150 @@ export async function installPackagesIntoEnvironment(
     const pruned = reachableLock(next, roots.map((root) => root.name));
     const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
     const desired = await loadEnvironmentSnapshot(updated, pruned);
-    await materializeEnvironmentView(updated, desired.names.map((name) => desired.packages.get(name)!), {
-      previousPackages: previous.names.map((name) => previous.packages.get(name)!),
-      ...(hooks.onViewPrepared ? { beforePublish: hooks.onViewPrepared } : {}),
-      beforeSwap: async () => {
-        await hooks.onResourcesApplied?.();
-        await writeEnvironmentInstall(projectRoot, environmentNameValue, updated, pruned, currentLock);
-        try {
-          await hooks.onMetadataPrepared?.();
-        } catch (error) {
-          await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), currentLock);
-          await writeEnvironment(projectRoot, environment);
-          throw error;
-        }
-        return async () => {
-          await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), currentLock);
-          await writeEnvironment(projectRoot, environment);
-        };
-      },
-    });
+    await publishEnvironmentUpdate(
+      projectRoot,
+      environmentNameValue,
+      environment,
+      currentLock,
+      previous,
+      updated,
+      pruned,
+      desired,
+      hooks,
+    );
     return {
       environment: updated,
       roots: installations.map((installation) => installation.root),
       packages: [...resolved.values()],
     };
+  });
+}
+
+function requiringRoots(environment: HarnessEnvironment, lock: LockFile, packageName: string): string[] {
+  return environment.spec.roots
+    .map((root) => root.name)
+    .filter((root) => dependencyOrder(lock, [root]).includes(packageName));
+}
+
+function effectivePlatforms(
+  environment: HarnessEnvironment,
+  pkg: InstalledPackage,
+  resourcePlatforms?: Platform[],
+): Platform[] {
+  const supported = new Set(resourcePlatforms ?? pkg.manifest.spec.platforms);
+  return environment.spec.targets.filter((target) => supported.has(target));
+}
+
+interface EnvironmentResourceKeys {
+  skills: Map<string, string>;
+  mcpServers: Map<string, string>;
+  hooks: Map<string, string>;
+}
+
+function environmentResourceKeys(environment: HarnessEnvironment, packages: InstalledPackage[]): EnvironmentResourceKeys {
+  const result: EnvironmentResourceKeys = {
+    skills: new Map(),
+    mcpServers: new Map(),
+    hooks: new Map(),
+  };
+  for (const pkg of packages) {
+    for (const skill of pkg.manifest.spec.skills) {
+      for (const target of effectivePlatforms(environment, pkg)) {
+        result.skills.set(`${target}\0${skill.name}`, skill.name);
+      }
+    }
+    for (const server of pkg.manifest.spec.mcpServers) {
+      for (const target of effectivePlatforms(environment, pkg, server.platforms)) {
+        result.mcpServers.set(`${target}\0${server.name}`, server.name);
+      }
+    }
+    for (const hook of pkg.manifest.spec.hooks) {
+      const label = `${hook.event}${hook.matcher ? ` (${hook.matcher})` : ""}: ${hook.command}`;
+      const identity = JSON.stringify([hook.event, hook.matcher ?? null, hook.command, hook.timeout ?? null]);
+      for (const target of effectivePlatforms(environment, pkg, hook.platforms)) {
+        result.hooks.set(`${target}\0${identity}`, label);
+      }
+    }
+  }
+  return result;
+}
+
+function removedResourceLabels(previous: Map<string, string>, desired: Map<string, string>): string[] {
+  return [...new Set([...previous].filter(([key]) => !desired.has(key)).map(([, label]) => label))].sort();
+}
+
+export async function uninstallFromEnvironment(
+  projectRoot: string,
+  environmentNameValue: string,
+  packageName: string,
+  options: EnvironmentUninstallOptions = {},
+): Promise<EnvironmentUninstallResult> {
+  if (options.dryRun && !(await pathExists(environmentPath(projectRoot, environmentNameValue)))) {
+    throw new Error(`Unknown environment: ${environmentNameValue}; create or initialize it before previewing uninstall`);
+  }
+  if (environmentNameValue === DEFAULT_ENVIRONMENT && !options.dryRun) await ensureBaseEnvironment(projectRoot);
+  return withEnvironmentLock(environmentNameValue, async () => {
+    const [environment, currentLock] = await Promise.all([
+      readEnvironmentFile(projectRoot, environmentNameValue),
+      readEnvironmentLockFile(projectRoot, environmentNameValue),
+    ]);
+    validateEnvironmentLockGraph(environment, currentLock);
+    const previous = await loadEnvironmentSnapshot(environment, currentLock);
+    if (!currentLock.packages[packageName]) {
+      throw new Error(`Package ${packageName} is not installed in Environment ${environmentNameValue}`);
+    }
+    if (FOUNDATIONAL_PACKAGES.includes(packageName as typeof FOUNDATIONAL_PACKAGES[number])) {
+      throw new Error(`Cannot uninstall foundational Package ${packageName}; every Environment requires it`);
+    }
+    const root = environment.spec.roots.find((candidate) => candidate.name === packageName);
+    if (!root) {
+      const roots = requiringRoots(environment, currentLock, packageName);
+      throw new Error(
+        `Cannot uninstall ${packageName}: it is not a root Package in Environment ${environmentNameValue}; required by roots: ${roots.join(", ")}`,
+      );
+    }
+
+    const roots = environment.spec.roots.filter((candidate) => candidate.name !== packageName);
+    const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
+    const pruned = reachableLock(currentLock, roots.map((candidate) => candidate.name));
+    const desired = await loadEnvironmentSnapshot(updated, pruned);
+    const removedNames = previous.names.filter((name) => !desired.packages.has(name));
+    const orderedRemovedNames = [packageName, ...removedNames.filter((name) => name !== packageName)];
+    const packages = orderedRemovedNames
+      .filter((name) => previous.packages.has(name))
+      .map((name) => previous.packages.get(name)!);
+    const rootPackage = previous.packages.get(packageName)!;
+    const previousResources = environmentResourceKeys(
+      environment,
+      previous.names.map((name) => previous.packages.get(name)!),
+    );
+    const desiredResources = environmentResourceKeys(
+      updated,
+      desired.names.map((name) => desired.packages.get(name)!),
+    );
+    const result: EnvironmentUninstallResult = {
+      environment: updated,
+      root: rootPackage,
+      packages,
+      dependencies: packages.filter((pkg) => pkg.lock.name !== packageName),
+      skills: removedResourceLabels(previousResources.skills, desiredResources.skills),
+      mcpServers: removedResourceLabels(previousResources.mcpServers, desiredResources.mcpServers),
+      hooks: removedResourceLabels(previousResources.hooks, desiredResources.hooks),
+      dryRun: options.dryRun ?? false,
+    };
+    if (result.dryRun) return result;
+    await publishEnvironmentUpdate(
+      projectRoot,
+      environmentNameValue,
+      environment,
+      currentLock,
+      previous,
+      updated,
+      pruned,
+      desired,
+      options,
+    );
+    return result;
   });
 }
 
