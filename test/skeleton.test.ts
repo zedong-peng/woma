@@ -72,7 +72,7 @@ test("CLI skeleton follows the provider and output-directory interface", async (
     assert.match(inspected.stdout, /^demo@2\.0\.0/);
 
     const help = await run(process.execPath, [cli, "skeleton", "--help"]);
-    assert.match(help.stdout, /workflow \[options\] <name>/);
+    assert.match(help.stdout, /workflow\s+generate a Package with a coordinating workflow Skill/);
   } finally {
     await removeTestTree(root);
   }
