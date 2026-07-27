@@ -79,19 +79,33 @@ function withoutManagedBlock(content: string, range: { start: number; end: numbe
   return `${content.slice(0, start)}${content.slice(range.end)}`;
 }
 
+const legacyHookLine = /^[ \t]*eval[ \t]+["']?\$\((?:command[ \t]+)?harness(?:-conda)?[ \t]+shell[ \t]+hook(?:[ \t]+[^)]*)?\)["']?[ \t]*(?:#.*)?$/;
+
+function withoutLegacyHookLines(content: string): string {
+  if (!content.includes("shell hook")) return content;
+  const trailingNewline = content.endsWith("\n");
+  const joined = content
+    .split("\n")
+    .filter((line) => !legacyHookLine.test(line))
+    .join("\n");
+  if (trailingNewline && !joined.endsWith("\n")) return `${joined}\n`;
+  return joined;
+}
+
 function reconcileProfile(original: string | null, hookPath: string, reverse: boolean): string | null {
-  const content = original ?? "";
-  const range = managedRange(content);
+  const rawContent = original ?? "";
+  const range = managedRange(rawContent);
   if (reverse) {
     if (!range) return original;
-    return withoutManagedBlock(content, range);
+    return withoutManagedBlock(rawContent, range);
   }
   const block = initializationBlock(hookPath);
   if (!range) {
+    const content = withoutLegacyHookLines(rawContent);
     if (!content) return `${block}\n`;
     return `${content}${content.endsWith("\n") ? "\n" : "\n\n"}${block}\n`;
   }
-  return `${content.slice(0, range.start)}${block}\n${content.slice(range.end)}`;
+  return withoutLegacyHookLines(`${rawContent.slice(0, range.start)}${block}\n${rawContent.slice(range.end)}`);
 }
 
 export function shellProfilePath(

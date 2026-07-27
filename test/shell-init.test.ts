@@ -72,6 +72,34 @@ test("shell initialization dry-run reports changes without writing files", async
   }
 });
 
+test("shell initialization migrates legacy eval shell-hook lines", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-init-legacy-"));
+  const profilePath = path.join(root, ".zshrc");
+  const stateHome = path.join(root, "state");
+  try {
+    await writeFile(
+      profilePath,
+      ["# user shell settings", 'eval "$(harness shell hook)"', 'eval "$(harness-conda shell hook zsh)"', "alias evaluate='echo shell hook docs'", ""].join("\n"),
+      "utf8",
+    );
+
+    const initialized = await initializeShell("zsh", { profilePath, harnessHome: stateHome });
+    assert.deepEqual(initialized.actions.map((entry) => entry.verb), ["create", "merge"]);
+    const profile = await readFile(profilePath, "utf8");
+    assert.match(profile, /^# user shell settings/);
+    assert.match(profile, /# >>> harness initialize >>>/);
+    assert.equal(profile.includes("shell hook)"), false);
+    assert.ok(profile.includes("alias evaluate='echo shell hook docs'"));
+
+    await writeFile(profilePath, `eval "$(harness shell hook)"\n${profile}`, "utf8");
+    const repeated = await initializeShell("zsh", { profilePath, harnessHome: stateHome });
+    assert.deepEqual(repeated.actions.map((entry) => entry.verb), ["merge"]);
+    assert.equal(await readFile(profilePath, "utf8"), profile);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("shell initialization rejects malformed managed blocks without changing them", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-init-markers-"));
   const profilePath = path.join(root, ".bashrc");
