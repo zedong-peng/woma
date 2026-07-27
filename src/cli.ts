@@ -121,6 +121,7 @@ program
   .description("Create, reproduce, and switch isolated Agent environments")
   .version("0.6.0")
   .enablePositionalOptions()
+  .configureHelp({ sortSubcommands: true })
   .option("-p, --project <directory>", "project whose Memory is managed; defaults to the current directory");
 
 program

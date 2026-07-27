@@ -80,6 +80,28 @@ async function runCliProcess(args: string[], cwd: string, home: string): Promise
   });
 }
 
+function helpCommandNames(output: string): string[] {
+  const commands = output.split("\nCommands:\n", 2)[1];
+  assert.ok(commands, "help output should include a Commands section");
+  return commands
+    .split("\n")
+    .flatMap((line) => line.match(/^  (\S+)/)?.[1] ?? []);
+}
+
+test("CLI help lists commands alphabetically", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-help-"));
+  try {
+    for (const args of [["-h"], ["env", "-h"]]) {
+      const result = await runCliProcess(args, root, path.join(root, "home"));
+      assert.equal(result.code, 0, result.stderr);
+      const commands = helpCommandNames(result.stdout);
+      assert.deepEqual(commands, [...commands].sort((left, right) => left.localeCompare(right)));
+    }
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 async function packageFixture(
   root: string,
   name: string,
