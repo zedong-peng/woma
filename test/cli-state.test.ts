@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -404,12 +404,18 @@ test("CLI renames an inactive Environment without losing Agent-owned state", { c
     assert.equal((await runCli(["--project", project, "create", "-n", "before", "--target", "codex"], root, home)).code, 0);
     const opaque = path.join(home, "environments", "before", "home", "codex", "session.sqlite");
     await write(opaque, "state\n");
+    const futureLink = path.join(home, "environments", "before", "home", "codex", "future.json");
+    await symlink(path.join(home, "environments", "before", "view", "codex", "future.json"), futureLink);
 
     const renamed = await runCli(["--project", project, "rename", "--name", "before", "after"], root, home);
     assert.equal(renamed.code, 0, renamed.stderr);
     assert.match(renamed.stdout, /Renamed environment before to after/);
     await assert.rejects(access(path.join(home, "environments", "before")), /ENOENT/);
     assert.equal(await readFile(path.join(home, "environments", "after", "home", "codex", "session.sqlite"), "utf8"), "state\n");
+    assert.equal(
+      await readlink(path.join(home, "environments", "after", "home", "codex", "future.json")),
+      path.join(home, "environments", "after", "view", "codex", "future.json"),
+    );
     assert.match(await readFile(path.join(home, "environments", "after", "environment.yaml"), "utf8"), /name: after/);
     const doctor = await runCli(["--project", project, "doctor", "--name", "after"], root, home);
     assert.equal(doctor.code, 0, doctor.stderr || doctor.stdout);

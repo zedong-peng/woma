@@ -497,11 +497,11 @@ async function rewriteRenamedEnvironmentLinks(root: string, previousRoot: string
       if (relative.startsWith("..") || path.isAbsolute(relative)) continue;
       const replacement = path.join(nextRoot, relative);
       const temporary = `${entryPath}.rename-${process.pid}-${randomUUID()}`;
-      const replacementInfo = await lstat(replacement);
+      const replacementInfo = process.platform === "win32" ? await lstat(replacement).catch(() => undefined) : undefined;
       await symlink(
         replacement,
         temporary,
-        process.platform === "win32" ? (replacementInfo.isDirectory() ? "junction" : "file") : undefined,
+        process.platform === "win32" ? (replacementInfo?.isDirectory() ? "junction" : "file") : undefined,
       );
       try {
         await rename(temporary, entryPath);
