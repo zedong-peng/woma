@@ -427,7 +427,7 @@ test("legacy same-name Agent Skills fail without moving either source", { concur
     await write(claudeSkill, "---\nname: same-name\ndescription: Claude copy.\n---\nClaude.\n");
     const beforeView = await readlink(environmentViewPath("tools"));
 
-    await assert.rejects(activateEnvironment(root, "tools"), /Skill entry same-name exists in multiple Agent homes/);
+    await assert.rejects(activateEnvironment(root, "tools"), /Skill entry same-name differs between Agent homes/);
 
     assert.match(await readFile(codexSkill, "utf8"), /Codex copy/);
     assert.match(await readFile(claudeSkill, "utf8"), /Claude copy/);
@@ -436,6 +436,119 @@ test("legacy same-name Agent Skills fail without moving either source", { concur
     assert.equal(JSON.parse(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8")).viewVersion, 1);
     await assert.rejects(access(path.join(root, "AGENTS.md")));
     await assert.rejects(access(path.join(root, "CLAUDE.md")));
+
+    await rm(path.dirname(codexSkill), { recursive: true });
+    await rm(path.dirname(claudeSkill), { recursive: true });
+    const claudeDirectory = path.join(environmentAgentHomePath("tools", "claude"), "skills", "linked-kind");
+    await write(
+      path.join(claudeDirectory, "SKILL.md"),
+      "---\nname: linked-kind\ndescription: Real directory copy.\n---\nDirectory.\n",
+    );
+    const codexLink = path.join(environmentAgentHomePath("tools", "codex"), "skills", "linked-kind");
+    await symlink(await realpath(claudeDirectory), codexLink);
+
+    await assert.rejects(activateEnvironment(root, "tools"), /Skill entry linked-kind differs between Agent homes/);
+
+    assert.equal((await lstat(codexLink)).isSymbolicLink(), true);
+    assert.equal((await lstat(claudeDirectory)).isDirectory(), true);
+    await assert.rejects(access(environmentSkillsPath("tools")));
+    assert.equal(await readlink(environmentViewPath("tools")), beforeView);
+  } finally {
+    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previous.harnessEnvironment;
+    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    await removeTestTree(root);
+  }
+});
+
+test("legacy same-name equivalent Agent Skills deduplicate into the shared root", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-legacy-shared-skills-deduplicate-"));
+  const previous = {
+    harnessHome: process.env.HARNESS_HOME,
+    harnessEnvironment: process.env.HARNESS_ENV,
+    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+  };
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ENV = "base";
+  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  try {
+    const targets = ["codex", "claude"] as const;
+    await createEnvironment(root, "tools", [...targets]);
+    await projectLegacySkillsLayout("tools", targets);
+    const codexSkills = path.join(environmentAgentHomePath("tools", "codex"), "skills");
+    const codexManagedNames = await readdir(codexSkills);
+    await rm(codexSkills, { force: true });
+    await mkdir(codexSkills);
+    for (const name of codexManagedNames) {
+      await symlink(path.join(environmentViewPath("tools"), "codex", "skills", name), path.join(codexSkills, name));
+    }
+    const linkedSkill = path.join(root, "linked-skill");
+    await write(
+      path.join(linkedSkill, "SKILL.md"),
+      "---\nname: linked-same\ndescription: One Skill linked by both Agents.\n---\nLinked.\n",
+    );
+    const skillDocument = "---\nname: same-name\ndescription: Identical Agent copy.\n---\nSame.\n";
+    for (const target of targets) {
+      const targetSkills = path.join(environmentAgentHomePath("tools", target), "skills");
+      const skill = path.join(targetSkills, "same-name");
+      await write(path.join(skill, "SKILL.md"), skillDocument);
+      await write(path.join(skill, "fixtures", "data.bin"), Buffer.from([0, 39, 255]));
+      await symlink(path.relative(await realpath(targetSkills), linkedSkill), path.join(targetSkills, "linked-same"));
+    }
+
+    const beforeView = await readlink(environmentViewPath("tools"));
+    const packageRoot = await packageFixture(root, "1.0.0", false);
+    await assert.rejects(
+      installIntoEnvironment(root, "tools", packageRoot, process.cwd(), {
+        onMetadataPrepared: () => {
+          throw new Error("injected duplicate merge failure");
+        },
+      }),
+      /injected duplicate merge failure/,
+    );
+    assert.equal(await readlink(environmentViewPath("tools")), beforeView);
+    await assert.rejects(access(environmentSkillsPath("tools")));
+    assert.equal((await lstat(codexSkills)).isSymbolicLink(), false);
+    for (const target of targets) {
+      const restored = path.join(environmentAgentHomePath("tools", target), "skills", "same-name");
+      assert.equal(await readFile(path.join(restored, "SKILL.md"), "utf8"), skillDocument);
+      assert.deepEqual(await readFile(path.join(restored, "fixtures", "data.bin")), Buffer.from([0, 39, 255]));
+      assert.equal(
+        await realpath(path.join(environmentAgentHomePath("tools", target), "skills", "linked-same")),
+        await realpath(linkedSkill),
+      );
+    }
+    assert.equal(
+      (await readdir(path.dirname(environmentSkillsPath("tools")))).some((name) => name.startsWith(".skills-merge-backup-")),
+      false,
+    );
+
+    await activateEnvironment(root, "tools");
+
+    const shared = environmentSkillsPath("tools");
+    assert.equal(await readFile(path.join(shared, "same-name", "SKILL.md"), "utf8"), skillDocument);
+    assert.deepEqual(await readFile(path.join(shared, "same-name", "fixtures", "data.bin")), Buffer.from([0, 39, 255]));
+    const sharedEntries = await readdir(shared);
+    assert.equal(sharedEntries.filter((name) => name === "same-name").length, 1);
+    assert.equal(sharedEntries.filter((name) => name === "linked-same").length, 1);
+    assert.equal((await lstat(path.join(shared, "same-name"))).isSymbolicLink(), false);
+    assert.equal((await lstat(path.join(shared, "linked-same"))).isSymbolicLink(), true);
+    assert.equal(await realpath(path.join(shared, "linked-same")), await realpath(linkedSkill));
+    for (const target of targets) {
+      assert.equal(
+        await realpath(path.join(environmentAgentHomePath("tools", target), "skills", "same-name")),
+        await realpath(path.join(shared, "same-name")),
+      );
+    }
+    assert.equal((await readdir(path.dirname(shared))).some((name) => name.startsWith(".skills-merge-backup-")), false);
+    assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
   } finally {
     if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previous.harnessHome;

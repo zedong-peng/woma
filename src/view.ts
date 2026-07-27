@@ -1,7 +1,7 @@
 import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, rmdir, stat, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
 import { harnessHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import type { CodexClaudePlatform, ConfigurablePlatform, HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
@@ -477,6 +477,7 @@ function stringArray(value: unknown): string[] {
 
 interface StableHomeTransition {
   apply: () => Promise<() => Promise<void>>;
+  finalize: () => Promise<void>;
 }
 
 function metadataSkillNames(metadata: ViewMetadata, platform: Platform): string[] {
@@ -508,12 +509,143 @@ async function managedLinkMatches(link: string, source: string): Promise<boolean
   return path.resolve(path.dirname(link), await readlink(link)) === source;
 }
 
+function normalizedRelative(filePath: string): string {
+  return filePath.split(path.sep).join("/");
+}
+
+function relativeInside(root: string, candidate: string): string | undefined {
+  const relative = path.relative(root, candidate);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
+  return normalizedRelative(relative || ".");
+}
+
+async function resolvedSymlinkTarget(link: string, target: string): Promise<string> {
+  return path.resolve(await realpath(path.dirname(link)), target);
+}
+
+async function skillEntryFingerprint(root: string): Promise<string> {
+  const hash = createHash("sha256");
+  const rootInfo = await lstat(root);
+  const absoluteRoot = rootInfo.isDirectory() ? await realpath(root) : path.resolve(root);
+  const update = (kind: string, relative: string, detail: unknown): void => {
+    hash.update(`${kind}:${JSON.stringify([normalizedRelative(relative || "."), detail])}\0`);
+  };
+  const visit = async (current: string, relative: string): Promise<void> => {
+    const info = await lstat(current);
+    if (info.isSymbolicLink()) {
+      const target = await readlink(current);
+      const resolved = await resolvedSymlinkTarget(current, target);
+      const internal = relativeInside(absoluteRoot, resolved);
+      update("link", relative, internal === undefined ? { external: resolved } : { internal });
+      return;
+    }
+    if (info.isDirectory()) {
+      update("directory", relative, null);
+      for (const name of (await readdir(current)).sort()) {
+        await visit(path.join(current, name), path.join(relative, name));
+      }
+      return;
+    }
+    if (info.isFile()) {
+      update("file", relative, { executable: info.mode & 0o111, size: info.size });
+      hash.update(await readFile(current));
+      hash.update("\0");
+      return;
+    }
+    throw new Error(`Skill entry contains an unsupported filesystem object: ${current}`);
+  };
+  await visit(root, "");
+  return hash.digest("hex");
+}
+
+async function equivalentSkillEntries(left: string, right: string): Promise<boolean> {
+  const [leftFingerprint, rightFingerprint] = await Promise.all([
+    skillEntryFingerprint(left),
+    skillEntryFingerprint(right),
+  ]);
+  return leftFingerprint === rightFingerprint;
+}
+
+type SkillLinkType = "dir" | "file" | "junction" | undefined;
+
+interface MovedSkillEntry {
+  source: string;
+  destination: string;
+  originalLinkTarget?: string;
+  destinationLinkTarget?: string;
+  linkType?: SkillLinkType;
+}
+
+async function moveSkillEntry(source: string, destination: string): Promise<MovedSkillEntry> {
+  const info = await lstat(source);
+  if (!info.isSymbolicLink()) {
+    await rename(source, destination);
+    return { source, destination };
+  }
+  const originalLinkTarget = await readlink(source);
+  const resolvedTarget = await resolvedSymlinkTarget(source, originalLinkTarget);
+  const targetInfo = process.platform === "win32" ? await stat(source).catch(() => undefined) : undefined;
+  const linkType: SkillLinkType = process.platform === "win32"
+    ? (targetInfo?.isDirectory() ? "junction" : "file")
+    : undefined;
+  const destinationLinkTarget = linkType === "junction"
+    ? resolvedTarget
+    : path.relative(path.dirname(destination), resolvedTarget) || ".";
+  await symlink(destinationLinkTarget, destination, linkType);
+  try {
+    await rm(source, { force: true });
+  } catch (error) {
+    await rm(destination, { force: true });
+    throw error;
+  }
+  return { source, destination, originalLinkTarget, destinationLinkTarget, linkType };
+}
+
+async function restoreMovedSkillEntry(entry: MovedSkillEntry): Promise<void> {
+  if (await lstat(entry.source).catch(() => undefined)) {
+    throw new Error(`Cannot restore Agent Skill because its original path is occupied: ${entry.source}`);
+  }
+  if (entry.originalLinkTarget === undefined) {
+    await rename(entry.destination, entry.source);
+    return;
+  }
+  const destinationInfo = await lstat(entry.destination).catch(() => undefined);
+  if (!destinationInfo?.isSymbolicLink() || await readlink(entry.destination) !== entry.destinationLinkTarget) {
+    throw new Error(`Refusing to restore a modified shared Skill path: ${entry.destination}`);
+  }
+  await symlink(entry.originalLinkTarget, entry.source, entry.linkType);
+  try {
+    await rm(entry.destination, { force: true });
+  } catch (error) {
+    await rm(entry.source, { force: true });
+    throw error;
+  }
+}
+
+async function makeDirectoriesWritable(root: string): Promise<void> {
+  const info = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!info || info.isSymbolicLink() || !info.isDirectory()) return;
+  await chmod(root, (info.mode & 0o777) | 0o700);
+  for (const name of await readdir(root)) await makeDirectoriesWritable(path.join(root, name));
+}
+
 interface AgentSkillsRootPlan {
   root: string;
   kind: "shared" | "missing" | "legacy-link" | "legacy-directory";
   linkTarget?: string;
   managedLinks: { name: string; target: string }[];
   externalEntries: { name: string; source: string }[];
+}
+
+interface DuplicateSkillEntry {
+  name: string;
+  source: string;
+  canonicalSource: string;
+  sourceRoot: string;
+  canonicalRoot: string;
 }
 
 async function prepareSharedSkillsTransition(
@@ -538,12 +670,32 @@ async function prepareSharedSkillsTransition(
     throw new Error(`Environment Skills root must be a real directory: ${skillsRoot}`);
   }
 
-  const externalOwners = new Map<string, string>();
+  const externalOwners = new Map<string, { root: string; source: string }>();
+  const duplicateEntries: DuplicateSkillEntry[] = [];
   if (skillsInfo) {
     for (const name of await readdir(skillsRoot)) {
-      if (!previousNames.has(name)) externalOwners.set(name, skillsRoot);
+      if (!previousNames.has(name)) externalOwners.set(name, { root: skillsRoot, source: path.join(skillsRoot, name) });
     }
   }
+
+  const registerExternalEntry = async (name: string, source: string, root: string): Promise<boolean> => {
+    const owner = externalOwners.get(name);
+    if (!owner) {
+      externalOwners.set(name, { root, source });
+      return true;
+    }
+    if (!(await equivalentSkillEntries(owner.source, source))) {
+      throw new Error(`Skill entry ${name} differs between Agent homes: ${owner.root}, ${root}`);
+    }
+    duplicateEntries.push({
+      name,
+      source,
+      canonicalSource: owner.source,
+      sourceRoot: root,
+      canonicalRoot: owner.root,
+    });
+    return false;
+  };
 
   const createNames: string[] = [];
   const removeNames: string[] = [];
@@ -621,10 +773,7 @@ async function prepareSharedSkillsTransition(
           continue;
         }
         if (desiredNames.has(name)) throw new Error(`Refusing to replace an Agent-installed Skill with a Harness Skill: ${entry}`);
-        const owner = externalOwners.get(name);
-        if (owner) throw new Error(`Skill entry ${name} exists in multiple Agent homes: ${owner}, ${root}`);
-        externalOwners.set(name, root);
-        plan.externalEntries.push({ name, source: entry });
+        if (await registerExternalEntry(name, entry, root)) plan.externalEntries.push({ name, source: entry });
       }
       roots.push(plan);
       continue;
@@ -647,20 +796,19 @@ async function prepareSharedSkillsTransition(
         continue;
       }
       if (desiredNames.has(name)) throw new Error(`Refusing to replace an Agent-installed Skill with a Harness Skill: ${entry}`);
-      const owner = externalOwners.get(name);
-      if (owner) throw new Error(`Skill entry ${name} exists in multiple Agent homes: ${owner}, ${root}`);
-      externalOwners.set(name, root);
-      plan.externalEntries.push({ name, source: entry });
+      if (await registerExternalEntry(name, entry, root)) plan.externalEntries.push({ name, source: entry });
     }
     roots.push(plan);
   }
 
+  let duplicateBackupRoot: string | undefined;
   return {
     apply: async () => {
       const rootCreated = !skillsInfo;
       const created: string[] = [];
       const removed: { name: string; target: string }[] = [];
-      const moved: { source: string; destination: string }[] = [];
+      const moved: MovedSkillEntry[] = [];
+      const stagedDuplicates: { source: string; backup: string }[] = [];
       const changedRoots: AgentSkillsRootPlan[] = [];
       const removedDirectoryLinks: { root: string; name: string; target: string }[] = [];
       const rollback = async (): Promise<void> => {
@@ -721,13 +869,25 @@ async function prepareSharedSkillsTransition(
         }
         for (const item of [...moved].reverse()) {
           try {
-            if (await lstat(item.source).catch(() => undefined)) {
-              throw new Error(`Cannot restore Agent Skill because its original path is occupied: ${item.source}`);
-            }
-            await rename(item.destination, item.source);
+            await restoreMovedSkillEntry(item);
           } catch (error) {
             errors.push(error);
           }
+        }
+        for (const item of [...stagedDuplicates].reverse()) {
+          try {
+            if (await lstat(item.source).catch(() => undefined)) {
+              throw new Error(`Cannot restore duplicate Agent Skill because its original path is occupied: ${item.source}`);
+            }
+            await rename(item.backup, item.source);
+          } catch (error) {
+            errors.push(error);
+          }
+        }
+        if (duplicateBackupRoot) {
+          await rmdir(duplicateBackupRoot).catch((error: NodeJS.ErrnoException) => {
+            if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") errors.push(error);
+          });
         }
         if (rootCreated) {
           await rmdir(skillsRoot).catch((error: NodeJS.ErrnoException) => {
@@ -737,12 +897,27 @@ async function prepareSharedSkillsTransition(
         if (errors.length > 0) throw new AggregateError(errors, "Could not roll back shared Environment Skills");
       };
       try {
+        for (const duplicate of duplicateEntries) {
+          if (!(await equivalentSkillEntries(duplicate.canonicalSource, duplicate.source))) {
+            throw new Error(
+              `Skill entry ${duplicate.name} changed while merging Agent homes: ${duplicate.canonicalRoot}, ${duplicate.sourceRoot}`,
+            );
+          }
+        }
         await mkdir(skillsRoot, { recursive: true, mode: 0o700 });
         for (const plan of roots) {
           for (const entry of plan.externalEntries) {
             const destination = path.join(skillsRoot, entry.name);
-            await rename(entry.source, destination);
-            moved.push({ source: entry.source, destination });
+            moved.push(await moveSkillEntry(entry.source, destination));
+          }
+        }
+        if (duplicateEntries.length > 0) {
+          duplicateBackupRoot = path.join(path.dirname(skillsRoot), `.skills-merge-backup-${randomUUID()}`);
+          await mkdir(duplicateBackupRoot, { mode: 0o700 });
+          for (const [index, duplicate] of duplicateEntries.entries()) {
+            const backup = path.join(duplicateBackupRoot, String(index));
+            await rename(duplicate.source, backup);
+            stagedDuplicates.push({ source: duplicate.source, backup });
           }
         }
         for (const name of removeNames) {
@@ -785,6 +960,12 @@ async function prepareSharedSkillsTransition(
         }
         throw error;
       }
+    },
+    finalize: async () => {
+      if (!duplicateBackupRoot) return;
+      await makeDirectoriesWritable(duplicateBackupRoot);
+      await rm(duplicateBackupRoot, { recursive: true, force: true });
+      duplicateBackupRoot = undefined;
     },
   };
 }
@@ -924,6 +1105,7 @@ async function prepareStableHomeTransition(
         throw error;
       }
     },
+    finalize: () => sharedSkills.finalize(),
   };
 }
 
@@ -984,6 +1166,7 @@ export async function materializeEnvironmentView(
   await mkdir(parent, { recursive: true, mode: 0o700 });
   const temporary = path.join(parent, `.view.gen-${randomUUID()}`);
   await mkdir(temporary, { recursive: true, mode: 0o700 });
+  let finalizeHome: (() => Promise<void>) | undefined;
   try {
     const previousMetadata = await previousViewMetadata(destination);
     await linkSkills(temporary, packages);
@@ -1055,10 +1238,13 @@ export async function materializeEnvironmentView(
         }
       },
     });
+    finalizeHome = homeTransition.finalize;
   } catch (error) {
     await rm(temporary, { recursive: true, force: true });
     throw error;
   }
+  // The view is already committed; failed disposal may retain only a hidden equivalent backup.
+  await finalizeHome?.().catch(() => undefined);
 }
 
 export async function validateEnvironmentView(environment: HarnessEnvironment, packages: InstalledPackage[]): Promise<void> {
