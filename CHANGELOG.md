@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed `harness init` to remove legacy `eval "$(harness shell hook)"` profile lines while installing the managed block, so profiles written before the public `shell` command was removed no longer fail at shell startup.
 - Added Conda-style top-level `create`, `export`, `remove`, `run`, and `rename` commands; portable bundles are now restored with `create --file`, and the former `env import` command has been removed.
 - Changed `harness deactivate` to leave Harness Environment management, restore the original Agent homes, and clear the shell selection; use `harness activate base` to select Harness `base` explicitly.
 - Removed the public `harness shell` command; `harness init` is now the sole shell-integration entrypoint and continues to install a static startup hook.

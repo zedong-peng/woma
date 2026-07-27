@@ -180,7 +180,7 @@ Initialize the current login shell after installing or updating Harness:
 harness init
 ```
 
-Like `conda init`, `harness init` adds a marker-delimited managed block to the selected shell profile. Bash uses `~/.bash_profile` on macOS and `~/.bashrc` elsewhere; Zsh uses `$ZDOTDIR/.zshrc` when `ZDOTDIR` is set and `~/.zshrc` otherwise. The command writes a static, versioned hook to `$HARNESS_HOME/shell`, and the profile only sources that file. Repeated initialization is a no-op, `--dry-run` prints the planned file actions, and `--reverse` removes the managed block and static hook while preserving user-owned profile content, modes, and symbolic links.
+Like `conda init`, `harness init` adds a marker-delimited managed block to the selected shell profile. Bash uses `~/.bash_profile` on macOS and `~/.bashrc` elsewhere; Zsh uses `$ZDOTDIR/.zshrc` when `ZDOTDIR` is set and `~/.zshrc` otherwise. The command writes a static, versioned hook to `$HARNESS_HOME/shell`, and the profile only sources that file. Initialization also removes legacy `eval "$(harness shell hook)"` lines left by versions that still had the public `shell` command. Repeated initialization is a no-op, `--dry-run` prints the planned file actions, and `--reverse` removes the managed block and static hook while preserving user-owned profile content, modes, and symbolic links.
 
 `init` is the only public shell-integration command. Hook generation and sourcing do not create, validate, synchronize, or repair an Environment; load Packages; initialize Memory; mutate the current project; or acquire Harness locks. An explicit command such as `info`, `env list`, `install`, `activate`, or `doctor` initializes `base` lazily when needed.
 
