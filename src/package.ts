@@ -300,7 +300,7 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
         tags: [],
       },
       spec: {
-        platforms: ["codex", "claude", "pi"],
+        platforms: ["codex", "claude", "pi", "qoder"],
         requirements: { env: [], commands: [] },
         dependencies: [],
         entrypoints: [],

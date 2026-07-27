@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Added opt-in Qoder CLI Agent targets with isolated `QODER_CONFIG_DIR` homes, atomic Skill views, Package MCP servers and Hooks merged into the managed `settings.json`, shell activation, and inclusion in `--target all`; Harness does not capture, migrate, or seed Qoder credentials or sessions.
 - Added Conda-style top-level `create`, `export`, `remove`, `run`, and `rename` commands; portable bundles are now restored with `create --file`, and the former `env import` command has been removed.
 - Changed `harness deactivate` to leave Harness Environment management, restore the original Agent homes, and clear the shell selection; use `harness activate base` to select Harness `base` explicitly.
 - Removed the public `harness shell` command; `harness init` is now the sole shell-integration entrypoint and continues to install a static startup hook.

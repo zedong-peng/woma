@@ -4,24 +4,27 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
 import { harnessHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
-import type { CodexClaudePlatform, HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
+import type { CodexClaudePlatform, ConfigurablePlatform, HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
 const MANAGED_HOME_LINKS: Record<Platform, string[]> = {
   codex: ["auth.json", "config.toml", "hooks.json"],
   claude: [".credentials.json", "settings.json", "skills"],
   pi: ["skills"],
+  qoder: ["settings.json", "skills"],
 };
 
 const MANAGED_VIEW_ENTRIES: Record<Platform, string[]> = {
   codex: ["auth.json", "config.toml", "hooks.json", "skills"],
   claude: [".credentials.json", "settings.json", "skills"],
   pi: ["skills"],
+  qoder: ["settings.json", "skills"],
 };
 
 const CREDENTIAL_FILES: Record<Platform, string[]> = {
   codex: ["auth.json"],
   claude: [".credentials.json"],
   pi: [],
+  qoder: [],
 };
 
 interface ViewInstallHooks {
@@ -206,6 +209,11 @@ function defaultAgentHome(platform: Platform): string {
       process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"),
     );
   }
+  if (platform === "qoder") {
+    return path.resolve(
+      process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR ?? process.env.QODER_CONFIG_DIR ?? path.join(os.homedir(), ".qoder"),
+    );
+  }
   return path.resolve(
     process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"),
   );
@@ -218,6 +226,7 @@ export function sourceAgentHome(platform: Platform): string {
   if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
     if (platform === "codex") return path.join(os.homedir(), ".codex");
     if (platform === "claude") return path.join(os.homedir(), ".claude");
+    if (platform === "qoder") return path.join(os.homedir(), ".qoder");
     return path.join(os.homedir(), ".pi", "agent");
   }
   return candidate;
@@ -292,7 +301,7 @@ async function copyAgentCredential(environmentName: string, platform: CodexClaud
   await writeBufferPreservingFile(path.join(root, name), content, mode);
 }
 
-function collectServers(packages: InstalledPackage[], platform: CodexClaudePlatform): { packageName: string; server: McpServer }[] {
+function collectServers(packages: InstalledPackage[], platform: ConfigurablePlatform): { packageName: string; server: McpServer }[] {
   const result: { packageName: string; server: McpServer }[] = [];
   const owners = new Map<string, { packageName: string; value: unknown }>();
   for (const pkg of packages) {
@@ -311,7 +320,7 @@ function collectServers(packages: InstalledPackage[], platform: CodexClaudePlatf
   return result;
 }
 
-function collectHooks(packages: InstalledPackage[], platform: CodexClaudePlatform): HookSpec[] {
+function collectHooks(packages: InstalledPackage[], platform: ConfigurablePlatform): HookSpec[] {
   const result: HookSpec[] = [];
   for (const pkg of packages) {
     for (const hook of pkg.manifest.spec.hooks.filter((item) => appliesTo(platform, item.platforms))) {
@@ -394,6 +403,49 @@ async function buildClaudeView(
   return links;
 }
 
+function removeServers(root: Record<string, unknown>, filePath: string, removals: { server: McpServer }[]): void {
+  if (removals.length === 0 || root.mcpServers === undefined) return;
+  const servers = objectAt(root, "mcpServers", filePath);
+  for (const { server } of removals) delete servers[server.name];
+  if (Object.keys(servers).length === 0) delete root.mcpServers;
+}
+
+function mergeServers(root: Record<string, unknown>, filePath: string, additions: { server: McpServer }[]): void {
+  if (additions.length === 0) return;
+  const servers = objectAt(root, "mcpServers", filePath);
+  for (const { server } of additions) {
+    const desired = claudeValue(server);
+    const existing = servers[server.name];
+    if (existing !== undefined && !equal(existing, desired)) {
+      throw new Error(`Refusing to overwrite Qoder MCP server ${server.name} in ${filePath}`);
+    }
+    servers[server.name] = desired;
+  }
+}
+
+async function buildQoderView(
+  environmentName: string,
+  root: string,
+  packages: InstalledPackage[],
+  previousPackages: InstalledPackage[],
+): Promise<Record<string, string>> {
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const sourceHome = sourceAgentHome("qoder");
+  const links = await linkSkills(root, packages);
+
+  const currentSettings = path.join(environmentViewPath(environmentName), "qoder", "settings.json");
+  const sourceSettings = await pathExists(currentSettings) ? currentSettings : path.join(sourceHome, "settings.json");
+  const settings = parseJsonObject(await readOptional(sourceSettings), sourceSettings);
+  removeHooks(sourceSettings, settings, collectHooks(previousPackages, "qoder"));
+  await mergeHooks(sourceSettings, settings, collectHooks(packages, "qoder"));
+  removeServers(settings, sourceSettings, collectServers(previousPackages, "qoder"));
+  mergeServers(settings, sourceSettings, collectServers(packages, "qoder"));
+  const settingsDestination = path.join(root, "settings.json");
+  await writeJsonAtomic(settingsDestination, settings);
+  await chmod(settingsDestination, 0o600);
+  return links;
+}
+
 export function environmentViewPath(name: string): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error(`Invalid Environment name: ${name}`);
   return path.join(harnessHome(), "environments", name, "view");
@@ -403,7 +455,7 @@ interface ViewMetadata {
   viewVersion?: unknown;
   targets?: unknown;
   skills?: unknown;
-  resources?: { codexMcpServers?: unknown; claudeMcpServers?: unknown } | undefined;
+  resources?: { codexMcpServers?: unknown; claudeMcpServers?: unknown; qoderMcpServers?: unknown } | undefined;
 }
 
 async function previousViewMetadata(root: string): Promise<ViewMetadata> {
@@ -878,19 +930,30 @@ export async function materializeEnvironmentView(
     if (environment.spec.targets.includes("pi")) {
       skillLinks.pi = await buildPiView(path.join(temporary, "pi"), packages);
     }
+    if (environment.spec.targets.includes("qoder")) {
+      skillLinks.qoder = await buildQoderView(
+        name,
+        path.join(temporary, "qoder"),
+        packages,
+        hooks.previousPackages ?? [],
+      );
+    }
     const codexMcpServers = environment.spec.targets.includes("codex")
       ? collectServers(packages, "codex").map(({ server }) => server.name)
       : [];
     const claudeMcpServers = environment.spec.targets.includes("claude")
       ? collectServers(packages, "claude").map(({ server }) => server.name)
       : [];
+    const qoderMcpServers = environment.spec.targets.includes("qoder")
+      ? collectServers(packages, "qoder").map(({ server }) => server.name)
+      : undefined;
     await writeJsonAtomic(path.join(temporary, "view.json"), {
       viewVersion: 1,
       environment: name,
       targets: environment.spec.targets,
       packages: packages.map((pkg) => ({ name: pkg.lock.name, version: pkg.lock.version, integrity: pkg.lock.integrity })),
       skills: skillLinks,
-      resources: { codexMcpServers, claudeMcpServers },
+      resources: { codexMcpServers, claudeMcpServers, ...(qoderMcpServers ? { qoderMcpServers } : {}) },
     });
     await hooks.beforePublish?.();
     const homeTransition = await prepareStableHomeTransition(environment, packages, previousMetadata, hooks.previousPackages ?? []);
@@ -938,6 +1001,9 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
     claudeMcpServers: environment.spec.targets.includes("claude")
       ? collectServers(packages, "claude").map(({ server }) => server.name)
       : [],
+    ...(environment.spec.targets.includes("qoder")
+      ? { qoderMcpServers: collectServers(packages, "qoder").map(({ server }) => server.name) }
+      : {}),
   };
   if (
     metadata.viewVersion !== 1 ||
@@ -1040,6 +1106,17 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
       removeHooks(settingsPath, expectedSettings, collectHooks(packages, "claude"));
       await mergeHooks(settingsPath, expectedSettings, collectHooks(packages, "claude"));
       if (!equal(settings, expectedSettings)) throw new Error(`Claude Hooks differ from the Environment closure in ${settingsPath}`);
+    } else if (target === "qoder") {
+      const settingsPath = path.join(root, "qoder", "settings.json");
+      const settings = parseJsonObject(await readOptional(settingsPath), settingsPath);
+      const expectedSettings = parseJsonObject(await readOptional(settingsPath), settingsPath);
+      removeHooks(settingsPath, expectedSettings, collectHooks(packages, "qoder"));
+      await mergeHooks(settingsPath, expectedSettings, collectHooks(packages, "qoder"));
+      removeServers(expectedSettings, settingsPath, collectServers(packages, "qoder"));
+      mergeServers(expectedSettings, settingsPath, collectServers(packages, "qoder"));
+      if (!equal(settings, expectedSettings)) {
+        throw new Error(`Qoder configuration differs from the Environment closure in ${settingsPath}`);
+      }
     }
   }
 }

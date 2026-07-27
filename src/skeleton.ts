@@ -55,7 +55,7 @@ metadata:
   description: Describe the repeatable outcome this Harness Package delivers.
   tags: []
 spec:
-  platforms: [codex, claude, pi]
+  platforms: [codex, claude, pi, qoder]
   dependencies: []
   entrypoints:
     - name: ${name}

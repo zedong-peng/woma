@@ -75,12 +75,12 @@ function targets(input: string): Platform[] {
   const values = input === "both"
     ? ["codex", "claude"]
     : input === "all"
-      ? ["codex", "claude", "pi"]
+      ? ["codex", "claude", "pi", "qoder"]
       : input.split(",");
   const result: Platform[] = [];
   for (const item of values) {
     const value = item.trim();
-    if (value !== "codex" && value !== "claude" && value !== "pi") throw new Error(`Unknown target: ${value}`);
+    if (value !== "codex" && value !== "claude" && value !== "pi" && value !== "qoder") throw new Error(`Unknown target: ${value}`);
     if (!result.includes(value)) result.push(value);
   }
   if (result.length === 0) throw new Error("Select at least one target");
@@ -197,7 +197,7 @@ program
   .command("create")
   .description("create a new Agent environment")
   .requiredOption("-n, --name <environment>", "environment name")
-  .option("-t, --target <target>", "codex, claude, pi, both, all, or a comma-separated list")
+  .option("-t, --target <target>", "codex, claude, pi, qoder, both, all, or a comma-separated list")
   .option("-f, --file <bundle>", "create from a portable .harness-env bundle")
   .action(createCommand);
 
@@ -211,7 +211,7 @@ function migrationSource(input: string): SkillMigrationSource {
 envCommand
   .command("create <name>")
   .description("create a global named environment with the foundational packages")
-  .option("-t, --target <target>", "codex, claude, pi, both, all, or a comma-separated list", "both")
+  .option("-t, --target <target>", "codex, claude, pi, qoder, both, all, or a comma-separated list", "both")
   .action(async (name: string, options: { target: string }, command: Command) => {
     await createCommand({ name, target: options.target }, command);
   });

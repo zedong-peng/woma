@@ -429,6 +429,40 @@ spec:
   }
 });
 
+test("Package validation accepts Qoder MCP servers and hooks", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-qoder-resources-"));
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    const packageRoot = path.join(root, "qoder-resources");
+    await write(
+      path.join(packageRoot, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: qoder-resources
+  version: 1.0.0
+  description: Qoder MCP and Hook fixture.
+spec:
+  platforms: [qoder]
+  mcpServers:
+    - name: server
+      transport: stdio
+      command: node
+  hooks:
+    - event: PostToolUse
+      matcher: Edit
+      command: "true"
+`,
+    );
+    const pkg = await installPackageSource(packageRoot);
+    assert.deepEqual(pkg.manifest.spec.platforms, ["qoder"]);
+    assert.equal(pkg.manifest.spec.mcpServers.length, 1);
+    assert.equal(pkg.manifest.spec.hooks.length, 1);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("cache loading rejects a lock whose package identity was changed", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
   process.env.HARNESS_HOME = path.join(root, "home");
