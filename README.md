@@ -31,11 +31,13 @@ npm link
 harness --version
 ```
 
-**Add the shell hook** to `~/.bashrc` or `~/.zshrc`:
+After installation, initialize Harness for your current shell:
 
 ```bash
-eval "$(harness shell hook)"
+harness init
 ```
+
+Like `conda init`, this installs a managed block in `~/.bashrc`, `~/.bash_profile`, or `~/.zshrc`. The block sources a static hook from `$HARNESS_HOME/shell`, so ordinary shell startup does not launch Node. It does not create, validate, synchronize, or repair `base`, and it does not acquire Harness locks. Use `harness init --reverse` to remove the integration.
 
 Open a new shell or reload the startup file.
 
@@ -140,6 +142,17 @@ harness doctor --name base
 harness sync --name base
 harness inspect builtin:auto-research
 ```
+
+## Author Packages
+
+Generate an editable Package recipe with a coordinating Skill:
+
+```bash
+harness skeleton workflow research-review --output-dir ./packages --version 0.1.0
+harness inspect ./packages/research-review
+```
+
+The provider-oriented `skeleton` interface follows `conda skeleton` while adding the Harness-specific `workflow` recipe type. Use the foundational `harness-package-builder` Skill for richer Package composition and updates.
 
 ## Documentation
 

@@ -4,6 +4,8 @@
 
 - Added `harness uninstall` with active-or-named Environment selection, dry-run resource plans, shared-dependency retention, orphan pruning, foundational Package protection, and atomic rollback across recipes, locks, stable Agent homes, and views.
 - Added direct Git subdirectory installation with optional full-commit selection and immutable commit/content-integrity provenance preserved through sync, `harness list`, and portable bundles.
+- Reassigned `harness init` to Conda-style shell initialization with a static hook, managed profile block, dry-run, reversal, and post-install guidance; moved its former Package scaffold to the provider-oriented `harness skeleton workflow` interface while retaining `harness-package-builder` for full authoring.
+- Made shell-hook generation read-only and independent of Environment initialization, locks, validation, Package loading, and repair, with bounded shell-side fallback to the original Agent homes.
 - Added opt-in Pi Agent targets with isolated `PI_CODING_AGENT_DIR` homes, atomic Skill views, shell activation, and explicit rejection of unsupported Pi MCP/Hook resources.
 - Changed explicit Skill migration to create and atomically install one independently versioned Package per Skill.
 - Added `harness list` to show an Environment's locked Packages and every Package-managed Skill, MCP server, and hook with providing Package versions and effective target platforms.

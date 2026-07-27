@@ -1,5 +1,6 @@
 import { link, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises";
 import path from "node:path";
+import semver from "semver";
 import { pathExists, writeTextAtomic } from "./fs.js";
 
 function normalizeName(input: string): string {
@@ -7,13 +8,30 @@ function normalizeName(input: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
-  if (!name) throw new Error("Cannot derive a package name; pass --name <name>");
+  if (!name) throw new Error("Cannot derive a Package name");
   return name;
 }
 
-export async function scaffoldHarness(directory: string, requestedName?: string): Promise<{ root: string; name: string }> {
-  const root = path.resolve(directory);
-  const name = normalizeName(requestedName ?? path.basename(root));
+export interface WorkflowSkeletonOptions {
+  outputDirectory?: string;
+  version?: string;
+}
+
+export interface WorkflowSkeletonResult {
+  name: string;
+  root: string;
+  version: string;
+}
+
+export async function createWorkflowSkeleton(
+  requestedName: string,
+  options: WorkflowSkeletonOptions = {},
+): Promise<WorkflowSkeletonResult> {
+  const name = normalizeName(requestedName);
+  const version = options.version ?? "0.1.0";
+  if (semver.valid(version) !== version) throw new Error(`Invalid Package version: ${version}`);
+  const outputDirectory = path.resolve(options.outputDirectory ?? ".");
+  const root = path.join(outputDirectory, name);
   const manifestPath = path.join(root, "harness.yaml");
   const skillPath = path.join(root, "skills", `${name}-workflow`, "SKILL.md");
   const rootExists = await pathExists(root);
@@ -21,11 +39,11 @@ export async function scaffoldHarness(directory: string, requestedName?: string)
     const entries = await readdir(root);
     if (entries.length > 0) throw new Error(`Refusing to overwrite non-empty destination ${root}`);
   }
-  await mkdir(path.dirname(root), { recursive: true });
-  const temporary = await mkdtemp(path.join(path.dirname(root), `.${path.basename(root)}.init-`));
+  await mkdir(outputDirectory, { recursive: true });
+  const temporary = await mkdtemp(path.join(outputDirectory, `.${name}.skeleton-`));
   try {
-    const temporaryManifest = path.join(temporary, path.relative(root, manifestPath));
-    const temporarySkill = path.join(temporary, path.relative(root, skillPath));
+    const temporaryManifest = path.join(temporary, "harness.yaml");
+    const temporarySkill = path.join(temporary, "skills", `${name}-workflow`, "SKILL.md");
     await mkdir(path.dirname(temporarySkill), { recursive: true });
     await writeTextAtomic(
       temporaryManifest,
@@ -33,8 +51,8 @@ export async function scaffoldHarness(directory: string, requestedName?: string)
 kind: Harness
 metadata:
   name: ${name}
-  version: 0.1.0
-  description: Describe the repeatable outcome this harness delivers.
+  version: ${version}
+  description: Describe the repeatable outcome this Harness Package delivers.
   tags: []
 spec:
   platforms: [codex, claude, pi]
@@ -86,5 +104,5 @@ description: Runs the ${name} workflow. Use when the user asks for this domain-s
     await rm(temporary, { recursive: true, force: true });
     throw error;
   }
-  return { root, name };
+  return { root, name, version };
 }
