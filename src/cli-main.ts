@@ -2,6 +2,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { requireAgentMigrationConfirmation } from "./agent-processes.js";
+import { detectAgentClis } from "./agent-cli.js";
 import { captureHarness } from "./capture.js";
 import { exportEnvironmentBundle, importEnvironmentBundle } from "./environment-bundle.js";
 import {
@@ -522,11 +523,18 @@ program
       console.log(JSON.stringify(await environmentInfo(project), null, 2));
       return;
     }
-    const { environment, lock } = await environmentSnapshot(project, activeName);
+    const [{ environment, lock }, agents] = await Promise.all([
+      environmentSnapshot(project, activeName),
+      detectAgentClis(),
+    ]);
     console.log(`Environment: ${activeName}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
     console.log(`  packages  ${Object.keys(lock.packages).join(", ") || "none"}`);
+    console.log("  Agent CLIs");
+    for (const [agent, status] of Object.entries(agents)) {
+      console.log(`    ${agent.padEnd(7)} ${status.available ? status.path : `${status.command} not found on PATH`}`);
+    }
   });
 
 program
