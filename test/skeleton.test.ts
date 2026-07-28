@@ -11,12 +11,12 @@ import { removeTestTree } from "./helpers.js";
 const run = promisify(execFile);
 
 test("workflow skeleton creates an editable Package recipe under the output directory", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-skeleton-workflow-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-skeleton-workflow-"));
   try {
     const result = await createWorkflowSkeleton("Research Review", { outputDirectory: root, version: "1.2.3" });
     assert.equal(result.name, "research-review");
     assert.equal(result.root, path.join(root, "research-review"));
-    const manifest = await readFile(path.join(result.root, "harness.yaml"), "utf8");
+    const manifest = await readFile(path.join(result.root, "woma.yaml"), "utf8");
     assert.match(manifest, /name: research-review/);
     assert.match(manifest, /version: 1\.2\.3/);
     assert.match(manifest, /platforms: \[codex, claude, pi, qoder\]/);
@@ -30,18 +30,18 @@ test("workflow skeleton creates an editable Package recipe under the output dire
 });
 
 test("workflow skeleton publishes into an existing empty destination", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-skeleton-empty-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-skeleton-empty-"));
   try {
     await mkdir(path.join(root, "demo"));
     await createWorkflowSkeleton("demo", { outputDirectory: root });
-    assert.match(await readFile(path.join(root, "demo", "harness.yaml"), "utf8"), /name: demo/);
+    assert.match(await readFile(path.join(root, "demo", "woma.yaml"), "utf8"), /name: demo/);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("workflow skeleton refuses non-empty destinations and invalid versions", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-skeleton-refuse-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-skeleton-refuse-"));
   try {
     const existing = path.join(root, "demo", "keep.txt");
     await mkdir(path.dirname(existing), { recursive: true });
@@ -58,7 +58,7 @@ test("workflow skeleton refuses non-empty destinations and invalid versions", as
 });
 
 test("CLI skeleton follows the provider and output-directory interface", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-skeleton-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-skeleton-"));
   const cli = path.resolve("dist/src/cli.js");
   try {
     const result = await run(
@@ -66,7 +66,7 @@ test("CLI skeleton follows the provider and output-directory interface", async (
       [cli, "skeleton", "workflow", "demo", "--output-dir", root, "--version", "2.0.0"],
     );
     assert.match(result.stdout, /Created workflow skeleton demo@2\.0\.0/);
-    assert.match(await readFile(path.join(root, "demo", "harness.yaml"), "utf8"), /version: 2\.0\.0/);
+    assert.match(await readFile(path.join(root, "demo", "woma.yaml"), "utf8"), /version: 2\.0\.0/);
 
     const inspected = await run(process.execPath, [cli, "inspect", path.join(root, "demo")]);
     assert.match(inspected.stdout, /^demo@2\.0\.0/);

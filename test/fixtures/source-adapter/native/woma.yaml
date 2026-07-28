@@ -1,9 +1,9 @@
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: native-fixture
   version: 1.2.3
-  description: Native Harness Package fixture.
+  description: Native Woma Package fixture.
 spec:
   platforms: [codex]
   skills:

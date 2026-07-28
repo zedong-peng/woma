@@ -26,7 +26,7 @@ async function runCli(args: string[], cwd: string, home: string): Promise<Comman
   const previous = {
     argv: process.argv,
     cwd: process.cwd(),
-    harnessHome: process.env.HARNESS_HOME,
+    womaHome: process.env.WOMA_HOME,
     exitCode: process.exitCode,
     stdoutWrite: process.stdout.write,
     stderrWrite: process.stderr.write,
@@ -35,7 +35,7 @@ async function runCli(args: string[], cwd: string, home: string): Promise<Comman
   let stderr = "";
   process.argv = [process.execPath, cli, ...args];
   process.chdir(cwd);
-  process.env.HARNESS_HOME = home;
+  process.env.WOMA_HOME = home;
   process.exitCode = undefined;
   process.stdout.write = ((chunk: string | Uint8Array) => {
     stdout += chunk.toString();
@@ -51,8 +51,8 @@ async function runCli(args: string[], cwd: string, home: string): Promise<Comman
   } finally {
     process.argv = previous.argv;
     process.chdir(previous.cwd);
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
     process.exitCode = previous.exitCode;
     process.stdout.write = previous.stdoutWrite;
     process.stderr.write = previous.stderrWrite;
@@ -64,7 +64,7 @@ async function runCliProcess(args: string[], cwd: string, home: string, timeoutM
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cli, ...args], {
       cwd,
-      env: { ...process.env, HARNESS_HOME: home },
+      env: { ...process.env, WOMA_HOME: home },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -99,7 +99,7 @@ function helpCommandNames(output: string): string[] {
 }
 
 test("CLI help lists commands alphabetically", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-help-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-help-"));
   try {
     for (const args of [["-h"], ["env", "-h"]]) {
       const result = await runCliProcess(args, root, path.join(root, "home"));
@@ -112,23 +112,29 @@ test("CLI help lists commands alphabetically", { concurrency: false }, async () 
   }
 });
 
+test("package metadata exposes only the woma executable", async () => {
+  const metadata = JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { name: string; bin: Record<string, string> };
+  assert.equal(metadata.name, "woma");
+  assert.deepEqual(metadata.bin, { woma: "dist/src/cli.js" });
+});
+
 test("CLI deactivate does not initialize base or write project state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-deactivate-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-deactivate-"));
   const home = path.join(root, "home");
-  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousEnvironment = process.env.WOMA_ENV;
   try {
-    process.env.HARNESS_ENV = "research";
+    process.env.WOMA_ENV = "research";
     const result = await runCli(["deactivate"], root, home);
 
     assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /Deactivated environment research/);
     await assert.rejects(access(home));
-    await assert.rejects(access(path.join(root, ".harness")));
+    await assert.rejects(access(path.join(root, ".woma")));
     await assert.rejects(access(path.join(root, "AGENTS.md")));
     await assert.rejects(access(path.join(root, "CLAUDE.md")));
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
@@ -145,9 +151,9 @@ async function packageFixture(
         .map((dependency) => `    - name: ${dependency.name}\n      version: ^1.0.0\n      source: ${dependency.source}`)
         .join("\n")}\n`;
   await write(
-    path.join(packageRoot, "harness.yaml"),
-    `apiVersion: harness.conda/v1
-kind: Harness
+    path.join(packageRoot, "woma.yaml"),
+    `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: ${name}
   version: 1.0.0
@@ -166,9 +172,9 @@ ${dependencyYaml}  skills:
 async function resourcePackageFixture(root: string, name: string): Promise<string> {
   const packageRoot = path.join(root, name);
   await write(
-    path.join(packageRoot, "harness.yaml"),
-    `apiVersion: harness.conda/v1
-kind: Harness
+    path.join(packageRoot, "woma.yaml"),
+    `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: ${name}
   version: 1.0.0
@@ -201,24 +207,24 @@ spec:
 }
 
 test("CLI reports existing Agent state once without contaminating stdout", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-existing-state-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-existing-state-"));
   const home = path.join(root, "home");
   const codex = path.join(root, "codex-private-name");
   const previous = {
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     await mkdir(path.join(codex, "skills"), { recursive: true });
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+    process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
 
     const first = await runCli(["info", "--json"], root, home);
     assert.equal(first.code, 0, first.stderr);
     assert.equal((JSON.parse(first.stdout) as { environment: { name: string } }).environment.name, "base");
-    assert.match(first.stderr, /Harness created an isolated base Environment/);
-    assert.match(first.stderr, /harness migrate skills --dry-run/);
-    assert.match(first.stderr, /harness migrate sessions --dry-run/);
+    assert.match(first.stderr, /Woma created an isolated base Environment/);
+    assert.match(first.stderr, /woma migrate skills --dry-run/);
+    assert.match(first.stderr, /woma migrate sessions --dry-run/);
     assert.doesNotMatch(first.stderr, /codex-private-name/);
 
     const second = await runCli(["list"], root, home);
@@ -226,16 +232,16 @@ test("CLI reports existing Agent state once without contaminating stdout", { con
     assert.match(second.stdout, /Environment: base/);
     assert.equal(second.stderr, "");
   } finally {
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
-test("CLI rejects the removed shell command without creating Harness state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-removed-shell-"));
+test("CLI rejects the removed shell command without creating Woma state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-removed-shell-"));
   const home = path.join(root, "home");
   try {
     const result = await runCliProcess(["shell", "hook", "bash"], root, home);
@@ -252,11 +258,11 @@ test("built CLI entrypoint is executable", async () => {
 });
 
 test("CLI exports and creates from a portable Environment bundle", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-bundle-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-bundle-"));
   const project = path.join(root, "project");
   const homeA = path.join(root, "home-a");
   const homeB = path.join(root, "home-b");
-  const bundle = path.join(root, "portable.harness-env");
+  const bundle = path.join(root, "portable.woma-env");
   try {
     const pkg = await packageFixture(root, "portable-skill");
     assert.equal((await runCli(["--project", project, "create", "--name", "portable", "--target", "codex"], root, homeA)).code, 0);
@@ -284,11 +290,11 @@ test("CLI exports and creates from a portable Environment bundle", { concurrency
 });
 
 test("CLI lists all Package-managed resources in a selected Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-list-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-list-"));
   const home = path.join(root, "home");
-  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousEnvironment = process.env.WOMA_ENV;
   try {
-    delete process.env.HARNESS_ENV;
+    delete process.env.WOMA_ENV;
     const pkg = await resourcePackageFixture(root, "listed-resources");
     assert.equal((await runCli(["env", "create", "listed", "--target", "both"], root, home)).code, 0);
     assert.equal((await runCli(["install", "-n", "listed", pkg], root, home)).code, 0);
@@ -317,17 +323,18 @@ test("CLI lists all Package-managed resources in a selected Environment", { conc
     assert.match(current.stdout, /mcp servers\n    none/);
     assert.match(current.stdout, /hooks\n    none/);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
 
 test("CLI exposes environment commands and removes workflow phase commands", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-help-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-help-"));
   try {
     const result = await runCliProcess(["--help"], root, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /^Usage: woma(?: |$)/m);
     for (const command of ["activate", "create", "deactivate", "doctor", "env", "export", "info", "install", "list", "migrate", "remove", "rename", "run"]) {
       assert.match(result.stdout, new RegExp(`\\b${command}\\b`));
     }
@@ -348,7 +355,7 @@ test("CLI exposes environment commands and removes workflow phase commands", { c
 });
 
 test("CLI creates Pi and all-target Environments", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-pi-target-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-pi-target-"));
   const home = path.join(root, "home");
   try {
     const piOnly = await runCli(["env", "create", "pi-only", "--target", "pi"], root, home);
@@ -366,18 +373,18 @@ test("CLI creates Pi and all-target Environments", { concurrency: false }, async
     assert.match(all.stdout, /targets codex, claude, pi, qoder/);
     assert.match(await readFile(path.join(home, "environments", "all-agents", "view", "view.json"), "utf8"), /"qoder"/);
 
-    const bundle = path.join(root, "all-agents.harness-env");
+    const bundle = path.join(root, "all-agents.woma-env");
     assert.equal((await runCli(["env", "export", "--name", "all-agents", "--output", bundle], root, home)).code, 0);
     const imported = await runCli(["create", "--file", bundle, "--name", "all-agents-copy"], root, home);
     assert.equal(imported.code, 0, imported.stderr);
-    assert.match(await readFile(path.join(home, "environments", "all-agents-copy", "view", "pi", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Harness Project Memory/);
+    assert.match(await readFile(path.join(home, "environments", "all-agents-copy", "view", "pi", "skills", "woma-project-memory", "SKILL.md"), "utf8"), /Woma Project Memory/);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("CLI info reports Agent executables found on PATH", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-agent-info-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-agent-info-"));
   const home = path.join(root, "home");
   const bin = path.join(root, "bin");
   const previousPath = process.env.PATH;
@@ -413,13 +420,13 @@ test("CLI info reports Agent executables found on PATH", { concurrency: false },
 });
 
 test("CLI runs a command in a selected Environment and preserves its exit code", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-run-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-run-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   try {
     const created = await runCli(["--project", project, "create", "-n", "runner", "--target", "codex"], root, home);
     assert.equal(created.code, 0, created.stderr);
-    const script = "process.stdout.write(JSON.stringify({ environment: process.env.HARNESS_ENV, codex: process.env.CODEX_HOME })); process.exit(7)";
+    const script = "process.stdout.write(JSON.stringify({ environment: process.env.WOMA_ENV, codex: process.env.CODEX_HOME })); process.exit(7)";
     const result = await runCliProcess(
       ["--project", project, "run", "--name", "runner", process.execPath, "-e", script],
       root,
@@ -436,12 +443,12 @@ test("CLI runs a command in a selected Environment and preserves its exit code",
 });
 
 test("CLI renames an inactive Environment without losing Agent-owned state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-rename-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-rename-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
-  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousEnvironment = process.env.WOMA_ENV;
   try {
-    delete process.env.HARNESS_ENV;
+    delete process.env.WOMA_ENV;
     assert.equal((await runCli(["--project", project, "create", "-n", "before", "--target", "codex"], root, home)).code, 0);
     const opaque = path.join(home, "environments", "before", "home", "codex", "session.sqlite");
     await write(opaque, "state\n");
@@ -462,14 +469,14 @@ test("CLI renames an inactive Environment without losing Agent-owned state", { c
     assert.equal(doctor.code, 0, doctor.stderr || doctor.stdout);
     assert.match(doctor.stdout, /\[ok\] view:/);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
 
 test("CLI provides base from an explicit project when invoked in a subdirectory", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-base-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-base-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   const nested = path.join(project, "src", "nested");
@@ -483,7 +490,7 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
-    assert.deepEqual(Object.keys(baseLock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(Object.keys(baseLock.packages), ["woma-project-memory", "woma-package-builder"]);
 
     const install = await runCli(["install", pkg], project, home);
     assert.equal(install.code, 0, install.stderr);
@@ -491,8 +498,8 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     const activate = await runCli(["--project", project, "activate"], nested, home);
     assert.equal(activate.code, 0, activate.stderr);
     assert.match(activate.stdout, /Activated environment base/);
-    assert.match(await readFile(path.join(home, "environments", "base", "view", "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Persist stable knowledge automatically/);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
+    assert.match(await readFile(path.join(home, "environments", "base", "view", "codex", "skills", "woma-project-memory", "SKILL.md"), "utf8"), /Persist stable knowledge automatically/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
 
     const current = await runCli(["--project", project, "info", "--json"], nested, home);
     assert.equal(current.code, 0, current.stderr);
@@ -506,9 +513,9 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     };
     assert.equal(context.projectRoot, project);
     assert.equal(context.environment.name, "base");
-    assert.deepEqual(context.packages.map((pkg) => pkg.name), ["harness-project-memory", "harness-package-builder", "base-skill"]);
-    assert.deepEqual(context.packages[0]?.skills, ["harness-project-memory"]);
-    assert.match(context.packages.find((pkg) => pkg.name === "base-skill")?.memory ?? "", /\.harness\/memory\/packages\/base-skill\.md$/);
+    assert.deepEqual(context.packages.map((pkg) => pkg.name), ["woma-project-memory", "woma-package-builder", "base-skill"]);
+    assert.deepEqual(context.packages[0]?.skills, ["woma-project-memory"]);
+    assert.match(context.packages.find((pkg) => pkg.name === "base-skill")?.memory ?? "", /\.woma\/memory\/packages\/base-skill\.md$/);
 
     assert.equal((await runCli(["--project", project, "env", "create", "research", "--target", "codex"], nested, home)).code, 0);
     assert.equal((await runCli(["--project", project, "activate", "research"], nested, home)).code, 0);
@@ -525,10 +532,10 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
 });
 
 test("CLI uses the exact working directory instead of a parent Project Memory", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-project-boundary-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-project-boundary-"));
   const workspace = path.join(root, "workspace");
   const project = path.join(workspace, "project");
-  const parentMemory = path.join(workspace, ".harness", "memory", "project.md");
+  const parentMemory = path.join(workspace, ".woma", "memory", "project.md");
   try {
     await mkdir(project, { recursive: true });
     await write(parentMemory, "# Parent Memory\n");
@@ -536,8 +543,8 @@ test("CLI uses the exact working directory instead of a parent Project Memory", 
     const activated = await runCli(["activate"], project, path.join(root, "home"));
 
     assert.equal(activated.code, 0, activated.stderr);
-    assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
-    await assert.rejects(access(path.join(project, ".harness", "state.json")));
+    assert.match(await readFile(path.join(project, ".woma", "memory", "project.md"), "utf8"), /Project Memory/);
+    await assert.rejects(access(path.join(project, ".woma", "state.json")));
     assert.equal(await readFile(parentMemory, "utf8"), "# Parent Memory\n");
   } finally {
     await removeTestTree(root);
@@ -545,7 +552,7 @@ test("CLI uses the exact working directory instead of a parent Project Memory", 
 });
 
 test("CLI always includes foundational packages and rejects the removed without-memory option", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-foundations-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-foundations-"));
   const project = path.join(root, "project");
   try {
     const removedOption = await runCliProcess(
@@ -561,21 +568,21 @@ test("CLI always includes foundational packages and rejects the removed without-
       path.join(root, "home"),
     );
     assert.equal(create.code, 0, create.stderr);
-    assert.match(create.stdout, /foundational harness-project-memory@0\.1\.0, harness-package-builder@1\.0\.0/);
+    assert.match(create.stdout, /foundational woma-project-memory@0\.1\.0, woma-package-builder@1\.0\.0/);
     const activate = await runCli(["--project", project, "activate", "minimal"], root, path.join(root, "home"));
     assert.equal(activate.code, 0, activate.stderr);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
     const current = JSON.parse((await runCli(["--project", project, "info", "--json"], root, path.join(root, "home"))).stdout) as {
       packages: { name: string }[];
     };
-    assert.deepEqual(current.packages.map((pkg) => pkg.name), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(current.packages.map((pkg) => pkg.name), ["woma-project-memory", "woma-package-builder"]);
     assert.match(
-      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
+      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "woma-project-memory", "SKILL.md"), "utf8"),
       /Persist stable knowledge automatically/,
     );
     assert.match(
-      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "harness-package-builder", "SKILL.md"), "utf8"),
-      /Create one ordinary Harness Package/,
+      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "woma-package-builder", "SKILL.md"), "utf8"),
+      /Create one ordinary Woma Package/,
     );
   } finally {
     await removeTestTree(root);
@@ -583,10 +590,10 @@ test("CLI always includes foundational packages and rejects the removed without-
 });
 
 test("CLI installs and activates a complete Package dependency closure", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-environment-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-environment-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
-  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousEnvironment = process.env.WOMA_ENV;
   try {
     await packageFixture(root, "paper-search");
     const methodPackage = await packageFixture(root, "auto-research", [{ name: "paper-search", source: "../paper-search" }]);
@@ -601,22 +608,22 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     };
     const activate = await runCli(["--project", project, "activate", "research"], root, home);
     assert.equal(activate.code, 0, activate.stderr);
-    assert.match(activate.stdout, /packages\s+harness-project-memory, harness-package-builder, paper-search, auto-research/);
+    assert.match(activate.stdout, /packages\s+woma-project-memory, woma-package-builder, paper-search, auto-research/);
     assert.doesNotMatch(await readFile(path.join(project, ".gitignore"), "utf8"), /state\.json/);
-    assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.harness\/local\//);
-    assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
-    await access(path.join(project, ".harness", "memory", "packages"));
+    assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.woma\/local\//);
+    assert.match(await readFile(path.join(project, ".woma", "memory", "project.md"), "utf8"), /Project Memory/);
+    await access(path.join(project, ".woma", "memory", "packages"));
     const researchSkills = path.join(home, "environments", "research", "view", "codex", "skills");
-    assert.match(await readFile(path.join(researchSkills, "harness-project-memory", "SKILL.md"), "utf8"), /harness info --json/);
+    assert.match(await readFile(path.join(researchSkills, "woma-project-memory", "SKILL.md"), "utf8"), /woma info --json/);
     assert.match(await readFile(path.join(researchSkills, "paper-search", "SKILL.md"), "utf8"), /paper-search/);
     assert.match(await readFile(path.join(researchSkills, "auto-research", "SKILL.md"), "utf8"), /auto-research/);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
-    process.env.HARNESS_ENV = "research";
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
+    process.env.WOMA_ENV = "research";
 
     const current = await runCli(["--project", project, "info"], root, home);
     assert.equal(current.code, 0, current.stderr);
     assert.match(current.stdout, /Environment: research/);
-    assert.match(current.stdout, /roots\s+harness-project-memory, harness-package-builder, auto-research/);
+    assert.match(current.stdout, /roots\s+woma-project-memory, woma-package-builder, auto-research/);
     const environmentList = await runCli(["--project", project, "env", "list"], root, home);
     assert.equal(environmentList.code, 0, environmentList.stderr);
     assert.match(environmentList.stdout, /\* research/);
@@ -624,8 +631,8 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     assert.equal(list.code, 0, list.stderr);
     assert.match(list.stdout, /paper-search@1\.0\.0/);
     assert.match(list.stdout, /skills\n/);
-    assert.match(list.stdout, /harness-project-memory\s+harness-project-memory@0\.1\.0\s+codex/);
-    assert.match(list.stdout, /harness-package-builder\s+harness-package-builder@1\.0\.0\s+codex/);
+    assert.match(list.stdout, /woma-project-memory\s+woma-project-memory@0\.1\.0\s+codex/);
+    assert.match(list.stdout, /woma-package-builder\s+woma-package-builder@1\.0\.0\s+codex/);
     assert.match(list.stdout, /paper-search\s+paper-search@1\.0\.0\s+codex/);
     assert.match(list.stdout, /auto-research\s+auto-research@1\.0\.0\s+codex/);
     const activeList = await runCli(["--project", project, "list"], root, home);
@@ -660,30 +667,30 @@ test("CLI installs and activates a complete Package dependency closure", { concu
 
     const deactivate = await runCli(["--project", project, "deactivate"], root, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
-    process.env.HARNESS_ENV = "base";
+    process.env.WOMA_ENV = "base";
     const baseSkills = path.join(home, "environments", "base", "view", "codex", "skills");
     await assert.rejects(readFile(path.join(baseSkills, "paper-search", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(baseSkills, "auto-research", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(baseSkills, "idea-gen", "SKILL.md")), /ENOENT/);
-    assert.match(await readFile(path.join(baseSkills, "harness-project-memory", "SKILL.md"), "utf8"), /Project Memory/);
-    assert.match(await readFile(path.join(baseSkills, "harness-package-builder", "SKILL.md"), "utf8"), /Create one ordinary Harness Package/);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
-    assert.match(await readFile(path.join(project, ".harness", "memory", "project.md"), "utf8"), /Project Memory/);
+    assert.match(await readFile(path.join(baseSkills, "woma-project-memory", "SKILL.md"), "utf8"), /Project Memory/);
+    assert.match(await readFile(path.join(baseSkills, "woma-package-builder", "SKILL.md"), "utf8"), /Create one ordinary Woma Package/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
+    assert.match(await readFile(path.join(project, ".woma", "memory", "project.md"), "utf8"), /Project Memory/);
     const removeEnvironment = await runCli(["--project", project, "env", "remove", "research"], root, home);
     assert.equal(removeEnvironment.code, 0, removeEnvironment.stderr);
     await assert.rejects(readFile(path.join(home, "environments", "research", "environment.yaml")), /ENOENT/);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
 
 test("CLI atomically switches environments", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-switch-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-switch-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
-  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousEnvironment = process.env.WOMA_ENV;
   try {
     const first = await packageFixture(root, "first-skill");
     const second = await packageFixture(root, "second-skill");
@@ -694,28 +701,28 @@ test("CLI atomically switches environments", { concurrency: false }, async () =>
     assert.equal((await runCli(["--project", project, "install", "-n", "first", first], root, home)).code, 0);
     assert.equal((await runCli(["--project", project, "install", "-n", "second", second], root, home)).code, 0);
     assert.equal((await runCli(["--project", project, "activate", "first"], root, home)).code, 0);
-    process.env.HARNESS_ENV = "first";
+    process.env.WOMA_ENV = "first";
 
     const installActive = await runCli(["--project", project, "install", second], root, home);
     assert.equal(installActive.code, 0, installActive.stderr);
     assert.match(await readFile(path.join(home, "environments", "first", "view", "codex", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
     const switched = await runCli(["--project", project, "activate", "second"], root, home);
     assert.equal(switched.code, 0, switched.stderr);
-    process.env.HARNESS_ENV = "second";
+    process.env.WOMA_ENV = "second";
     assert.match(await readFile(path.join(home, "environments", "first", "view", "codex", "skills", "first-skill", "SKILL.md"), "utf8"), /first-skill/);
     assert.match(await readFile(path.join(home, "environments", "second", "view", "codex", "skills", "second-skill", "SKILL.md"), "utf8"), /second-skill/);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
 
 test("CLI uninstalls from active and explicitly named inactive Environments with a dry-run preview", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-uninstall-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-uninstall-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
-  const previousEnvironment = process.env.HARNESS_ENV;
+  const previousEnvironment = process.env.WOMA_ENV;
   try {
     const removable = await packageFixture(root, "removable-package");
     for (const name of ["active-tools", "inactive-tools"]) {
@@ -752,7 +759,7 @@ test("CLI uninstalls from active and explicitly named inactive Environments with
       /ENOENT/,
     );
 
-    process.env.HARNESS_ENV = "active-tools";
+    process.env.WOMA_ENV = "active-tools";
     const active = await runCli(["--project", project, "uninstall", "removable-package"], root, home);
     assert.equal(active.code, 0, active.stderr);
     assert.match(active.stdout, /Removed removable-package from active-tools/);
@@ -769,10 +776,10 @@ test("CLI uninstalls from active and explicitly named inactive Environments with
     const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
-    assert.deepEqual(Object.keys(baseLock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(Object.keys(baseLock.packages), ["woma-project-memory", "woma-package-builder"]);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });

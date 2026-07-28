@@ -22,7 +22,7 @@ async function isolatedProcessPath(root: string): Promise<string> {
 }
 
 test("CLI explicitly migrates existing Skills into the active Environment", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-migrate-skills-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-migrate-skills-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   const codex = path.join(root, "codex");
@@ -39,10 +39,10 @@ test("CLI explicitly migrates existing Skills into the active Environment", asyn
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       PATH: await isolatedProcessPath(root),
-      HARNESS_HOME: home,
-      HARNESS_ENV: "tools",
-      HARNESS_ORIGINAL_CODEX_HOME: codex,
-      HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "claude"),
+      WOMA_HOME: home,
+      WOMA_ENV: "tools",
+      WOMA_ORIGINAL_CODEX_HOME: codex,
+      WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "claude"),
     };
     delete env.NODE_TEST_CONTEXT;
 
@@ -65,8 +65,8 @@ test("CLI explicitly migrates existing Skills into the active Environment", asyn
       packages: Record<string, unknown>;
     };
     assert.deepEqual(Object.keys(lock.packages), [
-      "harness-project-memory",
-      "harness-package-builder",
+      "woma-project-memory",
+      "woma-package-builder",
       "legacy-review",
       "quick-notes",
     ]);
@@ -89,7 +89,7 @@ test("CLI explicitly migrates existing Skills into the active Environment", asyn
 });
 
 test("CLI explicitly migrates existing sessions into the active Environment", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-migrate-sessions-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-migrate-sessions-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   const codex = path.join(root, "codex");
@@ -99,10 +99,10 @@ test("CLI explicitly migrates existing sessions into the active Environment", as
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       PATH: await isolatedProcessPath(root),
-      HARNESS_HOME: home,
-      HARNESS_ENV: "tools",
-      HARNESS_ORIGINAL_CODEX_HOME: codex,
-      HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "claude"),
+      WOMA_HOME: home,
+      WOMA_ENV: "tools",
+      WOMA_ORIGINAL_CODEX_HOME: codex,
+      WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "claude"),
     };
     delete env.NODE_TEST_CONTEXT;
 
@@ -130,7 +130,7 @@ test("CLI explicitly migrates existing sessions into the active Environment", as
 });
 
 test("CLI immediately lists a Claude-installed Skill shared with Codex in the Environment", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-environment-skill-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-environment-skill-"));
   const home = path.join(root, "home");
   const project = path.join(root, "project");
   try {
@@ -138,10 +138,10 @@ test("CLI immediately lists a Claude-installed Skill shared with Codex in the En
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       PATH: await isolatedProcessPath(root),
-      HARNESS_HOME: home,
-      HARNESS_ENV: "tools",
-      HARNESS_ORIGINAL_CODEX_HOME: path.join(root, "codex"),
-      HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "claude"),
+      WOMA_HOME: home,
+      WOMA_ENV: "tools",
+      WOMA_ORIGINAL_CODEX_HOME: path.join(root, "codex"),
+      WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "claude"),
     };
     delete env.NODE_TEST_CONTEXT;
 
@@ -180,14 +180,14 @@ test("CLI immediately lists a Claude-installed Skill shared with Codex in the En
 
     const doctor = await run(process.execPath, [cli, "--project", project, "doctor", "--name", "tools"], {
       cwd: root,
-      env: { ...env, HARNESS_ENV: "base" },
+      env: { ...env, WOMA_ENV: "base" },
     });
     assert.match(doctor.stdout, /\[ok\] environment-skill:installed-in-window: external at/);
 
     const lock = JSON.parse(await readFile(path.join(home, "environments", "tools", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
-    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(Object.keys(lock.packages), ["woma-project-memory", "woma-package-builder"]);
     assert.equal((await lstat(path.join(skills, "installed-in-window"))).isDirectory(), true);
     assert.equal(await readFile(path.join(skills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime\n");
   } finally {

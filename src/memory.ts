@@ -9,7 +9,7 @@ const packageName = z
   .max(80)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
 
-export const PROJECT_MEMORY_PACKAGE = "harness-project-memory";
+export const PROJECT_MEMORY_PACKAGE = "woma-project-memory";
 
 const projectMemoryTemplate = `# Project Memory
 
@@ -19,7 +19,7 @@ Keep this file human-readable and reviewable. Verify instructions against the re
 `;
 
 export function projectMemoryRoot(projectRoot: string): string {
-  return path.join(projectRoot, ".harness", "memory");
+  return path.join(projectRoot, ".woma", "memory");
 }
 
 export function projectMemoryPath(projectRoot: string): string {
@@ -36,7 +36,7 @@ export function packageMemoryPath(projectRoot: string, name: string): string {
 }
 
 export function localMemoryPath(projectRoot: string): string {
-  return path.join(projectRoot, ".harness", "local", "memory.md");
+  return path.join(projectRoot, ".woma", "local", "memory.md");
 }
 
 export async function initializeProjectMemory(projectRoot: string): Promise<void> {
@@ -48,12 +48,12 @@ export interface PreparedProjectMemoryInitialization {
 }
 
 export async function prepareProjectMemoryInitialization(projectRoot: string): Promise<PreparedProjectMemoryInitialization> {
-  const harnessRoot = path.join(projectRoot, ".harness");
+  const womaRoot = path.join(projectRoot, ".woma");
   const memoryRoot = projectMemoryRoot(projectRoot);
   const packagesRoot = packageMemoryRoot(projectRoot);
   const shared = projectMemoryPath(projectRoot);
   const existed = {
-    harness: await pathExists(harnessRoot),
+    woma: await pathExists(womaRoot),
     memory: await pathExists(memoryRoot),
     packages: await pathExists(packagesRoot),
     shared: await pathExists(shared),
@@ -66,7 +66,7 @@ export async function prepareProjectMemoryInitialization(projectRoot: string): P
         for (const [directory, wasPresent] of [
           [packagesRoot, existed.packages],
           [memoryRoot, existed.memory],
-          [harnessRoot, existed.harness],
+          [womaRoot, existed.woma],
         ] as const) {
           if (!wasPresent) {
             await rmdir(directory).catch((error: NodeJS.ErrnoException) => {

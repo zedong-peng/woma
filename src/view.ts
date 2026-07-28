@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
-import { harnessHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
-import type { CodexClaudePlatform, ConfigurablePlatform, HarnessEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
+import { womaHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
+import type { CodexClaudePlatform, ConfigurablePlatform, WomaEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
 const MANAGED_HOME_LINKS: Record<Platform, string[]> = {
   codex: ["auth.json", "config.toml", "hooks.json"],
@@ -145,7 +145,7 @@ function tomlInlineTable(values: Record<string, string>): string {
 
 function codexBlock(packageName: string, server: McpServer): string {
   const marker = `${packageName}:mcp:${server.name}`;
-  const lines = [`# >>> harness-conda:${marker}`, `[mcp_servers.${tomlString(server.name)}]`];
+  const lines = [`# >>> woma:${marker}`, `[mcp_servers.${tomlString(server.name)}]`];
   if (server.transport === "stdio") {
     lines.push(`command = ${tomlString(server.command)}`);
     if (server.args.length > 0) lines.push(`args = ${tomlArray(server.args)}`);
@@ -154,28 +154,28 @@ function codexBlock(packageName: string, server: McpServer): string {
     lines.push(`url = ${tomlString(server.url)}`);
     if (Object.keys(server.headers).length > 0) lines.push(`env_http_headers = ${tomlInlineTable(server.headers)}`);
   }
-  lines.push(`# <<< harness-conda:${marker}`);
+  lines.push(`# <<< woma:${marker}`);
   return lines.join("\n");
 }
 
-function withoutHarnessCodexBlocks(content: string, filePath: string): string {
+function withoutWomaCodexBlocks(content: string, filePath: string): string {
   const lines = content.split(/\r?\n/);
   const kept: string[] = [];
   for (let index = 0; index < lines.length; index += 1) {
-    const match = /^# >>> harness-conda:(.+:mcp:.+)$/.exec(lines[index]!);
+    const match = /^# >>> woma:(.+:mcp:.+)$/.exec(lines[index]!);
     if (!match) {
       kept.push(lines[index]!);
       continue;
     }
-    const end = `# <<< harness-conda:${match[1]}`;
+    const end = `# <<< woma:${match[1]}`;
     while (index < lines.length && lines[index] !== end) index += 1;
-    if (index === lines.length) throw new Error(`Cannot merge ${filePath}: unterminated Harness-managed Codex block`);
+    if (index === lines.length) throw new Error(`Cannot merge ${filePath}: unterminated Woma-managed Codex block`);
   }
   return kept.join("\n").trimEnd();
 }
 
 function renderCodexConfig(input: string | null, filePath: string, packages: InstalledPackage[]): string {
-  const baseline = withoutHarnessCodexBlocks(input ?? "", filePath);
+  const baseline = withoutWomaCodexBlocks(input ?? "", filePath);
   let parsed: Record<string, unknown> = {};
   try {
     parsed = (baseline ? parseToml(baseline) : {}) as Record<string, unknown>;
@@ -202,26 +202,26 @@ function renderCodexConfig(input: string | null, filePath: string, packages: Ins
 
 function defaultAgentHome(platform: Platform): string {
   if (platform === "codex") {
-    return path.resolve(process.env.HARNESS_ORIGINAL_CODEX_HOME ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
+    return path.resolve(process.env.WOMA_ORIGINAL_CODEX_HOME ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
   }
   if (platform === "claude") {
     return path.resolve(
-      process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"),
+      process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"),
     );
   }
   if (platform === "qoder") {
     return path.resolve(
-      process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR ?? process.env.QODER_CONFIG_DIR ?? path.join(os.homedir(), ".qoder"),
+      process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR ?? process.env.QODER_CONFIG_DIR ?? path.join(os.homedir(), ".qoder"),
     );
   }
   return path.resolve(
-    process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"),
+    process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"),
   );
 }
 
 export function sourceAgentHome(platform: Platform): string {
   const candidate = defaultAgentHome(platform);
-  const environmentRoot = path.join(harnessHome(), "environments");
+  const environmentRoot = path.join(womaHome(), "environments");
   const relative = path.relative(environmentRoot, candidate);
   if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
     if (platform === "codex") return path.join(os.homedir(), ".codex");
@@ -234,12 +234,12 @@ export function sourceAgentHome(platform: Platform): string {
 
 export function environmentAgentHomePath(environmentName: string, platform: Platform): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(environmentName)) throw new Error(`Invalid Environment name: ${environmentName}`);
-  return path.join(harnessHome(), "environments", environmentName, "home", platform);
+  return path.join(womaHome(), "environments", environmentName, "home", platform);
 }
 
 export function environmentSkillsPath(environmentName: string): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(environmentName)) throw new Error(`Invalid Environment name: ${environmentName}`);
-  return path.join(harnessHome(), "environments", environmentName, "home", "skills");
+  return path.join(womaHome(), "environments", environmentName, "home", "skills");
 }
 
 function originalClaudeStatePath(sourceHome: string): string {
@@ -453,7 +453,7 @@ async function buildQoderView(
 
 export function environmentViewPath(name: string): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error(`Invalid Environment name: ${name}`);
-  return path.join(harnessHome(), "environments", name, "view");
+  return path.join(womaHome(), "environments", name, "view");
 }
 
 interface ViewMetadata {
@@ -649,7 +649,7 @@ interface DuplicateSkillEntry {
 }
 
 async function prepareSharedSkillsTransition(
-  environment: HarnessEnvironment,
+  environment: WomaEnvironment,
   packages: InstalledPackage[],
   previousMetadata: ViewMetadata,
   previousPackages: InstalledPackage[],
@@ -708,7 +708,7 @@ async function prepareSharedSkillsTransition(
       });
       if (!existing) createNames.push(name);
       else if (!(await managedLinkMatches(link, path.join(viewSkillsRoot, name)))) {
-        throw new Error(`Refusing to replace an Environment-owned Skill with a Harness Skill: ${link}`);
+        throw new Error(`Refusing to replace an Environment-owned Skill with a Woma Skill: ${link}`);
       }
     }
     for (const name of previousNames) {
@@ -720,7 +720,7 @@ async function prepareSharedSkillsTransition(
       });
       if (!existing) continue;
       if (!(await managedLinkMatches(link, path.join(viewSkillsRoot, name)))) {
-        throw new Error(`Refusing to remove a modified Harness-managed Skill path: ${link}`);
+        throw new Error(`Refusing to remove a modified Woma-managed Skill path: ${link}`);
       }
       removeNames.push(name);
     }
@@ -768,11 +768,11 @@ async function prepareSharedSkillsTransition(
           const actualSource = expectedSource ? await realpath(entry).catch(() => undefined) : undefined;
           const expectedRealSource = expectedSource ? await realpath(expectedSource).catch(() => undefined) : undefined;
           if (!entryInfo?.isSymbolicLink() || (expectedSource && (!actualSource || actualSource !== expectedRealSource))) {
-            throw new Error(`Harness-managed ${platform} Skill path is modified: ${entry}`);
+            throw new Error(`Woma-managed ${platform} Skill path is modified: ${entry}`);
           }
           continue;
         }
-        if (desiredNames.has(name)) throw new Error(`Refusing to replace an Agent-installed Skill with a Harness Skill: ${entry}`);
+        if (desiredNames.has(name)) throw new Error(`Refusing to replace an Agent-installed Skill with a Woma Skill: ${entry}`);
         if (await registerExternalEntry(name, entry, root)) plan.externalEntries.push({ name, source: entry });
       }
       roots.push(plan);
@@ -790,12 +790,12 @@ async function prepareSharedSkillsTransition(
       const entry = path.join(root, name);
       if (previousNames.has(name)) {
         if (!(await managedLinkMatches(entry, path.join(legacyViewRoot, name)))) {
-          throw new Error(`Harness-managed ${platform} Skill path is modified: ${entry}`);
+          throw new Error(`Woma-managed ${platform} Skill path is modified: ${entry}`);
         }
         plan.managedLinks.push({ name, target: await readlink(entry) });
         continue;
       }
-      if (desiredNames.has(name)) throw new Error(`Refusing to replace an Agent-installed Skill with a Harness Skill: ${entry}`);
+      if (desiredNames.has(name)) throw new Error(`Refusing to replace an Agent-installed Skill with a Woma Skill: ${entry}`);
       if (await registerExternalEntry(name, entry, root)) plan.externalEntries.push({ name, source: entry });
     }
     roots.push(plan);
@@ -971,7 +971,7 @@ async function prepareSharedSkillsTransition(
 }
 
 async function prepareStableHomeTransition(
-  environment: HarnessEnvironment,
+  environment: WomaEnvironment,
   packages: InstalledPackage[],
   previousMetadata: ViewMetadata,
   previousPackages: InstalledPackage[],
@@ -1156,7 +1156,7 @@ async function publishViewGeneration(generation: string, destination: string, ho
 }
 
 export async function materializeEnvironmentView(
-  environment: HarnessEnvironment,
+  environment: WomaEnvironment,
   packages: InstalledPackage[],
   hooks: ViewInstallHooks = {},
 ): Promise<void> {
@@ -1247,7 +1247,7 @@ export async function materializeEnvironmentView(
   await finalizeHome?.().catch(() => undefined);
 }
 
-export async function validateEnvironmentView(environment: HarnessEnvironment, packages: InstalledPackage[]): Promise<void> {
+export async function validateEnvironmentView(environment: WomaEnvironment, packages: InstalledPackage[]): Promise<void> {
   const root = environmentViewPath(environment.metadata.name);
   const metadataPath = path.join(root, "view.json");
   const metadata = parseJsonObject(await readOptional(metadataPath), metadataPath);
@@ -1305,7 +1305,7 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
     for (const name of Object.keys(expectedSkills)) {
       const link = path.join(sharedSkillsRoot, name);
       if (!(await managedLinkMatches(link, path.join(sharedViewSkillsRoot, name)))) {
-        throw new Error(`Harness-managed shared Skill link is missing or invalid: ${link}`);
+        throw new Error(`Woma-managed shared Skill link is missing or invalid: ${link}`);
       }
     }
   }
@@ -1350,7 +1350,7 @@ export async function validateEnvironmentView(environment: HarnessEnvironment, p
       for (const name of Object.keys(expectedSkills)) {
         const homeLink = path.join(homeSkills, name);
         if (!(await managedLinkMatches(homeLink, path.join(skillsRoot, name)))) {
-          throw new Error(`Harness-managed Codex Skill link is missing or invalid: ${homeLink}`);
+          throw new Error(`Woma-managed Codex Skill link is missing or invalid: ${homeLink}`);
         }
       }
     }

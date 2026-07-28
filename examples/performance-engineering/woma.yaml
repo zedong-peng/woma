@@ -1,5 +1,5 @@
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: performance-engineering
   version: 0.2.0

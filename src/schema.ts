@@ -3,7 +3,7 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { valid, validRange } from "semver";
-import type { HarnessManifest } from "./types.js";
+import type { WomaManifest } from "./types.js";
 
 const packageName = z
   .string()
@@ -38,8 +38,8 @@ const remoteMcp = z
 
 const manifestSchema = z
   .object({
-    apiVersion: z.literal("harness.conda/v1"),
-    kind: z.literal("Harness"),
+    apiVersion: z.literal("woma.dev/v1"),
+    kind: z.literal("Woma"),
     metadata: z
       .object({
         name: packageName,
@@ -123,7 +123,7 @@ function formatIssues(error: z.ZodError): string {
   return error.issues.map((issue) => `${issue.path.join(".") || "manifest"}: ${issue.message}`).join("\n");
 }
 
-export function parseManifest(input: string, source = "harness.yaml"): HarnessManifest {
+export function parseManifest(input: string, source = "woma.yaml"): WomaManifest {
   let document: unknown;
   try {
     document = parseYaml(input);
@@ -138,11 +138,11 @@ export function parseManifest(input: string, source = "harness.yaml"): HarnessMa
   return result.data;
 }
 
-export async function loadManifest(root: string): Promise<HarnessManifest> {
-  const manifestPath = path.join(root, "harness.yaml");
+export async function loadManifest(root: string): Promise<WomaManifest> {
+  const manifestPath = path.join(root, "woma.yaml");
   const input = await readFile(manifestPath, "utf8").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") {
-      throw new Error(`No harness.yaml found in ${root}`);
+      throw new Error(`No woma.yaml found in ${root}`);
     }
     throw error;
   });

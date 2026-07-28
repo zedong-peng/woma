@@ -37,9 +37,9 @@ async function packageFixture(
         .join("\n")}\n`;
   await mkdir(path.join(packageRoot, "skills", name), { recursive: true });
   await writeFile(
-    path.join(packageRoot, "harness.yaml"),
-    `apiVersion: harness.conda/v1
-kind: Harness
+    path.join(packageRoot, "woma.yaml"),
+    `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: ${name}
   version: 1.0.0
@@ -79,9 +79,9 @@ ${sharedResource ? `    - event: PostToolUse
 }
 
 test("uninstall prunes orphaned dependencies and resources while retaining shared dependencies", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-uninstall-shared-"));
-  const previousHome = process.env.HARNESS_HOME;
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-uninstall-shared-"));
+  const previousHome = process.env.WOMA_HOME;
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const shared = await packageFixture(root, "shared-package");
     const orphan = await packageFixture(root, "orphan-package");
@@ -117,13 +117,13 @@ test("uninstall prunes orphaned dependencies and resources while retaining share
       "PostToolUse (orphan-package): orphan-package-hook",
     ]);
     assert.deepEqual((await readEnvironment(root, "tools")).spec.roots.map((item) => item.name), [
-      "harness-project-memory",
-      "harness-package-builder",
+      "woma-project-memory",
+      "woma-package-builder",
       "second-root",
     ]);
     assert.deepEqual(Object.keys((await readEnvironmentLock(root, "tools")).packages), [
-      "harness-project-memory",
-      "harness-package-builder",
+      "woma-project-memory",
+      "woma-package-builder",
       "shared-package",
       "second-root",
     ]);
@@ -154,16 +154,16 @@ test("uninstall prunes orphaned dependencies and resources while retaining share
     await access(orphanStore);
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
-    if (previousHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previousHome;
     await removeTestTree(root);
   }
 });
 
 test("uninstall rejects foundational, dependency-only, and unknown Packages without changing the Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-uninstall-rejections-"));
-  const previousHome = process.env.HARNESS_HOME;
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-uninstall-rejections-"));
+  const previousHome = process.env.WOMA_HOME;
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const dependency = await packageFixture(root, "only-dependency");
     const parent = await packageFixture(root, "parent-root", [{ name: "only-dependency", source: dependency }]);
@@ -182,8 +182,8 @@ test("uninstall rejects foundational, dependency-only, and unknown Packages with
       /not a root Package.*required by roots: parent-root/,
     );
     await assert.rejects(
-      uninstallFromEnvironment(root, "tools", "harness-project-memory"),
-      /Cannot uninstall foundational Package harness-project-memory/,
+      uninstallFromEnvironment(root, "tools", "woma-project-memory"),
+      /Cannot uninstall foundational Package woma-project-memory/,
     );
     await assert.rejects(
       uninstallFromEnvironment(root, "tools", "not-installed"),
@@ -192,16 +192,16 @@ test("uninstall rejects foundational, dependency-only, and unknown Packages with
     assert.deepEqual(await Promise.all(tracked.map((filePath) => readFile(filePath, "utf8"))), before);
     assert.equal(await readlink(environmentViewPath("tools")), beforeView);
   } finally {
-    if (previousHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previousHome;
     await removeTestTree(root);
   }
 });
 
 test("uninstall dry-run reports the complete plan without publishing changes", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-uninstall-dry-run-"));
-  const previousHome = process.env.HARNESS_HOME;
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-uninstall-dry-run-"));
+  const previousHome = process.env.WOMA_HOME;
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const dependency = await packageFixture(root, "preview-dependency");
     const parent = await packageFixture(root, "preview-root", [{ name: "preview-dependency", source: dependency }]);
@@ -234,17 +234,17 @@ test("uninstall dry-run reports the complete plan without publishing changes", {
     assert.deepEqual(await Promise.all(tracked.map((filePath) => readFile(filePath, "utf8"))), before);
     assert.equal(await readlink(environmentViewPath("tools")), beforeView);
   } finally {
-    if (previousHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previousHome;
     await removeTestTree(root);
   }
 });
 
 test("uninstall dry-run does not initialize an absent base Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-uninstall-absent-base-"));
-  const previousHome = process.env.HARNESS_HOME;
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-uninstall-absent-base-"));
+  const previousHome = process.env.WOMA_HOME;
   const home = path.join(root, "home");
-  process.env.HARNESS_HOME = home;
+  process.env.WOMA_HOME = home;
   try {
     await assert.rejects(
       uninstallFromEnvironment(root, "base", "not-installed", { dryRun: true }),
@@ -252,16 +252,16 @@ test("uninstall dry-run does not initialize an absent base Environment", { concu
     );
     await assert.rejects(access(home), /ENOENT/);
   } finally {
-    if (previousHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previousHome;
     await removeTestTree(root);
   }
 });
 
 test("failed uninstall publication restores recipe, lock, stable homes, and view", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-uninstall-rollback-"));
-  const previousHome = process.env.HARNESS_HOME;
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-uninstall-rollback-"));
+  const previousHome = process.env.WOMA_HOME;
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const removable = await packageFixture(root, "rollback-root");
     await createEnvironment(root, "tools", ["codex", "claude", "pi"]);
@@ -300,8 +300,8 @@ test("failed uninstall publication restores recipe, lock, stable homes, and view
     assert.equal(await readlink(environmentViewPath("tools")), beforeView);
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
-    if (previousHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previousHome;
     await removeTestTree(root);
   }
 });

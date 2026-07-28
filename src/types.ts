@@ -52,9 +52,9 @@ export interface HookSpec {
   platforms?: Platform[] | undefined;
 }
 
-export interface HarnessManifest {
-  apiVersion: "harness.conda/v1";
-  kind: "Harness";
+export interface WomaManifest {
+  apiVersion: "woma.dev/v1";
+  kind: "Woma";
   metadata: {
     name: string;
     version: string;
@@ -101,9 +101,9 @@ export interface EnvironmentRoot {
   source: string;
 }
 
-export interface HarnessEnvironment {
-  apiVersion: "harness.conda/environment-v1";
-  kind: "HarnessEnvironment";
+export interface WomaEnvironment {
+  apiVersion: "woma.dev/environment-v1";
+  kind: "WomaEnvironment";
   metadata: {
     name: string;
   };
@@ -114,7 +114,7 @@ export interface HarnessEnvironment {
 }
 
 export interface InstalledPackage {
-  manifest: HarnessManifest;
+  manifest: WomaManifest;
   root: string;
   lock: LockedPackage;
 }

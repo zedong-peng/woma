@@ -9,10 +9,10 @@ import {
   installIntoEnvironment,
 } from "../dist/src/environment.js";
 
-const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-benchmark-"));
+const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-benchmark-"));
 const project = path.join(root, "project");
-const previousHome = process.env.HARNESS_HOME;
-process.env.HARNESS_HOME = path.join(root, "home");
+const previousHome = process.env.WOMA_HOME;
+process.env.WOMA_HOME = path.join(root, "home");
 
 async function makeWritable(directory) {
   const info = await lstat(directory).catch(() => undefined);
@@ -64,8 +64,8 @@ try {
     ),
   );
 } finally {
-  if (previousHome === undefined) delete process.env.HARNESS_HOME;
-  else process.env.HARNESS_HOME = previousHome;
+  if (previousHome === undefined) delete process.env.WOMA_HOME;
+  else process.env.WOMA_HOME = previousHome;
   await makeWritable(root);
   await rm(root, { recursive: true, force: true });
 }

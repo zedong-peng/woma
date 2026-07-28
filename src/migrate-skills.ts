@@ -5,14 +5,13 @@ import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
 import { DEFAULT_ENVIRONMENT, environmentPath, environmentSnapshot, installPackagesIntoEnvironment } from "./environment.js";
-import { harnessHome, hashDirectory, pathExists, writeTextAtomic } from "./fs.js";
+import { EXCLUDED_PACKAGE_PATH_NAMES, womaHome, hashDirectory, pathExists, writeTextAtomic } from "./fs.js";
 import { loadCachedPackage, validatePackage } from "./package.js";
 import { loadManifest } from "./schema.js";
 import { sourceAgentHome } from "./view.js";
-import type { CodexClaudePlatform, HarnessManifest, SkillSpec } from "./types.js";
+import type { CodexClaudePlatform, WomaManifest, SkillSpec } from "./types.js";
 
-const EXCLUDED_NAMES = new Set([".git", ".harness", "node_modules", ".DS_Store"]);
-const FOUNDATIONAL_SKILLS = new Set(["harness-project-memory", "harness-package-builder"]);
+const FOUNDATIONAL_SKILLS = new Set(["woma-project-memory", "woma-package-builder"]);
 
 export type SkillMigrationSource = CodexClaudePlatform | "both";
 
@@ -39,7 +38,7 @@ export interface SkillMigrationResult {
 }
 
 function copyFilter(source: string): boolean {
-  return !EXCLUDED_NAMES.has(path.basename(source));
+  return !EXCLUDED_PACKAGE_PATH_NAMES.has(path.basename(source));
 }
 
 function skillName(input: string): string {
@@ -90,7 +89,7 @@ async function discoverSkills(platform: CodexClaudePlatform): Promise<ExistingSk
     if (!(await lstat(root)).isDirectory() || !(await pathExists(path.join(root, "SKILL.md")))) continue;
     const name = skillName(entry);
     if (FOUNDATIONAL_SKILLS.has(name)) {
-      throw new Error(`Existing Agent Skill ${name} conflicts with a foundational Harness Skill`);
+      throw new Error(`Existing Agent Skill ${name} conflicts with a foundational Woma Skill`);
     }
     const skillDocument = await readFile(path.join(root, "SKILL.md"), "utf8");
     skills.push({
@@ -137,11 +136,11 @@ function snapshotId(skill: ExistingSkill): string {
   return hash.digest("hex");
 }
 
-function manifest(skill: ExistingSkill, version: string): HarnessManifest {
+function manifest(skill: ExistingSkill, version: string): WomaManifest {
   const specs: SkillSpec[] = [{ name: skill.name, path: `./skills/${skill.name}` }];
   return {
-    apiVersion: "harness.conda/v1",
-    kind: "Harness",
+    apiVersion: "woma.dev/v1",
+    kind: "Woma",
     metadata: {
       name: skill.name,
       version,
@@ -207,7 +206,7 @@ async function buildSnapshot(root: string, skill: ExistingSkill, version: string
   await chmod(destinationSkill, 0o700);
   await normalizeLegacyFrontmatter(path.join(destinationSkill, "SKILL.md"));
   const packageManifest = manifest(skill, version);
-  await writeTextAtomic(path.join(root, "harness.yaml"), stringifyYaml(packageManifest, { lineWidth: 120 }));
+  await writeTextAtomic(path.join(root, "woma.yaml"), stringifyYaml(packageManifest, { lineWidth: 120 }));
   await validatePackage(root, packageManifest);
 }
 
@@ -230,7 +229,7 @@ async function assertNoEnvironmentConflicts(
   return skills.map((skill, index) => {
     const planned = packages[index]!;
     const installed = lock.packages[planned.name];
-    const migrationSourceRoot = `file:${path.join(harnessHome(), "migrations", "skills", skill.name)}${path.sep}`;
+    const migrationSourceRoot = `file:${path.join(womaHome(), "migrations", "skills", skill.name)}${path.sep}`;
     if (installed && !installed.source.startsWith(migrationSourceRoot)) {
       throw new Error(`Package name ${skill.name} is already installed from ${installed.source} in Environment ${environmentName}`);
     }
@@ -252,7 +251,7 @@ export async function migrateExistingSkills(options: {
   const packages = skills.map((skill) => {
     const id = snapshotId(skill);
     const version = `0.0.0-migrate.${id.slice(0, 12)}`;
-    const destination = path.join(harnessHome(), "migrations", "skills", skill.name, id);
+    const destination = path.join(womaHome(), "migrations", "skills", skill.name, id);
     return { name: skill.name, version, destination, source: `file:${destination}`, sources: [...skill.sources] };
   });
   const unchangedPackages = await assertNoEnvironmentConflicts(options.projectRoot, options.environment, skills, packages);
@@ -274,7 +273,7 @@ export async function migrateExistingSkills(options: {
     for (const [index, pkg] of packages.entries()) {
       if (await pathExists(pkg.destination)) await validateSnapshot(pkg.destination, pkg.name, pkg.version);
       else {
-        const temporary = await mkdtemp(path.join(os.tmpdir(), "harness-skills-migration-plan-"));
+        const temporary = await mkdtemp(path.join(os.tmpdir(), "woma-skills-migration-plan-"));
         try {
           await buildSnapshot(temporary, skills[index]!, pkg.version);
         } finally {

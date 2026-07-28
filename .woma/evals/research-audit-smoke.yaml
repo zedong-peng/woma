@@ -1,12 +1,12 @@
-apiVersion: harness.conda/eval-v1
-kind: HarnessEval
+apiVersion: woma.dev/eval-v1
+kind: WomaEval
 metadata:
   name: research-audit-smoke
 spec:
   profile: research
   agent: codex
   prompt: |
-    Audit whether harness-conda profile switching is atomic across package activation, routing instructions, and rollback.
+    Audit whether woma profile switching is atomic across package activation, routing instructions, and rollback.
     Work only from the checked-out repository. Do not edit source or tests. Create eval-artifacts/research-audit.md with
     exactly these top-level sections: Evidence, Risk, Hypothesis, Experiment, Verdict. Use precise file:line references,
     identify one material gap or residual risk, state a falsifiable hypothesis, and give an executable validation plan.

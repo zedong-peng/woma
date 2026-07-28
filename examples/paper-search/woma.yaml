@@ -1,5 +1,5 @@
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: paper-search
   version: 1.0.0

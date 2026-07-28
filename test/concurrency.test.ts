@@ -12,9 +12,9 @@ const run = promisify(execFile);
 const cli = path.resolve("dist/src/cli.js");
 
 test("concurrent installs serialize and preserve both successful updates", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-concurrent-install-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-concurrent-install-"));
   const home = path.join(root, "home");
-  const env = { ...process.env, HARNESS_HOME: home };
+  const env = { ...process.env, WOMA_HOME: home };
   try {
     await run(process.execPath, [cli, "env", "create", "race", "--target", "codex"], { cwd: root, env });
 
@@ -27,8 +27,8 @@ test("concurrent installs serialize and preserve both successful updates", async
       packages: Record<string, unknown>;
     };
     assert.deepEqual(new Set(Object.keys(lock.packages)), new Set([
-      "harness-project-memory",
-      "harness-package-builder",
+      "woma-project-memory",
+      "woma-package-builder",
       "paper-search",
       "idea-gen",
     ]));
@@ -38,10 +38,10 @@ test("concurrent installs serialize and preserve both successful updates", async
 });
 
 test("an abandoned Environment lock is recovered after its stale threshold", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-stale-lock-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-stale-lock-"));
   const home = path.join(root, "home");
   const lock = path.join(home, "locks", "environments", "tools.lock");
-  const env = { ...process.env, HARNESS_HOME: home };
+  const env = { ...process.env, WOMA_HOME: home };
   try {
     await mkdir(lock, { recursive: true });
     await writeFile(
@@ -63,9 +63,9 @@ test("an abandoned Environment lock is recovered after its stale threshold", asy
 
 test("concurrent explicit first use initializes base exactly once across processes", async () => {
   for (let index = 0; index < 4; index += 1) {
-    const root = await mkdtemp(path.join(os.tmpdir(), "harness-concurrent-base-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "woma-concurrent-base-"));
     const home = path.join(root, "home");
-    const env = { ...process.env, HARNESS_HOME: home };
+    const env = { ...process.env, WOMA_HOME: home };
     try {
       await Promise.all([
         run(process.execPath, [cli, "info", "--json"], { cwd: root, env }),
@@ -74,7 +74,7 @@ test("concurrent explicit first use initializes base exactly once across process
       const lock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
         packages: Record<string, unknown>;
       };
-      assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+      assert.deepEqual(Object.keys(lock.packages), ["woma-project-memory", "woma-package-builder"]);
     } finally {
       await removeTestTree(root);
     }
@@ -82,9 +82,9 @@ test("concurrent explicit first use initializes base exactly once across process
 });
 
 test("different Environments serialize reinstall of one shared Package cache entry", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-concurrent-cache-repair-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-concurrent-cache-repair-"));
   const home = path.join(root, "home");
-  const env = { ...process.env, HARNESS_HOME: home };
+  const env = { ...process.env, WOMA_HOME: home };
   try {
     for (const name of ["a", "b"]) {
       await run(process.execPath, [cli, "env", "create", name, "--target", "codex"], { cwd: root, env });
@@ -110,10 +110,10 @@ test("different Environments serialize reinstall of one shared Package cache ent
 });
 
 test("project lock serializes real paths and symlink aliases", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-project-lock-alias-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-project-lock-alias-"));
   const project = path.join(root, "project");
   const alias = path.join(root, "alias");
-  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await mkdir(project);
     await symlink(project, alias, "dir");

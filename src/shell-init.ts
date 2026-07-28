@@ -1,17 +1,17 @@
 import { lstat, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { harnessHome, writeTextPreservingFile } from "./fs.js";
+import { womaHome, writeTextPreservingFile } from "./fs.js";
 import { renderShellHook, type SupportedShell } from "./shell.js";
 import type { Action } from "./types.js";
 
-const markerStart = "# >>> harness initialize >>>";
-const markerEnd = "# <<< harness initialize <<<";
+const markerStart = "# >>> woma initialize >>>";
+const markerEnd = "# <<< woma initialize <<<";
 
 export interface ShellInitializationOptions {
   dryRun?: boolean;
   environment?: NodeJS.ProcessEnv;
-  harnessHome?: string;
+  womaHome?: string;
   platform?: NodeJS.Platform;
   profilePath?: string;
   reverse?: boolean;
@@ -48,11 +48,11 @@ function shellQuote(value: string): string {
 function initializationBlock(hookPath: string): string {
   const quotedHook = shellQuote(hookPath);
   return `${markerStart}
-# !! Contents within this block are managed by 'harness init' !!
+# !! Contents within this block are managed by 'woma init' !!
 if [ -f ${quotedHook} ]; then
   . ${quotedHook}
 else
-  printf 'harness: shell integration is unavailable; run harness init\\n' >&2
+  printf 'woma: shell integration is unavailable; run woma init\\n' >&2
 fi
 ${markerEnd}`;
 }
@@ -65,10 +65,10 @@ function managedRange(content: string): { start: number; end: number } | undefin
   const starts = markerCount(content, markerStart);
   const ends = markerCount(content, markerEnd);
   if (starts === 0 && ends === 0) return undefined;
-  if (starts !== 1 || ends !== 1) throw new Error("Shell profile contains an invalid Harness initialization block");
+  if (starts !== 1 || ends !== 1) throw new Error("Shell profile contains an invalid Woma initialization block");
   const start = content.indexOf(markerStart);
   const markerEndIndex = content.indexOf(markerEnd);
-  if (markerEndIndex < start) throw new Error("Shell profile contains an invalid Harness initialization block");
+  if (markerEndIndex < start) throw new Error("Shell profile contains an invalid Woma initialization block");
   const lineEnd = content.indexOf("\n", markerEndIndex + markerEnd.length);
   return { start, end: lineEnd === -1 ? content.length : lineEnd + 1 };
 }
@@ -77,19 +77,6 @@ function withoutManagedBlock(content: string, range: { start: number; end: numbe
   let start = range.start;
   if (start > 0 && content[start - 1] === "\n") start -= 1;
   return `${content.slice(0, start)}${content.slice(range.end)}`;
-}
-
-const legacyHookLine = /^[ \t]*eval[ \t]+["']?\$\((?:command[ \t]+)?harness(?:-conda)?[ \t]+shell[ \t]+hook(?:[ \t]+[^)]*)?\)["']?[ \t]*(?:#.*)?$/;
-
-function withoutLegacyHookLines(content: string): string {
-  if (!content.includes("shell hook")) return content;
-  const trailingNewline = content.endsWith("\n");
-  const joined = content
-    .split("\n")
-    .filter((line) => !legacyHookLine.test(line))
-    .join("\n");
-  if (trailingNewline && !joined.endsWith("\n")) return `${joined}\n`;
-  return joined;
 }
 
 function reconcileProfile(original: string | null, hookPath: string, reverse: boolean): string | null {
@@ -101,11 +88,11 @@ function reconcileProfile(original: string | null, hookPath: string, reverse: bo
   }
   const block = initializationBlock(hookPath);
   if (!range) {
-    const content = withoutLegacyHookLines(rawContent);
+    const content = rawContent;
     if (!content) return `${block}\n`;
     return `${content}${content.endsWith("\n") ? "\n" : "\n\n"}${block}\n`;
   }
-  return withoutLegacyHookLines(`${rawContent.slice(0, range.start)}${block}\n${rawContent.slice(range.end)}`);
+  return `${rawContent.slice(0, range.start)}${block}\n${rawContent.slice(range.end)}`;
 }
 
 export function shellProfilePath(
@@ -134,8 +121,8 @@ export async function initializeShell(
   shell: SupportedShell,
   options: ShellInitializationOptions = {},
 ): Promise<ShellInitializationResult> {
-  const stateHome = path.resolve(options.harnessHome ?? harnessHome());
-  const hookPath = path.join(stateHome, "shell", `harness.${shell}`);
+  const stateHome = path.resolve(options.womaHome ?? womaHome());
+  const hookPath = path.join(stateHome, "shell", `woma.${shell}`);
   const profilePath = path.resolve(options.profilePath ?? shellProfilePath(shell, options));
   const [originalHook, originalProfile] = await Promise.all([readOptional(hookPath), readOptional(profilePath)]);
   const reverse = options.reverse === true;

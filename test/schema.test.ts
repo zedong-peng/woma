@@ -4,12 +4,12 @@ import { parseManifest } from "../src/schema.js";
 
 test("manifest parser applies portable defaults", () => {
   const manifest = parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
-  name: test-harness
+  name: test-woma
   version: 1.2.3
-  description: Test harness.
+  description: Test woma.
 spec:
   skills: []
 `);
@@ -25,8 +25,8 @@ spec:
 
 test("manifest parser accepts package dependencies and skill entrypoints", () => {
   const manifest = parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: auto-research
   version: 1.0.0
@@ -54,8 +54,8 @@ test("manifest parser rejects invalid dependency version ranges", () => {
   assert.throws(
     () =>
       parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: auto-research
   version: 1.0.0
@@ -73,8 +73,8 @@ spec:
 
 test("manifest parser accepts complete SemVer and rejects malformed versions", () => {
   const manifest = parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: versioned
   version: 1.2.3-rc.1+build.7
@@ -86,8 +86,8 @@ spec:
   assert.throws(
     () =>
       parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: versioned
   version: 1.2.3-..
@@ -101,8 +101,8 @@ spec:
 
 test("manifest parser accepts Pi as a Package platform", () => {
   const manifest = parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: pi-skill
   version: 1.0.0
@@ -116,8 +116,8 @@ spec:
 
 test("manifest parser accepts Qoder as a Package platform", () => {
   const manifest = parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: qoder-skill
   version: 1.0.0
@@ -133,8 +133,8 @@ test("manifest parser rejects duplicate platform declarations", () => {
   assert.throws(
     () =>
       parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: duplicate-platform
   version: 1.0.0
@@ -151,8 +151,8 @@ test("manifest parser rejects legacy command bindings", () => {
   assert.throws(
     () =>
       parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: legacy-bindings
   version: 1.0.0
@@ -170,12 +170,12 @@ test("manifest parser reports field paths", () => {
   assert.throws(
     () =>
       parseManifest(`
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: Bad Name
   version: latest
-  description: Test harness.
+  description: Test woma.
 spec:
   skills: []
 `),
