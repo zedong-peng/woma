@@ -15,7 +15,6 @@ import {
   environmentLockPath,
   environmentPath,
   ensureBaseEnvironment,
-  FOUNDATIONAL_PACKAGES,
   installIntoEnvironment,
   listEnvironments,
   readEnvironmentLock,
@@ -186,11 +185,9 @@ async function createCommand(options: CreateOptions, command: Command): Promise<
   }
   await ensureSelectedBase(project, options.name);
   const environment = await createEnvironment(project, options.name, targets(options.target ?? "both"));
-  const lock = await readEnvironmentLock(project, options.name);
   console.log(`Created global environment ${options.name}`);
   console.log(`  recipe  ${environmentPath(project, options.name)}`);
   console.log(`  lock    ${environmentLockPath(project, options.name)}`);
-  console.log(`  foundational ${FOUNDATIONAL_PACKAGES.map((packageName) => `${packageName}@${lock.packages[packageName]?.version}`).join(", ")}`);
   console.log(`  targets ${environment.spec.targets.join(", ")}`);
 }
 
@@ -211,7 +208,7 @@ function migrationSource(input: string): SkillMigrationSource {
 
 envCommand
   .command("create <name>")
-  .description("create a global named environment with the foundational packages")
+  .description("create a global named environment")
   .option("-t, --target <target>", "codex, claude, pi, qoder, both, all, or a comma-separated list", "both")
   .action(async (name: string, options: { target: string }, command: Command) => {
     await createCommand({ name, target: options.target }, command);
@@ -513,8 +510,8 @@ program
 
 program
   .command("info")
-  .description("show Environment information and machine-readable Agent context")
-  .option("--json", "print structured Environment, package, Skill, and Memory context", false)
+  .description("show Environment and Agent CLI information")
+  .option("--json", "print structured Environment, package, and Skill state", false)
   .action(async (options: { json: boolean }, command: Command) => {
     const project = projectRoot(command);
     const activeName = selectedEnvironment();
@@ -539,7 +536,7 @@ program
 
 program
   .command("doctor")
-  .description("verify environment recipes, locks, views, requirements, activation, and Memory discovery")
+  .description("verify environment recipes, locks, views, requirements, and activation")
   .option("-n, --name <environment>", "environment to check")
   .action(async (options: { name?: string }, command: Command) => {
     const project = projectRoot(command);

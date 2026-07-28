@@ -131,23 +131,11 @@ test("the built-in Woma Package Builder is a valid general authoring Package", {
   }
 });
 
-test("the built-in Project Memory manager is a normal installable Skill package", { concurrency: false }, async () => {
+test("Project Memory is not a Woma built-in", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-builtin-project-memory-"));
   process.env.WOMA_HOME = path.join(root, "home");
   try {
-    const installation = await installPackageTree("builtin:woma-project-memory");
-    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["woma-project-memory"]);
-    assert.deepEqual(installation.root.lock.dependencies, []);
-    assert.deepEqual(installation.root.manifest.spec.skills.map((skill) => skill.name), ["woma-project-memory"]);
-    const instructions = await readFile(
-      path.join(installation.root.root, "skills", "woma-project-memory", "SKILL.md"),
-      "utf8",
-    );
-    assert.match(instructions, /woma info --json/);
-    assert.match(instructions, /even if the user does not explicitly ask to remember it/);
-    assert.match(instructions, /before using another active Skill/);
-    assert.match(instructions, /--project <project-root> info --json/);
-    assert.doesNotMatch(instructions, /current project or a nested directory/);
+    await assert.rejects(installPackageTree("builtin:woma-project-memory"), /Unknown built-in Woma/);
   } finally {
     await removeTestTree(root);
   }

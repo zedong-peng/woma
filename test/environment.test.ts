@@ -20,7 +20,6 @@ import {
 } from "../src/environment.js";
 import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
-import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 import { migrateExistingSkills } from "../src/migrate-skills.js";
 
 async function environmentPackageFixture(
@@ -134,7 +133,7 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
 
     const base = await ensureBaseEnvironment(root);
-    assert.deepEqual(base.spec.roots.map((item) => item.name), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(base.spec.roots, []);
     const codexSkills = path.join(environmentViewPath("base"), "codex", "skills");
     await assert.rejects(readFile(path.join(codexSkills, "existing-review", "SKILL.md")), /ENOENT/);
     await assert.rejects(access(path.join(codexSkills, ".system")), /ENOENT/);
@@ -151,14 +150,14 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     assert.deepEqual(planned.packages.find((pkg) => pkg.name === "existing-review")?.sources, ["codex", "claude"]);
     assert.deepEqual(planned.normalized, ["existing-review"]);
     const cleanLock = await readEnvironmentLock(root, "clean");
-    assert.deepEqual(Object.keys(cleanLock.packages), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(Object.keys(cleanLock.packages), []);
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
 
     const migrated = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
     assert.equal(migrated.unchanged, false);
     assert.deepEqual(
       Object.keys((await readEnvironmentLock(root, "clean")).packages),
-      ["woma-project-memory", "woma-package-builder", "claude-notes", "existing-review"],
+      ["claude-notes", "existing-review"],
     );
     const existingReview = migrated.packages.find((pkg) => pkg.name === "existing-review");
     assert.ok(existingReview);
@@ -428,35 +427,36 @@ spec:
   );
 });
 
-test("removing an environment preserves user-owned Project Memory", { concurrency: false }, async () => {
+test("removing an environment preserves user-owned project files", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-memory-lifecycle-"));
   process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
-    await initializeProjectMemory(root);
-    await writeFile(projectMemoryPath(root), "# Shared knowledge\n", "utf8");
-    const scoped = packageMemoryPath(root, "auto-research");
+    const shared = path.join(root, ".woma", "memory", "project.md");
+    const scoped = path.join(root, ".woma", "memory", "packages", "auto-research.md");
+    await mkdir(path.dirname(scoped), { recursive: true });
+    await writeFile(shared, "# Shared knowledge\n", "utf8");
     await writeFile(scoped, "# Research adaptation\n", "utf8");
 
     await removeEnvironment(root, "research");
 
-    assert.equal(await readFile(projectMemoryPath(root), "utf8"), "# Shared knowledge\n");
+    assert.equal(await readFile(shared, "utf8"), "# Shared knowledge\n");
     assert.equal(await readFile(scoped, "utf8"), "# Research adaptation\n");
   } finally {
     await removeTestTree(root);
   }
 });
 
-test("global environments are shared across projects while Project Memory remains isolated", { concurrency: false }, async () => {
+test("global environments are shared across projects without creating project state", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-global-environment-"));
   const home = path.join(root, "home");
   const firstProject = path.join(root, "first-project");
   const secondProject = path.join(root, "second-project");
-  process.env.WOMA_HOME = home;
+    process.env.WOMA_HOME = home;
   try {
     await Promise.all([mkdir(firstProject, { recursive: true }), mkdir(secondProject, { recursive: true })]);
     const base = await ensureBaseEnvironment(firstProject);
-    assert.deepEqual(base.spec.roots.map((item) => item.name), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(base.spec.roots, []);
     assert.equal(environmentPath(secondProject, "base"), path.join(home, "environments", "base", "environment.yaml"));
     await assert.rejects(createEnvironment(firstProject, "base", ["codex"]), /exists implicitly/);
     await assert.rejects(removeEnvironment(firstProject, "base"), /cannot be removed/);
@@ -478,11 +478,8 @@ test("global environments are shared across projects while Project Memory remain
     );
     await assert.rejects(readFile(path.join(firstProject, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /ENOENT/);
     await assert.rejects(readFile(path.join(secondProject, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /ENOENT/);
-    await writeFile(projectMemoryPath(firstProject), "# First project\n", "utf8");
-
-    assert.equal(await readFile(projectMemoryPath(firstProject), "utf8"), "# First project\n");
-    assert.match(await readFile(projectMemoryPath(secondProject), "utf8"), /Project Memory/);
-    assert.notEqual(packageMemoryPath(firstProject, "paper-search"), packageMemoryPath(secondProject, "paper-search"));
+    await assert.rejects(access(path.join(firstProject, ".woma")), /ENOENT/);
+    await assert.rejects(access(path.join(secondProject, ".woma")), /ENOENT/);
   } finally {
     await removeTestTree(root);
   }
@@ -519,7 +516,7 @@ test("activation depends only on the validated target Environment", { concurrenc
 
     await activateEnvironment(project, "tools");
 
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /Woma Project Memory/);
+    await assert.rejects(access(path.join(project, "AGENTS.md")), /ENOENT/);
     assert.equal((await lstat(environmentAgentHomePath("tools", "codex"))).isDirectory(), true);
   } finally {
     if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
@@ -556,21 +553,24 @@ test("unknown target activation does not touch the current stable Agent home", {
   }
 });
 
-test("activation keeps both Agent discovery files stable across target changes", { concurrency: false }, async () => {
+test("activation leaves Agent instruction files stable across target changes", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-stable-discovery-"));
   process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "both", ["codex", "claude"]);
     await createEnvironment(root, "codex-only", ["codex"]);
-    await activateEnvironment(root, "both");
+    const agentsPath = path.join(root, "AGENTS.md");
     const claudePath = path.join(root, "CLAUDE.md");
-    await writeFile(claudePath, `${await readFile(claudePath, "utf8")}\n# User Claude instructions\n`, "utf8");
-    const before = await readFile(claudePath, "utf8");
+    await writeFile(agentsPath, "# User Agent instructions\n", "utf8");
+    await writeFile(claudePath, "# User Claude instructions\n", "utf8");
+    await activateEnvironment(root, "both");
+    const beforeAgents = await readFile(agentsPath, "utf8");
+    const beforeClaude = await readFile(claudePath, "utf8");
 
     await activateEnvironment(root, "codex-only");
 
-    assert.equal(await readFile(claudePath, "utf8"), before);
-    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /Woma Project Memory/);
+    assert.equal(await readFile(agentsPath, "utf8"), beforeAgents);
+    assert.equal(await readFile(claudePath, "utf8"), beforeClaude);
   } finally {
     await removeTestTree(root);
   }
@@ -617,19 +617,61 @@ test("environment removal is guarded by the current shell only", { concurrency: 
   }
 });
 
-test("global Environment reads reject missing foundational packages", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "woma-global-environment-contract-"));
+test("legacy Environments drop implicit helpers without deleting user Memory", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-v1-migration-"));
   process.env.WOMA_HOME = path.join(root, "home");
   try {
-    await createEnvironment(root, "tools", ["codex"]);
-    const recipePath = environmentPath(root, "tools");
-    const recipe = await readFile(recipePath, "utf8");
+    const memoryPackage = path.join(root, "memory-package");
+    await mkdir(path.join(memoryPackage, "skills", "woma-project-memory"), { recursive: true });
     await writeFile(
-      recipePath,
-      recipe.replace(/    - name: woma-package-builder\n      source: builtin:woma-package-builder\n/, ""),
+      path.join(memoryPackage, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
+metadata:
+  name: woma-project-memory
+  version: 0.1.0
+  description: Legacy migration fixture.
+spec:
+  platforms: [codex]
+  skills:
+    - name: woma-project-memory
+      path: ./skills/woma-project-memory
+`,
       "utf8",
     );
-    await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package woma-package-builder/);
+    await writeFile(
+      path.join(memoryPackage, "skills", "woma-project-memory", "SKILL.md"),
+      "---\nname: woma-project-memory\ndescription: Legacy fixture.\n---\nLegacy.\n",
+      "utf8",
+    );
+    await createEnvironment(root, "tools", ["codex"]);
+    await installIntoEnvironment(root, "tools", "builtin:woma-package-builder");
+    await installIntoEnvironment(root, "tools", memoryPackage);
+    const recipePath = environmentPath(root, "tools");
+    const lockPath = environmentLockPath(root, "tools");
+    const recipe = (await readFile(recipePath, "utf8"))
+      .replace("woma.dev/environment-v2", "woma.dev/environment-v1")
+      .replace(`source: file:${memoryPackage}`, "source: builtin:woma-project-memory");
+    const lock = JSON.parse(await readFile(lockPath, "utf8"));
+    lock.packages["woma-project-memory"].source = "builtin:woma-project-memory";
+    const userMemory = path.join(root, ".woma", "memory", "project.md");
+    await mkdir(path.dirname(userMemory), { recursive: true });
+    await writeFile(userMemory, "# User-owned Memory\n", "utf8");
+    await writeFile(recipePath, recipe, "utf8");
+    await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
+    await removeTestTree(path.join(process.env.WOMA_HOME, "packages", "woma-project-memory"));
+    await removeTestTree(path.join(process.env.WOMA_HOME, "packages", "woma-package-builder"));
+
+    const migrated = await environmentSnapshot(root, "tools");
+
+    assert.equal(migrated.environment.apiVersion, "woma.dev/environment-v2");
+    assert.deepEqual(migrated.environment.spec.roots, []);
+    assert.deepEqual(migrated.lock.packages, {});
+    assert.equal((await readEnvironment(root, "tools")).apiVersion, "woma.dev/environment-v2");
+    assert.deepEqual((await readEnvironmentLock(root, "tools")).packages, {});
+    assert.equal(await readFile(userMemory, "utf8"), "# User-owned Memory\n");
+    await assert.rejects(access(path.join(environmentViewPath("tools"), "codex", "skills", "woma-project-memory")), /ENOENT/);
+    await assert.rejects(access(path.join(environmentViewPath("tools"), "codex", "skills", "woma-package-builder")), /ENOENT/);
   } finally {
     await removeTestTree(root);
   }
@@ -667,7 +709,7 @@ test("first base creation detects supported existing Agent state once without re
     assert.equal(await readFile(path.join(claude, "projects", "private-session"), "utf8"), "unchanged\n");
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
     const lock = await readEnvironmentLock(root, "base");
-    assert.deepEqual(Object.keys(lock.packages), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(Object.keys(lock.packages), []);
     await ensureBaseEnvironment(root, options);
     assert.equal(notices, 1);
   } finally {
@@ -727,8 +769,8 @@ test("concurrent first reads initialize the implicit base Environment once", { c
       readEnvironmentLock(root, "base"),
     ]);
     assert.equal(environment.metadata.name, "base");
-    assert.deepEqual(environment.spec.roots.map((item) => item.name), ["woma-project-memory", "woma-package-builder"]);
-    assert.deepEqual(Object.keys(lock.packages), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(environment.spec.roots, []);
+    assert.deepEqual(Object.keys(lock.packages), []);
   } finally {
     await removeTestTree(root);
   }
@@ -779,6 +821,7 @@ test("list and doctor remain useful when current-format base layers are corrupt"
   process.env.WOMA_HOME = path.join(root, "home");
   try {
     await ensureBaseEnvironment(root);
+    await installIntoEnvironment(root, "base", "builtin:paper-search");
     await createEnvironment(root, "tools", ["codex"]);
     const recipePath = environmentPath(root, "base");
     const lockPath = environmentLockPath(root, "base");
@@ -796,7 +839,7 @@ test("list and doctor remain useful when current-format base layers are corrupt"
 
     await writeFile(lockPath, lock, "utf8");
     const parsedLock = JSON.parse(lock) as { packages: Record<string, { cacheKey: string }> };
-    const packageName = "woma-project-memory";
+    const packageName = "paper-search";
     const skillPath = path.join(
       process.env.WOMA_HOME!,
       "packages",
@@ -824,7 +867,7 @@ test("install repairs a missing base view without requiring a healthy view first
     await ensureBaseEnvironment(root);
     await rm(environmentViewPath("base"), { force: true });
 
-    await installIntoEnvironment(root, "base", "builtin:woma-project-memory");
+    await installIntoEnvironment(root, "base", "builtin:paper-search");
 
     assert.equal((await lstat(environmentViewPath("base"))).isSymbolicLink(), true);
     await ensureBaseEnvironment(root);
@@ -838,11 +881,7 @@ test("install can initialize and lock base as the first Woma command", { concurr
   process.env.WOMA_HOME = path.join(root, "home");
   try {
     await installIntoEnvironment(root, "base", "builtin:paper-search");
-    assert.deepEqual(Object.keys((await readEnvironmentLock(root, "base")).packages), [
-      "woma-project-memory",
-      "woma-package-builder",
-      "paper-search",
-    ]);
+    assert.deepEqual(Object.keys((await readEnvironmentLock(root, "base")).packages), ["paper-search"]);
   } finally {
     await removeTestTree(root);
   }
@@ -944,22 +983,24 @@ test("doctor checks native CLIs only for Environment targets", { concurrency: fa
   }
 });
 
-test("doctor reports modified Agent Memory discovery instructions", { concurrency: false }, async () => {
+test("doctor reports modified legacy Memory discovery instructions", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-context-doctor-"));
   const previousEnvironment = process.env.WOMA_ENV;
   process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
-    await installIntoEnvironment(root, "research", "builtin:woma-project-memory");
     await installIntoEnvironment(root, "research", "builtin:paper-search");
-    await activateEnvironment(root, "research");
     process.env.WOMA_ENV = "research";
     const agentsPath = path.join(root, "AGENTS.md");
-    await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("At the beginning", "Later"), "utf8");
+    await writeFile(
+      agentsPath,
+      "<!-- >>> woma:project-memory -->\nmodified\n<!-- <<< woma:project-memory -->\n",
+      "utf8",
+    );
 
     const checks = await doctorEnvironment(root, "research");
 
-    assert.equal(checks.find((check) => check.label === "memory-bootstrap")?.status, "fail");
+    assert.equal(checks.find((check) => check.label === "legacy-project-memory")?.status, "fail");
     await assert.rejects(activateEnvironment(root, "base"), /discovery block was modified/);
   } finally {
     if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
@@ -1108,14 +1149,12 @@ test("active install restores project state when the new package conflicts after
     await writeFile(path.join(process.env.WOMA_ORIGINAL_CODEX_HOME, "config.toml"), '[mcp_servers.occupied]\ncommand = "other"\n', "utf8");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
-    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
     await activateEnvironment(root, "tools");
     const trackedPaths = [
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
       path.join(environmentViewPath("tools"), "view.json"),
       path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"),
-      path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
 
@@ -1137,13 +1176,11 @@ test("active install rolls back when interrupted after resources are applied", {
     const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
-    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
     await activateEnvironment(root, "tools");
     const trackedPaths = [
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
       path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"),
-      path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
     let interruptedAfterMutation = false;
@@ -1173,23 +1210,25 @@ test("active install rolls back when interrupted after resources are applied", {
   }
 });
 
-test("reinstalling a foundational package preserves its recipe, lock, Skill, and startup pointer", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-memory-install-rollback-"));
+test("an optional built-in installs without creating project startup pointers", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-optional-builtin-"));
   process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "minimal", ["codex"]);
     await activateEnvironment(root, "minimal");
-    const trackedPaths = [environmentPath(root, "minimal"), environmentLockPath(root, "minimal")];
-    const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
 
-    await installIntoEnvironment(root, "minimal", "builtin:woma-project-memory");
+    await installIntoEnvironment(root, "minimal", "builtin:woma-package-builder");
 
-    assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
-    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
+    assert.deepEqual((await readEnvironment(root, "minimal")).spec.roots, [
+      { name: "woma-package-builder", source: "builtin:woma-package-builder" },
+    ]);
+    assert.equal((await readEnvironmentLock(root, "minimal")).packages["woma-package-builder"]?.source, "builtin:woma-package-builder");
     assert.match(
-      await readFile(path.join(environmentViewPath("minimal"), "codex", "skills", "woma-project-memory", "SKILL.md"), "utf8"),
-      /Persist stable knowledge automatically/,
+      await readFile(path.join(environmentViewPath("minimal"), "codex", "skills", "woma-package-builder", "SKILL.md"), "utf8"),
+      /Create one ordinary Woma Package/,
     );
+    await assert.rejects(access(path.join(root, "AGENTS.md")), /ENOENT/);
+    await assert.rejects(access(path.join(root, ".woma")), /ENOENT/);
   } finally {
     await removeTestTree(root);
   }
@@ -1257,7 +1296,7 @@ test("activation holds the target Environment lock through the project transitio
   }
 });
 
-test("project initialization failure leaves stable Agent state unchanged", { concurrency: false }, async () => {
+test("activation ignores former Woma Memory paths and preserves Agent state", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-activation-runtime-rollback-"));
   const project = path.join(root, "project");
   process.env.WOMA_HOME = path.join(root, "home");
@@ -1269,13 +1308,14 @@ test("project initialization failure leaves stable Agent state unchanged", { con
     await ensureBaseEnvironment(project);
     await createEnvironment(project, "tools", ["codex"]);
     await mkdir(project, { recursive: true });
-    await writeFile(path.join(project, ".woma"), "blocks memory initialization\n", "utf8");
+    await writeFile(path.join(project, ".woma"), "user-owned path\n", "utf8");
     const opaque = path.join(environmentAgentHomePath("base", "codex"), "opaque.sqlite");
     await writeFile(opaque, "stable\n", "utf8");
 
-    await assert.rejects(activateEnvironment(project, "tools"), /ENOTDIR|not a directory/);
+    await activateEnvironment(project, "tools");
 
     assert.equal(await readFile(opaque, "utf8"), "stable\n");
+    assert.equal(await readFile(path.join(project, ".woma"), "utf8"), "user-owned path\n");
   } finally {
     if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
     else process.env.WOMA_ENV = previousEnvironment;
@@ -1322,8 +1362,8 @@ test("managed Agent home drift is rejected before project activation", { concurr
   }
 });
 
-test("foundational Package names cannot be replaced by user sources", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "woma-foundational-identity-"));
+test("the former Memory Package name has no special semantics", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-former-memory-name-"));
   process.env.WOMA_HOME = path.join(root, "home");
   try {
     const replacement = path.join(root, "replacement");
@@ -1351,8 +1391,14 @@ spec:
     );
     await createEnvironment(root, "tools", ["codex"]);
 
-    await assert.rejects(installIntoEnvironment(root, "tools", replacement), /can only be installed from builtin:/);
-    assert.equal((await readEnvironmentLock(root, "tools")).packages["woma-project-memory"]?.source, "builtin:woma-project-memory");
+    await installIntoEnvironment(root, "tools", replacement);
+
+    assert.equal((await readEnvironmentLock(root, "tools")).packages["woma-project-memory"]?.source, `file:${replacement}`);
+    assert.match(
+      await readFile(path.join(environmentViewPath("tools"), "codex", "skills", "woma-project-memory", "SKILL.md"), "utf8"),
+      /Replacement/,
+    );
+    await assert.rejects(access(path.join(root, "AGENTS.md")), /ENOENT/);
   } finally {
     await removeTestTree(root);
   }

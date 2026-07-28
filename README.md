@@ -15,7 +15,7 @@ Conda-style Environment and Package management for Codex, Claude Code, Pi, and Q
 - **Direct Skill installation** from standalone and conventional multi-Skill sources.
 - **Immediate cross-Agent Skill sharing** inside each Environment alongside explicit migration into reusable Packages.
 - **Portable Environment bundles** for moving complete Package closures between machines.
-- **Project Memory** and Package authoring tools in every Environment.
+- **Empty-by-default Environments** that contain only explicitly installed capabilities.
 
 ## Requirements
 
@@ -130,6 +130,8 @@ Every target Agent's `skills` path resolves to one stable Environment-level dire
 
 Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time; their Agent homes, credentials, provider configuration, sessions, and Codex system Skills remain isolated. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
 
+Woma manages capabilities and isolated Agent Environments, not Agent Memory or project context. It does not define context paths, inject discovery instructions, or read, write, package, or delete Memory data. The only compatibility exception is removal of exact legacy discovery blocks that earlier Woma versions added to `AGENTS.md` or `CLAUDE.md`. Agents and users choose how context is loaded and persisted.
+
 ## Export and Recreate
 
 ```bash
@@ -166,14 +168,17 @@ woma skeleton workflow research-review --output-dir ./packages --version 0.1.0
 woma inspect ./packages/research-review
 ```
 
-The provider-oriented `skeleton` interface follows `conda skeleton` while adding the Woma-specific `workflow` recipe type. Use the foundational `woma-package-builder` Skill for richer Package composition and updates.
+The provider-oriented `skeleton` interface follows `conda skeleton` while adding the Woma-specific `workflow` recipe type. For richer Package composition and updates, install the optional Package Builder in the intended Environment:
+
+```bash
+woma install builtin:woma-package-builder
+```
 
 ## Documentation
 
 - [Command reference](docs/commands.md)
 - [Architecture and isolation model](docs/design.md)
 - [Package manifest](docs/manifest.md)
-- [Project Memory](docs/project-memory.md)
 - [Security](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 

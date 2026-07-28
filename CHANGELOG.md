@@ -2,14 +2,15 @@
 
 ## Unreleased
 
-- Breaking: renamed the project, npm package, CLI, environment variables, paths, manifests, bundle format, and foundational Packages to Woma. Existing installations and project metadata must be recreated with the Woma names.
+- Breaking: removed Woma-owned Project Memory, startup injection, Memory paths in `info --json`, and the `woma-project-memory` built-in. Environment schema v2 starts empty and upgrades v1 by pruning the exact formerly implicit helper roots without touching user-owned Memory data.
+- Breaking: renamed the project, npm package, CLI, environment variables, paths, manifests, bundle format, and built-in Packages to Woma. Existing installations and project metadata must be recreated with the Woma names.
 - Added opt-in Qoder CLI Agent targets with isolated `QODER_CONFIG_DIR` homes, atomic Skill views, Package MCP servers and Hooks merged into the managed `settings.json`, shell activation, and inclusion in `--target all`; Woma does not capture, migrate, or seed Qoder credentials or sessions.
 - Added Conda-style top-level `create`, `export`, `remove`, `run`, and `rename` commands; portable bundles are now restored with `create --file`, and the former `env import` command has been removed.
 - Changed `woma deactivate` to leave Woma Environment management, restore the original Agent homes, and clear the shell selection; use `woma activate base` to select Woma `base` explicitly.
 - Removed the public `woma shell` command; `woma init` is now the sole shell-integration entrypoint and continues to install a static startup hook.
 - Added one stable Skill root per Environment shared by every target Agent, so an ordinary Skill installed through Codex, Claude Code, Pi, or Qoder CLI is immediately visible to all targets without a second command; legacy per-Agent layouts merge transactionally, automatically deduplicate verifiably equivalent same-name entries, reject differing collisions, keep hidden state excluded from inventory, and leave other Environments isolated.
 - Removed the public `woma sync` command; install and non-dry-run uninstall now repair the existing locked Package closure before applying their requested mutation.
-- Added `woma remove` (`uninstall` alias) with active-or-named Environment selection, dry-run resource plans, shared-dependency retention, orphan pruning, foundational Package protection, and atomic rollback across recipes, locks, stable Agent homes, and views.
+- Added `woma remove` (`uninstall` alias) with active-or-named Environment selection, dry-run resource plans, shared-dependency retention, orphan pruning, and atomic rollback across recipes, locks, stable Agent homes, and views.
 - Added direct Git subdirectory installation with optional full-commit selection and immutable commit/content-integrity provenance preserved through Package repair, `woma list`, and portable bundles.
 - Reassigned `woma init` to Conda-style shell initialization with a static hook, managed profile block, dry-run, reversal, and post-install guidance; moved its former Package scaffold to the provider-oriented `woma skeleton workflow` interface while retaining `woma-package-builder` for full authoring.
 - Made shell-hook generation read-only and independent of Environment initialization, locks, validation, Package loading, and repair, with bounded shell-side fallback to the original Agent homes.
@@ -20,20 +21,17 @@
 - Added explicit `woma migrate sessions` snapshots from original Agent homes into Environment-owned ordinary files, including structured JSONL history merging, without implicit initialization-time migration or links back to the source.
 - Replaced shared runtime adoption with stable per-Environment Agent homes and inherited Environment-specific credentials/provider settings, so unknown state and SQLite databases are never copied across view generations.
 - Added deterministic installation of standalone Skills and direct conventional multi-Skill sources through one shared Source Adapter.
-- Replaced the foundational authoring assistant with a general `woma-package-builder` for wrapping resources and creating dependency-based Packages with optional coordinating Skills.
+- Added the optional `woma-package-builder` for wrapping resources and creating dependency-based Packages with optional coordinating Skills.
 - Added explicit migration of existing Agent Skills into a selected Environment and stable per-Environment Codex system Skills.
 - Added deterministic, offline-capable Environment bundle export/import with complete Package closures and atomic destination publication.
 - Added global, content-addressed Package storage and user-global named Environment recipes and locks.
 - Added atomic global per-Environment Codex and Claude views backed by Package Store symlinks.
 - Added shell selection of stable Environment Agent homes for direct `codex` and `claude` launches.
 - Added cross-process Environment, Package Store, and project activation locks with stale-lock recovery.
-- Made Project Memory discovery stable across shell-local target changes while preserving instruction symlinks and file modes.
 - Added an implicit, non-removable `base` Environment.
 - Made Package Store entries read-only and Agent view publication generation-atomic.
 - Made `base` repairable from its lock even when its cache or view is damaged.
-- Hardened shell selection, foundational Package identity, exact Skill visibility, and canonical project locking.
-- Made `woma-project-memory` and `woma-package-builder` foundational in every Environment.
+- Hardened shell selection, Package identity, exact Skill visibility, and canonical project locking.
 - Added recursive Package dependencies and installable natural-language methods expressed by ordinary coordinating Skills.
 - Added atomic Environment view updates and installation with ordinary-error rollback.
-- Added isolated Project Memory with Agent startup discovery and Package-to-Skill mapping.
-- Added `woma info --json` as the machine-readable Agent and Memory context interface.
+- Added `woma info --json` as the machine-readable Environment interface.
