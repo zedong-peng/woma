@@ -911,6 +911,39 @@ test("doctor derives activation exclusively from the shell Environment", { concu
   }
 });
 
+test("doctor checks native CLIs only for Environment targets", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-agent-cli-"));
+  const bin = path.join(root, "bin");
+  const previousPath = process.env.PATH;
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await mkdir(bin, { recursive: true });
+    const codex = path.join(bin, "codex");
+    await writeFile(codex, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(codex, 0o755);
+    process.env.PATH = bin;
+    await createEnvironment(root, "research", ["codex", "pi"]);
+
+    const checks = await doctorEnvironment(root, "research");
+    assert.deepEqual(checks.find((check) => check.label === "agent-cli:codex"), {
+      status: "ok",
+      label: "agent-cli:codex",
+      detail: codex,
+    });
+    assert.deepEqual(checks.find((check) => check.label === "agent-cli:pi"), {
+      status: "warn",
+      label: "agent-cli:pi",
+      detail: "pi not found on PATH",
+    });
+    assert.equal(checks.some((check) => check.label === "agent-cli:claude"), false);
+    assert.equal(checks.some((check) => check.label === "agent-cli:qoder"), false);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await removeTestTree(root);
+  }
+});
+
 test("doctor reports modified Agent Memory discovery instructions", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-context-doctor-"));
   const previousEnvironment = process.env.HARNESS_ENV;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -372,6 +372,42 @@ test("CLI creates Pi and all-target Environments", { concurrency: false }, async
     assert.equal(imported.code, 0, imported.stderr);
     assert.match(await readFile(path.join(home, "environments", "all-agents-copy", "view", "pi", "skills", "harness-project-memory", "SKILL.md"), "utf8"), /Harness Project Memory/);
   } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("CLI info reports Agent executables found on PATH", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-agent-info-"));
+  const home = path.join(root, "home");
+  const bin = path.join(root, "bin");
+  const previousPath = process.env.PATH;
+  try {
+    await mkdir(bin, { recursive: true });
+    for (const command of ["codex", "qodercli"]) {
+      const executable = path.join(bin, command);
+      await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
+      await chmod(executable, 0o755);
+    }
+    process.env.PATH = bin;
+
+    const jsonResult = await runCli(["info", "--json"], root, home);
+    assert.equal(jsonResult.code, 0, jsonResult.stderr);
+    const context = JSON.parse(jsonResult.stdout) as {
+      agentClis: Record<string, { command: string; available: boolean; path: string | null }>;
+    };
+    assert.deepEqual(context.agentClis.codex, { command: "codex", available: true, path: path.join(bin, "codex") });
+    assert.deepEqual(context.agentClis.claude, { command: "claude", available: false, path: null });
+    assert.deepEqual(context.agentClis.pi, { command: "pi", available: false, path: null });
+    assert.deepEqual(context.agentClis.qoder, { command: "qodercli", available: true, path: path.join(bin, "qodercli") });
+
+    const humanResult = await runCli(["info"], root, home);
+    assert.equal(humanResult.code, 0, humanResult.stderr);
+    assert.ok(humanResult.stdout.includes(`codex   ${path.join(bin, "codex")}`));
+    assert.match(humanResult.stdout, /claude\s+claude not found on PATH/);
+    assert.ok(humanResult.stdout.includes(`qoder   ${path.join(bin, "qodercli")}`));
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     await removeTestTree(root);
   }
 });

@@ -1,11 +1,11 @@
-import { access, lstat, readlink, readdir, readFile, rename, rm, symlink } from "node:fs/promises";
+import { lstat, readlink, readdir, readFile, rename, rm, symlink } from "node:fs/promises";
 import path from "node:path";
-import { constants } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { satisfies } from "semver";
 import { z } from "zod";
 import { AGENT_SESSION_ENTRIES, AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
+import { detectAgentCli, detectAgentClis, findExecutable, type AgentCliStatus } from "./agent-cli.js";
 import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
 import { withEnvironmentLock, withProjectLock } from "./environment-lock.js";
 import { installPackageTree, loadCachedPackage, repairLockedPackage, type PackageInstallPlan, type PackageSourceOptions } from "./package.js";
@@ -102,6 +102,7 @@ export interface EnvironmentCheck {
 export interface CurrentEnvironmentContext {
   projectRoot: string;
   environment: { name: string; targets: Platform[] } | null;
+  agentClis: Record<Platform, AgentCliStatus>;
   memory: { project: string; local: string };
   packages: {
     name: string;
@@ -981,8 +982,10 @@ async function loadOrderedPackages(projectRoot: string, name: string): Promise<L
 export async function environmentInfo(projectRoot: string): Promise<CurrentEnvironmentContext> {
   const project = path.resolve(projectRoot);
   const memory = { project: projectMemoryPath(project), local: localMemoryPath(project) };
+  const agentsPromise = detectAgentClis();
   const selected = process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT;
   if (selected === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(project);
+  const agentClis = await agentsPromise;
   return withEnvironmentLock(selected, async () => {
     const loaded = await loadOrderedPackages(project, selected);
     const managedSkillNames = new Set<string>();
@@ -993,6 +996,7 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
     return {
       projectRoot: project,
       environment: { name: loaded.environment.metadata.name, targets: loaded.environment.spec.targets },
+      agentClis,
       memory,
       packages: loaded.names.map((name) => {
         const pkg = loaded.packages.get(name)!;
@@ -1088,24 +1092,6 @@ export async function activateEnvironment(
   });
 }
 
-async function findCommand(command: string): Promise<boolean> {
-  if (command.includes(path.sep)) {
-    return access(command, constants.X_OK).then(
-      () => true,
-      () => false,
-    );
-  }
-  for (const directory of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
-    if (
-      await access(path.join(directory, command), constants.X_OK).then(
-        () => true,
-        () => false,
-      )
-    ) return true;
-  }
-  return false;
-}
-
 async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Promise<EnvironmentCheck[]> {
   const checks: EnvironmentCheck[] = [];
   let environment: HarnessEnvironment;
@@ -1127,6 +1113,16 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
     return checks;
   }
   checks.push({ status: "ok", label: "roots", detail: environment.spec.roots.map((root) => root.name).join(", ") || "none" });
+  const targetAgents = await Promise.all(
+    environment.spec.targets.map(async (target) => ({ target, agent: await detectAgentCli(target) })),
+  );
+  for (const { target, agent } of targetAgents) {
+    checks.push({
+      status: agent.available ? "ok" : "warn",
+      label: `agent-cli:${target}`,
+      detail: agent.path ?? `${agent.command} not found on PATH`,
+    });
+  }
   const managedSkillNames = new Set<string>();
   for (const packageName of names) {
     let pkg: InstalledPackage;
@@ -1154,7 +1150,7 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
       if (server.transport === "stdio" && appliesToEnvironment) commands.add(server.command);
     }
     for (const command of commands) {
-      const found = await findCommand(command);
+      const found = await findExecutable(command);
       checks.push({ status: found ? "ok" : "fail", label: `command:${command}`, detail: found ? "found" : "not found on PATH" });
     }
     for (const requirement of pkg.manifest.spec.requirements.env) {

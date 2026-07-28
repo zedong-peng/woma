@@ -150,6 +150,8 @@ harness inspect builtin:auto-research
 
 `harness env list` shows registered Environment names and marks the one selected by the current shell; it does not perform a health check. Use `harness doctor --name <environment>` to validate an Environment.
 
+`harness info` reports the native `codex`, `claude`, `pi`, and `qodercli` executables available on the current `PATH`. `harness doctor` checks only the selected Environment's targets and warns when a target CLI is unavailable without treating the portable Environment itself as corrupt.
+
 `harness list` and `harness info --json` inspect ordinary Environment-local Skills directly from the shared Skill directory and report every target that can use them. They do not copy those external Skills into the Package Store, recipe, lock, or bundle. Install a Skill through `harness install` only when it should become a reusable, locked Harness Package. Hidden entries, including `.system`, remain opaque Agent-owned state, and Environment-local Skills never cross Environment boundaries.
 
 ## Author Packages
