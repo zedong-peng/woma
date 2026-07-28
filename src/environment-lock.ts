@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { mkdir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { harnessHome, writeJsonAtomic } from "./fs.js";
+import { womaHome, writeJsonAtomic } from "./fs.js";
 
 const LOCK_TIMEOUT_MS = 60_000;
 const STALE_LOCK_MS = 5 * 60_000;
@@ -18,7 +18,7 @@ interface LockOwner {
 
 function environmentLockPath(name: string): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error(`Invalid Environment lock name: ${name}`);
-  return path.join(harnessHome(), "locks", "environments", `${name}.lock`);
+  return path.join(womaHome(), "locks", "environments", `${name}.lock`);
 }
 
 function processIsAlive(pid: number): boolean {
@@ -121,7 +121,7 @@ export async function withProjectLock<T>(projectRoot: string, operation: () => P
     throw error;
   });
   const key = createHash("sha256").update(project).digest("hex").slice(0, 24);
-  const directory = path.join(harnessHome(), "locks", "projects", `${key}.lock`);
+  const directory = path.join(womaHome(), "locks", "projects", `${key}.lock`);
   const release = await acquire(directory, `project ${project}`);
   try {
     return await operation();
@@ -133,7 +133,7 @@ export async function withProjectLock<T>(projectRoot: string, operation: () => P
 export async function withPackageLock<T>(name: string, cacheKey: string, operation: () => Promise<T>): Promise<T> {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(name)) throw new Error(`Invalid Package lock name: ${name}`);
   if (!/^[a-f0-9]{20}$/.test(cacheKey)) throw new Error(`Invalid Package cache key: ${cacheKey}`);
-  const directory = path.join(harnessHome(), "locks", "packages", name, `${cacheKey}.lock`);
+  const directory = path.join(womaHome(), "locks", "packages", name, `${cacheKey}.lock`);
   const release = await acquire(directory, `Package ${name}/${cacheKey}`);
   try {
     return await operation();

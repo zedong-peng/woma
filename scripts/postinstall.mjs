@@ -1,9 +1,9 @@
 if (!process.env.CI) {
   process.stdout.write(`
-Harness Conda installed.
+Woma installed.
 
 Initialize shell integration:
-  harness init
+  woma init
 
 Then restart your shell.
 

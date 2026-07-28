@@ -18,9 +18,9 @@ async function write(filePath: string, content: string | Buffer, mode?: number):
 async function portablePackage(root: string): Promise<string> {
   const packageRoot = path.join(root, "local-performance");
   await write(
-    path.join(packageRoot, "harness.yaml"),
-    `apiVersion: harness.conda/v1
-kind: Harness
+    path.join(packageRoot, "woma.yaml"),
+    `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: local-performance
   version: 1.2.3
@@ -51,6 +51,7 @@ spec:
   );
   await write(path.join(packageRoot, "skills", "local-performance", "data.bin"), Buffer.from([0, 255, 128, 1, 2, 0]));
   await write(path.join(packageRoot, "skills", "local-performance", "run.sh"), "#!/bin/sh\nexit 0\n", 0o755);
+  await write(path.join(packageRoot, ".harness", "local", "memory.md"), "legacy-private-memory\n");
   return packageRoot;
 }
 
@@ -61,12 +62,12 @@ function rewriteBundle(input: Buffer, mutate: (document: any) => void): Buffer {
 }
 
 test("Environment bundle restores a local Package offline into a fresh Store", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-bundle-roundtrip-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-bundle-roundtrip-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    harnessEnvironment: process.env.HARNESS_ENV,
-    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    womaHome: process.env.WOMA_HOME,
+    womaEnvironment: process.env.WOMA_ENV,
+    codexHome: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     const projectA = path.join(root, "project-a");
@@ -74,13 +75,13 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     const originalCodex = path.join(root, "original-codex");
     const originalClaude = path.join(root, "original-claude");
     const source = await portablePackage(root);
-    const bundle = path.join(root, "performance.harness-env");
+    const bundle = path.join(root, "performance.woma-env");
     await write(path.join(originalCodex, "auth.json"), '{"token":"must-not-export"}\n');
-    await write(path.join(projectA, ".harness", "memory", "project.md"), "private project memory\n");
-    process.env.HARNESS_HOME = path.join(root, "home-a");
-    process.env.HARNESS_ENV = "base";
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = originalCodex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
+    await write(path.join(projectA, ".woma", "memory", "project.md"), "private project memory\n");
+    process.env.WOMA_HOME = path.join(root, "home-a");
+    process.env.WOMA_ENV = "base";
+    process.env.WOMA_ORIGINAL_CODEX_HOME = originalCodex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
     await createEnvironment(projectA, "performance", ["codex", "claude"]);
     await installIntoEnvironment(projectA, "performance", source);
     await write(
@@ -91,18 +92,18 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     const first = await exportEnvironmentBundle(projectA, "performance", bundle);
     assert.equal(first.packages, 3);
 
-    const secondBundle = path.join(root, "performance-copy.harness-env");
+    const secondBundle = path.join(root, "performance-copy.woma-env");
     await exportEnvironmentBundle(projectA, "performance", secondBundle);
     assert.deepEqual(await readFile(bundle), await readFile(secondBundle));
     const unchanged = await readFile(bundle);
     await assert.rejects(exportEnvironmentBundle(projectA, "performance", bundle), /Refusing to overwrite/);
     assert.deepEqual(await readFile(bundle), unchanged);
     const document = gunzipSync(await readFile(bundle)).toString("utf8");
-    assert.doesNotMatch(document, /must-not-export|private project memory|auth\.json|private-runtime-skill/);
+    assert.doesNotMatch(document, /must-not-export|private project memory|legacy-private-memory|auth\.json|private-runtime-skill/);
 
     await rm(source, { recursive: true, force: true });
-    await removeTestTree(process.env.HARNESS_HOME);
-    process.env.HARNESS_HOME = path.join(root, "home-b");
+    await removeTestTree(process.env.WOMA_HOME);
+    process.env.WOMA_HOME = path.join(root, "home-b");
     const imported = await importEnvironmentBundle(projectB, bundle);
     assert.equal(imported.snapshot.environment.metadata.name, "performance");
     assert.deepEqual(imported.snapshot.environment.spec, before.environment.spec);
@@ -115,27 +116,27 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
       Buffer.from([0, 255, 128, 1, 2, 0]),
     );
     assert.equal((await readFile(path.join(local.root, "skills", "local-performance", "run.sh"), "utf8")).startsWith("#!/bin/sh"), true);
-    assert.match(await readFile(path.join(process.env.HARNESS_HOME, "environments", "performance", "view", "codex", "config.toml"), "utf8"), /local-tools/);
-    assert.match(await readFile(path.join(process.env.HARNESS_HOME, "environments", "performance", "view", "claude", "settings.json"), "utf8"), /git diff --check/);
+    assert.match(await readFile(path.join(process.env.WOMA_HOME, "environments", "performance", "view", "codex", "config.toml"), "utf8"), /local-tools/);
+    assert.match(await readFile(path.join(process.env.WOMA_HOME, "environments", "performance", "view", "claude", "settings.json"), "utf8"), /git diff --check/);
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previous.harnessEnvironment;
-    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
-    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.womaEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previous.womaEnvironment;
+    if (previous.codexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
     await removeTestTree(root);
   }
 });
 
 test("Environment bundle import supports rename and refuses destructive conflicts", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-bundle-name-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-bundle-name-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const source = await portablePackage(root);
-    const bundle = path.join(root, "environment.harness-env");
+    const bundle = path.join(root, "environment.woma-env");
     await createEnvironment(root, "source", ["codex"]);
     await installIntoEnvironment(root, "source", source);
     await exportEnvironmentBundle(root, "source", bundle);
@@ -150,17 +151,17 @@ test("Environment bundle import supports rename and refuses destructive conflict
 });
 
 test("Environment bundle rejects unsafe paths and tampered Package bytes without publishing an Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-bundle-tamper-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-bundle-tamper-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const source = await portablePackage(root);
-    const bundle = path.join(root, "environment.harness-env");
+    const bundle = path.join(root, "environment.woma-env");
     await createEnvironment(root, "source", ["codex"]);
     await installIntoEnvironment(root, "source", source);
     await exportEnvironmentBundle(root, "source", bundle);
     const original = await readFile(bundle);
 
-    const traversal = path.join(root, "traversal.harness-env");
+    const traversal = path.join(root, "traversal.woma-env");
     await writeFile(
       traversal,
       rewriteBundle(original, (document) => {
@@ -171,7 +172,7 @@ test("Environment bundle rejects unsafe paths and tampered Package bytes without
     await assert.rejects(readFile(environmentPath(root, "unsafe")), /ENOENT/);
     await assert.rejects(readFile(path.join(root, "escape")), /ENOENT/);
 
-    const windowsTraversal = path.join(root, "windows-traversal.harness-env");
+    const windowsTraversal = path.join(root, "windows-traversal.woma-env");
     await writeFile(
       windowsTraversal,
       rewriteBundle(original, (document) => {
@@ -181,7 +182,17 @@ test("Environment bundle rejects unsafe paths and tampered Package bytes without
     await assert.rejects(importEnvironmentBundle(root, windowsTraversal, "windows-unsafe"), /unsafe Package path/);
     await assert.rejects(readFile(environmentPath(root, "windows-unsafe")), /ENOENT/);
 
-    const corrupted = path.join(root, "corrupted.harness-env");
+    const legacyState = path.join(root, "legacy-state.woma-env");
+    await writeFile(
+      legacyState,
+      rewriteBundle(original, (document) => {
+        document.packages[0].files[0].path = ".harness/local/memory.md";
+      }),
+    );
+    await assert.rejects(importEnvironmentBundle(root, legacyState, "legacy-state"), /excluded Package path/);
+    await assert.rejects(readFile(environmentPath(root, "legacy-state")), /ENOENT/);
+
+    const corrupted = path.join(root, "corrupted.woma-env");
     await writeFile(
       corrupted,
       rewriteBundle(original, (document) => {
@@ -197,8 +208,8 @@ test("Environment bundle rejects unsafe paths and tampered Package bytes without
 });
 
 test("Environment bundle export rejects Package symlinks", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-bundle-symlink-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-bundle-symlink-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const source = await portablePackage(root);
     await write(path.join(root, "outside.txt"), "outside\n");
@@ -206,7 +217,7 @@ test("Environment bundle export rejects Package symlinks", { concurrency: false 
     await createEnvironment(root, "source", ["codex"]);
     await installIntoEnvironment(root, "source", source);
     await assert.rejects(
-      exportEnvironmentBundle(root, "source", path.join(root, "environment.harness-env")),
+      exportEnvironmentBundle(root, "source", path.join(root, "environment.woma-env")),
       /does not support symbolic links/,
     );
   } finally {
@@ -215,15 +226,15 @@ test("Environment bundle export rejects Package symlinks", { concurrency: false 
 });
 
 test("Environment bundle validates the complete dependency graph before publication", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-bundle-rollback-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-bundle-rollback-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const source = await portablePackage(root);
-    const bundle = path.join(root, "environment.harness-env");
+    const bundle = path.join(root, "environment.woma-env");
     await createEnvironment(root, "source", ["codex"]);
     await installIntoEnvironment(root, "source", source);
     await exportEnvironmentBundle(root, "source", bundle);
-    const invalid = path.join(root, "invalid-platform.harness-env");
+    const invalid = path.join(root, "invalid-platform.woma-env");
     await writeFile(
       invalid,
       rewriteBundle(await readFile(bundle), (document) => {

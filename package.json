@@ -1,23 +1,22 @@
 {
-  "name": "harness-conda",
+  "name": "woma",
   "version": "0.6.0",
   "description": "Create, reproduce, and switch isolated Agent environments.",
   "type": "module",
   "bin": {
-    "harness": "dist/src/cli.js",
-    "harness-conda": "dist/src/cli.js"
+    "woma": "dist/src/cli.js"
   },
   "files": [
     "dist/src",
     "docs",
-    "examples/harness-project-memory",
+    "examples/woma-project-memory",
     "examples/performance-engineering",
     "examples/reproducibility-core",
     "examples/paper-search",
     "examples/idea-gen",
     "examples/exp-design",
     "examples/auto-research",
-    "examples/harness-package-builder",
+    "examples/woma-package-builder",
     "scripts/benchmark-switch.mjs",
     "scripts/postinstall.mjs",
     "CHANGELOG.md",
@@ -42,7 +41,7 @@
     "mcp",
     "codex",
     "claude-code",
-    "harness",
+    "woma",
     "environment",
     "package-manager",
     "reproducibility"

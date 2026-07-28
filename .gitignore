@@ -1,10 +1,10 @@
 node_modules/
 dist/
 .DS_Store
-.harness/state.json
-.harness/local/
-.harness/cache/
-.harness/memory/
+.woma/state.json
+.woma/local/
+.woma/cache/
+.woma/memory/
 AGENTS.md
 CLAUDE.md
 *.log

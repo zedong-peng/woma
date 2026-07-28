@@ -38,7 +38,7 @@ test("shell resolution supports explicit and login-shell bash or zsh", () => {
 });
 
 test("bash hook keeps the shell Environment across project directories", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-hook-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-hook-"));
   try {
     const project = path.join(root, "project");
     const nested = path.join(project, "src", "nested");
@@ -47,19 +47,19 @@ test("bash hook keeps the shell Environment across project directories", async (
     await fakeEnvironment(path.join(root, "home"), "research", ["codex", "claude"]);
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     await run("bash", ["-n", hookPath]);
-    const script = 'source "$1"\ncd "$2"\n__harness_prompt_update\nprintf \'%s|%s|%s|%s\' "$HARNESS_PROMPT_PREFIX" "$HARNESS_ENV" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"';
-    const options = { env: { ...process.env, HARNESS_HOME: path.join(root, "home"), HARNESS_ENV: "research" } };
+    const script = 'source "$1"\ncd "$2"\n__woma_prompt_update\nprintf \'%s|%s|%s|%s\' "$WOMA_PROMPT_PREFIX" "$WOMA_ENV" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR"';
+    const options = { env: { ...process.env, WOMA_HOME: path.join(root, "home"), WOMA_ENV: "research" } };
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested], options);
     assert.equal(
       stdout,
-      `(harness:research) |research|${path.join(root, "home", "environments", "research", "home", "codex")}|${path.join(root, "home", "environments", "research", "home", "claude")}`,
+      `(woma:research) |research|${path.join(root, "home", "environments", "research", "home", "codex")}|${path.join(root, "home", "environments", "research", "home", "claude")}`,
     );
 
-    await mkdir(path.join(nested, ".harness"));
+    await mkdir(path.join(nested, ".woma"));
     const inner = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath, nested], options);
     assert.equal(
       inner.stdout,
-      `(harness:research) |research|${path.join(root, "home", "environments", "research", "home", "codex")}|${path.join(root, "home", "environments", "research", "home", "claude")}`,
+      `(woma:research) |research|${path.join(root, "home", "environments", "research", "home", "codex")}|${path.join(root, "home", "environments", "research", "home", "claude")}`,
     );
   } finally {
     await removeTestTree(root);
@@ -68,44 +68,46 @@ test("bash hook keeps the shell Environment across project directories", async (
 
 test("zsh hook installs an idempotent precmd prompt prefix", () => {
   const hook = renderShellHook("zsh");
-  assert.doesNotMatch(hook, /state\.json|__harness_find_state/);
-  assert.match(hook, /add-zsh-hook precmd __harness_prompt_update/);
-  assert.match(hook, /PROMPT='\$\{HARNESS_PROMPT_PREFIX\}'/);
-  assert.match(hook, /HARNESS_SHELL_HOOK_INSTALLED/);
-  assert.match(hook, /HARNESS_ORIGINAL_CODEX_HOME/);
+  assert.doesNotMatch(hook, /state\.json|__woma_find_state/);
+  assert.match(hook, /add-zsh-hook precmd __woma_prompt_update/);
+  assert.match(hook, /PROMPT='\$\{WOMA_PROMPT_PREFIX\}'/);
+  assert.match(hook, /WOMA_SHELL_HOOK_INSTALLED/);
+  assert.match(hook, /WOMA_ORIGINAL_CODEX_HOME/);
   assert.match(hook, /CLAUDE_CONFIG_DIR=.*environments.*home\/claude/);
-  assert.match(hook, /HARNESS_ORIGINAL_PI_CODING_AGENT_DIR/);
+  assert.match(hook, /WOMA_ORIGINAL_PI_CODING_AGENT_DIR/);
   assert.match(hook, /PI_CODING_AGENT_DIR=.*environments.*home\/pi/);
-  assert.match(hook, /HARNESS_ORIGINAL_QODER_CONFIG_DIR/);
+  assert.match(hook, /WOMA_ORIGINAL_QODER_CONFIG_DIR/);
   assert.match(hook, /QODER_CONFIG_DIR=.*environments.*home\/qoder/);
+  assert.equal((hook.match(/^woma\(\) \{/gm) ?? []).length, 1);
+  assert.doesNotMatch(hook, /\bwoma-conda\b/);
 });
 
 test("zsh hook updates the parent shell after activate", async (context) => {
   const zsh = await findExecutable("zsh");
   if (!zsh) return context.skip("zsh is not installed");
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-zsh-activation-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-zsh-activation-"));
   try {
     const hookPath = path.join(root, "hook.zsh");
-    const executable = path.join(root, "bin", "harness");
+    const executable = path.join(root, "bin", "woma");
     await mkdir(path.dirname(executable), { recursive: true });
     await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(executable, 0o755);
-    const harnessHome = path.join(root, "home");
-    await fakeEnvironment(harnessHome, "research", ["codex"]);
-    await fakeEnvironment(harnessHome, "base", ["codex", "claude"]);
+    const womaHome = path.join(root, "home");
+    await fakeEnvironment(womaHome, "research", ["codex"]);
+    await fakeEnvironment(womaHome, "base", ["codex", "claude"]);
     await writeFile(hookPath, renderShellHook("zsh"), "utf8");
     const script = [
       'source "$1"',
-      "harness activate research",
-      '__harness_prompt_update',
-      'printf \'%s|%s|%s\' "$HARNESS_PROMPT_PREFIX" "$HARNESS_ENV" "$CODEX_HOME"',
+      "woma activate research",
+      '__woma_prompt_update',
+      'printf \'%s|%s|%s\' "$WOMA_PROMPT_PREFIX" "$WOMA_ENV" "$CODEX_HOME"',
     ].join("\n");
     const { stdout } = await run(zsh, ["-f", "-c", script, "zsh", hookPath], {
-      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome },
+      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, WOMA_HOME: womaHome },
     });
     assert.equal(
       stdout,
-      `(harness:research) |research|${path.join(harnessHome, "environments", "research", "home", "codex")}`,
+      `(woma:research) |research|${path.join(womaHome, "environments", "research", "home", "codex")}`,
     );
   } finally {
     await removeTestTree(root);
@@ -113,27 +115,27 @@ test("zsh hook updates the parent shell after activate", async (context) => {
 });
 
 test("bash hook restores the original Agent homes after deactivate", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-activation-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-activation-"));
   try {
     const hookPath = path.join(root, "hook.bash");
-    const executable = path.join(root, "bin", "harness");
+    const executable = path.join(root, "bin", "woma");
     await mkdir(path.dirname(executable), { recursive: true });
     await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(executable, 0o755);
-    const harnessHome = path.join(root, "home");
+    const womaHome = path.join(root, "home");
     const originalCodex = path.join(root, "original-codex");
     const originalClaude = path.join(root, "original-claude");
     const originalPi = path.join(root, "original-pi");
-    await fakeEnvironment(harnessHome, "research", ["codex"]);
-    await fakeEnvironment(harnessHome, "base", ["codex", "claude"]);
+    await fakeEnvironment(womaHome, "research", ["codex"]);
+    await fakeEnvironment(womaHome, "base", ["codex", "claude"]);
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     const script = [
       'source "$1"',
-      "harness --project /tmp/project activate research",
-      'printf \'%s|%s\\n\' "$HARNESS_ENV" "$CODEX_HOME"',
-      "harness deactivate",
-      "__harness_prompt_update",
-      'printf \'%s|%s|%s|%s|%s\\n\' "${HARNESS_ENV-unset}" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$PI_CODING_AGENT_DIR" "$HARNESS_PROMPT_PREFIX"',
+      "woma --project /tmp/project activate research",
+      'printf \'%s|%s\\n\' "$WOMA_ENV" "$CODEX_HOME"',
+      "woma deactivate",
+      "__woma_prompt_update",
+      'printf \'%s|%s|%s|%s|%s\\n\' "${WOMA_ENV-unset}" "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$PI_CODING_AGENT_DIR" "$WOMA_PROMPT_PREFIX"',
     ].join("\n");
     const { stdout } = await run(
       "bash",
@@ -142,10 +144,10 @@ test("bash hook restores the original Agent homes after deactivate", async () =>
         env: {
           ...process.env,
           PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`,
-          HARNESS_HOME: harnessHome,
-          HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
-          HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
-          HARNESS_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
+          WOMA_HOME: womaHome,
+          WOMA_ORIGINAL_CODEX_HOME: originalCodex,
+          WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+          WOMA_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
           CODEX_HOME: originalCodex,
           CLAUDE_CONFIG_DIR: originalClaude,
           PI_CODING_AGENT_DIR: originalPi,
@@ -154,7 +156,7 @@ test("bash hook restores the original Agent homes after deactivate", async () =>
     );
     assert.equal(
       stdout,
-      `research|${path.join(harnessHome, "environments", "research", "home", "codex")}\nunset|${originalCodex}|${originalClaude}|${originalPi}|\n`,
+      `research|${path.join(womaHome, "environments", "research", "home", "codex")}\nunset|${originalCodex}|${originalClaude}|${originalPi}|\n`,
     );
   } finally {
     await removeTestTree(root);
@@ -162,56 +164,56 @@ test("bash hook restores the original Agent homes after deactivate", async () =>
 });
 
 test("bash hook keeps activate base distinct from deactivate", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-base-activation-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-base-activation-"));
   try {
     const hookPath = path.join(root, "hook.bash");
-    const executable = path.join(root, "bin", "harness");
-    const harnessHome = path.join(root, "home");
+    const executable = path.join(root, "bin", "woma");
+    const womaHome = path.join(root, "home");
     await mkdir(path.dirname(executable), { recursive: true });
     await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(executable, 0o755);
-    await fakeEnvironment(harnessHome, "base", ["codex", "claude"]);
+    await fakeEnvironment(womaHome, "base", ["codex", "claude"]);
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     const script = [
       'source "$1"',
-      "harness deactivate",
-      "harness activate base",
-      "__harness_prompt_update",
-      'printf \'%s|%s|%s\' "$HARNESS_ENV" "$CODEX_HOME" "$HARNESS_PROMPT_PREFIX"',
+      "woma deactivate",
+      "woma activate base",
+      "__woma_prompt_update",
+      'printf \'%s|%s|%s\' "$WOMA_ENV" "$CODEX_HOME" "$WOMA_PROMPT_PREFIX"',
     ].join("\n");
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
-      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome },
+      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, WOMA_HOME: womaHome },
     });
-    assert.equal(stdout, `base|${path.join(harnessHome, "environments", "base", "home", "codex")}|(harness:base) `);
+    assert.equal(stdout, `base|${path.join(womaHome, "environments", "base", "home", "codex")}|(woma:base) `);
   } finally {
     await removeTestTree(root);
   }
 });
 
-test("harness-conda alias also updates the parent shell", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-alias-"));
+test("woma shell wrapper updates the parent shell", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-alias-"));
   try {
     const hookPath = path.join(root, "hook.bash");
-    const executable = path.join(root, "bin", "harness-conda");
+    const executable = path.join(root, "bin", "woma");
     await mkdir(path.dirname(executable), { recursive: true });
     await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(executable, 0o755);
-    const harnessHome = path.join(root, "home");
-    await fakeEnvironment(harnessHome, "research", ["codex"]);
-    await fakeEnvironment(harnessHome, "base", ["codex", "claude"]);
+    const womaHome = path.join(root, "home");
+    await fakeEnvironment(womaHome, "research", ["codex"]);
+    await fakeEnvironment(womaHome, "base", ["codex", "claude"]);
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
-    const script = 'source "$1"\nharness-conda activate research\nprintf \'%s|%s\' "$HARNESS_ENV" "$CODEX_HOME"';
+    const script = 'source "$1"\nwoma activate research\nprintf \'%s|%s\' "$WOMA_ENV" "$CODEX_HOME"';
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
-      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: harnessHome },
+      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, WOMA_HOME: womaHome },
     });
-    assert.equal(stdout, `research|${path.join(harnessHome, "environments", "research", "home", "codex")}`);
+    assert.equal(stdout, `research|${path.join(womaHome, "environments", "research", "home", "codex")}`);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("shell hook restores the original Agent home for an unsupported target", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-target-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-target-"));
   try {
     const hookPath = path.join(root, "hook.bash");
     const home = path.join(root, "home");
@@ -226,10 +228,10 @@ test("shell hook restores the original Agent home for an unsupported target", as
       {
         env: {
           ...process.env,
-          HARNESS_HOME: home,
-          HARNESS_ENV: "codex-only",
-          HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
-          HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+          WOMA_HOME: home,
+          WOMA_ENV: "codex-only",
+          WOMA_ORIGINAL_CODEX_HOME: originalCodex,
+          WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
           CODEX_HOME: originalCodex,
           CLAUDE_CONFIG_DIR: originalClaude,
         },
@@ -242,7 +244,7 @@ test("shell hook restores the original Agent home for an unsupported target", as
 });
 
 test("shell hook selects Pi home and restores unsupported Agent homes", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-pi-target-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-pi-target-"));
   try {
     const hookPath = path.join(root, "hook.bash");
     const home = path.join(root, "home");
@@ -255,11 +257,11 @@ test("shell hook selects Pi home and restores unsupported Agent homes", async ()
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
       env: {
         ...process.env,
-        HARNESS_HOME: home,
-        HARNESS_ENV: "pi-only",
-        HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
-        HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
-        HARNESS_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
+        WOMA_HOME: home,
+        WOMA_ENV: "pi-only",
+        WOMA_ORIGINAL_CODEX_HOME: originalCodex,
+        WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+        WOMA_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
       },
     });
     assert.equal(stdout, `${originalCodex}|${originalClaude}|${path.join(home, "environments", "pi-only", "home", "pi")}`);
@@ -269,7 +271,7 @@ test("shell hook selects Pi home and restores unsupported Agent homes", async ()
 });
 
 test("shell hook selects Qoder home and restores unsupported Agent homes", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-qoder-target-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-qoder-target-"));
   try {
     const hookPath = path.join(root, "hook.bash");
     const home = path.join(root, "home");
@@ -282,11 +284,11 @@ test("shell hook selects Qoder home and restores unsupported Agent homes", async
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
       env: {
         ...process.env,
-        HARNESS_HOME: home,
-        HARNESS_ENV: "qoder-only",
-        HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
-        HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
-        HARNESS_ORIGINAL_QODER_CONFIG_DIR: originalQoder,
+        WOMA_HOME: home,
+        WOMA_ENV: "qoder-only",
+        WOMA_ORIGINAL_CODEX_HOME: originalCodex,
+        WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+        WOMA_ORIGINAL_QODER_CONFIG_DIR: originalQoder,
       },
     });
     assert.equal(stdout, `${originalCodex}|${originalClaude}|${path.join(home, "environments", "qoder-only", "home", "qoder")}`);
@@ -296,10 +298,10 @@ test("shell hook selects Qoder home and restores unsupported Agent homes", async
 });
 
 test("shell wrapper changes state only for a real activation command", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-parser-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-parser-"));
   try {
     const hookPath = path.join(root, "hook.bash");
-    const executable = path.join(root, "bin", "harness");
+    const executable = path.join(root, "bin", "woma");
     const home = path.join(root, "home");
     await mkdir(path.dirname(executable), { recursive: true });
     await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
@@ -309,17 +311,17 @@ test("shell wrapper changes state only for a real activation command", async () 
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     const script = [
       'source "$1"',
-      "harness activate research --help",
-      'printf \'%s\\n\' "$HARNESS_ENV"',
-      "harness inspect activate",
-      'printf \'%s\\n\' "$HARNESS_ENV"',
-      "harness env create deactivate",
-      'printf \'%s\\n\' "$HARNESS_ENV"',
-      "harness activate research",
-      'printf \'%s\\n\' "$HARNESS_ENV"',
+      "woma activate research --help",
+      'printf \'%s\\n\' "$WOMA_ENV"',
+      "woma inspect activate",
+      'printf \'%s\\n\' "$WOMA_ENV"',
+      "woma env create deactivate",
+      'printf \'%s\\n\' "$WOMA_ENV"',
+      "woma activate research",
+      'printf \'%s\\n\' "$WOMA_ENV"',
     ].join("\n");
     const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
-      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, HARNESS_HOME: home },
+      env: { ...process.env, PATH: `${path.dirname(executable)}${path.delimiter}${process.env.PATH ?? ""}`, WOMA_HOME: home },
     });
     assert.equal(stdout, "base\nbase\nbase\nresearch\n");
   } finally {
@@ -328,7 +330,7 @@ test("shell wrapper changes state only for a real activation command", async () 
 });
 
 test("shell hook falls back from a phantom inherited Environment", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-phantom-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-phantom-"));
   try {
     const hookPath = path.join(root, "hook.bash");
     const home = path.join(root, "home");
@@ -336,8 +338,8 @@ test("shell hook falls back from a phantom inherited Environment", async () => {
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     const { stdout, stderr } = await run(
       "bash",
-      ["--noprofile", "--norc", "-c", 'source "$1"\nprintf \'%s\' "$HARNESS_ENV"', "bash", hookPath],
-      { env: { ...process.env, HARNESS_HOME: home, HARNESS_ENV: "missing" } },
+      ["--noprofile", "--norc", "-c", 'source "$1"\nprintf \'%s\' "$WOMA_ENV"', "bash", hookPath],
+      { env: { ...process.env, WOMA_HOME: home, WOMA_ENV: "missing" } },
     );
     assert.equal(stdout, "base");
     assert.match(stderr, /Environment missing is unavailable; using base/);
@@ -347,7 +349,7 @@ test("shell hook falls back from a phantom inherited Environment", async () => {
 });
 
 test("shell hook restores original Agent homes when no Environment is available", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-no-environment-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-no-environment-"));
   try {
     const hookPath = path.join(root, "hook.bash");
     const originalCodex = path.join(root, "original-codex");
@@ -356,7 +358,7 @@ test("shell hook restores original Agent homes when no Environment is available"
     await writeFile(hookPath, renderShellHook("bash"), "utf8");
     const script = [
       'source "$1"',
-      'printf \'%s|%s|%s|%s|%s\' "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$PI_CODING_AGENT_DIR" "${HARNESS_ENV-unset}" "$HARNESS_PROMPT_PREFIX"',
+      'printf \'%s|%s|%s|%s|%s\' "$CODEX_HOME" "$CLAUDE_CONFIG_DIR" "$PI_CODING_AGENT_DIR" "${WOMA_ENV-unset}" "$WOMA_PROMPT_PREFIX"',
     ].join("\n");
     const { stdout, stderr } = await run(
       "bash",
@@ -364,11 +366,11 @@ test("shell hook restores original Agent homes when no Environment is available"
       {
         env: {
           ...process.env,
-          HARNESS_HOME: path.join(root, "missing-home"),
-          HARNESS_ENV: "missing",
-          HARNESS_ORIGINAL_CODEX_HOME: originalCodex,
-          HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
-          HARNESS_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
+          WOMA_HOME: path.join(root, "missing-home"),
+          WOMA_ENV: "missing",
+          WOMA_ORIGINAL_CODEX_HOME: originalCodex,
+          WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: originalClaude,
+          WOMA_ORIGINAL_PI_CODING_AGENT_DIR: originalPi,
           CODEX_HOME: path.join(root, "stale-codex"),
           CLAUDE_CONFIG_DIR: path.join(root, "stale-claude"),
           PI_CODING_AGENT_DIR: path.join(root, "stale-pi"),

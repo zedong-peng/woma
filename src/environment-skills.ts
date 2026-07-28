@@ -2,7 +2,7 @@ import { lstat, readFile, readdir, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import { parseSkillMetadata } from "./package.js";
 import { environmentAgentHomePath, environmentSkillsPath, environmentViewPath } from "./view.js";
-import type { HarnessEnvironment, Platform } from "./types.js";
+import type { WomaEnvironment, Platform } from "./types.js";
 
 export interface EnvironmentLocalSkill {
   name: string;
@@ -48,7 +48,7 @@ async function viewManagedSkillNames(environmentName: string): Promise<Set<strin
 }
 
 export async function inspectEnvironmentLocalSkills(
-  environment: HarnessEnvironment,
+  environment: WomaEnvironment,
   packageManagedNames: ReadonlySet<string> = new Set(),
 ): Promise<EnvironmentLocalSkillInventory> {
   const environmentName = environment.metadata.name;
@@ -138,7 +138,7 @@ export async function inspectEnvironmentLocalSkills(
             entry,
             path: candidate,
             kind: "conflict",
-            detail: `Environment-local Skill ${metadata.name} conflicts with a Harness-managed Skill`,
+            detail: `Environment-local Skill ${metadata.name} conflicts with a Woma-managed Skill`,
           });
           continue;
         } else if (previous) {

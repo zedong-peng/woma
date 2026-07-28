@@ -3,8 +3,8 @@ import path from "node:path";
 import { writeTextPreservingFile } from "./fs.js";
 import type { Action, Platform } from "./types.js";
 
-const markerStart = "<!-- >>> harness-conda:project-memory -->";
-const markerEnd = "<!-- <<< harness-conda:project-memory -->";
+const markerStart = "<!-- >>> woma:project-memory -->";
+const markerEnd = "<!-- <<< woma:project-memory -->";
 
 export interface MemoryBootstrapEnvironment {
   targets: Platform[];
@@ -26,9 +26,9 @@ export interface PreparedMemoryBootstrapTransition {
 
 function discoveryBlock(_platform: Platform): string {
   return `${markerStart}
-## Harness Project Memory
+## Woma Project Memory
 
-At the beginning of the session, use the installed \`harness-project-memory\` Skill. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.
+At the beginning of the session, use the installed \`woma-project-memory\` Skill. Use that Skill before other Woma-installed Skills and whenever the user provides durable project-specific knowledge.
 ${markerEnd}`;
 }
 
@@ -70,14 +70,14 @@ function reconcileBlock(
   const starts = occurrenceCount(content, markerStart);
   const ends = occurrenceCount(content, markerEnd);
   if (starts > 1 || ends > 1 || starts !== ends) {
-    throw new Error(`${display} contains an invalid Harness Project Memory discovery block`);
+    throw new Error(`${display} contains an invalid Woma Project Memory discovery block`);
   }
   const blockAt = content.indexOf(block);
   if (starts === 1 && blockAt === -1) {
-    throw new Error(`${display} Harness Project Memory discovery block was modified; restore it before changing environments`);
+    throw new Error(`${display} Woma Project Memory discovery block was modified; restore it before changing environments`);
   }
   if (starts === 0) {
-    if (required) throw new Error(`${display} Harness Project Memory discovery block is missing; restore it before changing environments`);
+    if (required) throw new Error(`${display} Woma Project Memory discovery block is missing; restore it before changing environments`);
     if (!include) return original;
     if (!content) return `${block}\n`;
     const prefix = content.endsWith("\n") ? content : `${content}\n`;

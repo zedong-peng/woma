@@ -20,9 +20,9 @@ async function write(filePath: string, content: string): Promise<void> {
 async function packageFixture(root: string): Promise<string> {
   const packageRoot = path.join(root, "package");
   await write(
-    path.join(packageRoot, "harness.yaml"),
-    `apiVersion: harness.conda/v1
-kind: Harness
+    path.join(packageRoot, "woma.yaml"),
+    `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: integrity-test
   version: 1.0.0
@@ -54,9 +54,9 @@ async function dependencyFixture(
         )
         .join("\n")}\n`;
   await write(
-    path.join(packageRoot, "harness.yaml"),
-    `apiVersion: harness.conda/v1
-kind: Harness
+    path.join(packageRoot, "woma.yaml"),
+    `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: ${name}
   version: ${version}
@@ -77,8 +77,8 @@ ${dependencyYaml}  entrypoints:
 }
 
 test("the built-in auto-research Package installs its documented component Skills", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-method-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-builtin-method-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const installation = await installPackageTree("builtin:auto-research");
     assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), [
@@ -93,57 +93,57 @@ test("the built-in auto-research Package installs its documented component Skill
   }
 });
 
-test("the built-in Harness Package Builder is a valid general authoring Package", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-package-builder-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+test("the built-in Woma Package Builder is a valid general authoring Package", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-builtin-package-builder-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
-    const installation = await installPackageTree("builtin:harness-package-builder");
-    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["harness-package-builder"]);
+    const installation = await installPackageTree("builtin:woma-package-builder");
+    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["woma-package-builder"]);
     assert.deepEqual(installation.root.lock.dependencies, []);
     assert.deepEqual(installation.root.manifest.spec.requirements.commands, []);
     assert.deepEqual(installation.root.manifest.spec.entrypoints, [
       {
         name: "create-package",
-        skill: "harness-package-builder",
-        description: "Create or update a validated Harness Package containing the requested resources and dependencies.",
+        skill: "woma-package-builder",
+        description: "Create or update a validated Woma Package containing the requested resources and dependencies.",
       },
     ]);
-    const instructions = await readFile(path.join(installation.root.root, "skills", "harness-package-builder", "SKILL.md"), "utf8");
-    assert.match(instructions, /harness inspect <source>/);
+    const instructions = await readFile(path.join(installation.root.root, "skills", "woma-package-builder", "SKILL.md"), "utf8");
+    assert.match(instructions, /woma inspect <source>/);
     assert.match(instructions, /wrap existing Skills, MCP definitions, or hooks/);
     assert.match(instructions, /dependency Packages/);
     assert.match(instructions, /coordinating Skill only when/);
     assert.match(instructions, /Package as the only distribution type/);
     const reference = await readFile(
-      path.join(installation.root.root, "skills", "harness-package-builder", "references", "package-format.md"),
+      path.join(installation.root.root, "skills", "woma-package-builder", "references", "package-format.md"),
       "utf8",
     );
     assert.match(reference, /A dependency-only Package may omit Skills and entrypoints/);
     assert.match(reference, /For MCP servers and hooks/);
     const agentMetadata = await readFile(
-      path.join(installation.root.root, "skills", "harness-package-builder", "agents", "openai.yaml"),
+      path.join(installation.root.root, "skills", "woma-package-builder", "agents", "openai.yaml"),
       "utf8",
     );
-    assert.match(agentMetadata, /display_name: "Harness Package Builder"/);
-    assert.match(agentMetadata, /\$harness-package-builder/);
+    assert.match(agentMetadata, /display_name: "Woma Package Builder"/);
+    assert.match(agentMetadata, /\$woma-package-builder/);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("the built-in Project Memory manager is a normal installable Skill package", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-project-memory-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-builtin-project-memory-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
-    const installation = await installPackageTree("builtin:harness-project-memory");
-    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["harness-project-memory"]);
+    const installation = await installPackageTree("builtin:woma-project-memory");
+    assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["woma-project-memory"]);
     assert.deepEqual(installation.root.lock.dependencies, []);
-    assert.deepEqual(installation.root.manifest.spec.skills.map((skill) => skill.name), ["harness-project-memory"]);
+    assert.deepEqual(installation.root.manifest.spec.skills.map((skill) => skill.name), ["woma-project-memory"]);
     const instructions = await readFile(
-      path.join(installation.root.root, "skills", "harness-project-memory", "SKILL.md"),
+      path.join(installation.root.root, "skills", "woma-project-memory", "SKILL.md"),
       "utf8",
     );
-    assert.match(instructions, /harness info --json/);
+    assert.match(instructions, /woma info --json/);
     assert.match(instructions, /even if the user does not explicitly ask to remember it/);
     assert.match(instructions, /before using another active Skill/);
     assert.match(instructions, /--project <project-root> info --json/);
@@ -154,8 +154,8 @@ test("the built-in Project Memory manager is a normal installable Skill package"
 });
 
 test("the built-in performance method does not require command bindings", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-builtin-performance-memory-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-builtin-performance-memory-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const installation = await installPackageTree("builtin:performance-engineering");
     assert.deepEqual(installation.root.manifest.spec.requirements, { env: [], commands: ["git", "node"] });
@@ -165,8 +165,8 @@ test("the built-in performance method does not require command bindings", { conc
 });
 
 test("installing a Package resolves transitive dependencies in dependency-first order", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-dependencies-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await dependencyFixture(root, "paper-search", "1.2.0");
     await dependencyFixture(root, "idea-gen", "2.0.0", [
@@ -187,8 +187,8 @@ test("installing a Package resolves transitive dependencies in dependency-first 
 });
 
 test("dependency installation rejects cycles", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-dependencies-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const first = await dependencyFixture(root, "first", "1.0.0", [
       { name: "second", version: "1.0.0", source: "../second" },
@@ -203,13 +203,13 @@ test("dependency installation rejects cycles", { concurrency: false }, async () 
 });
 
 test("dependency installation rejects version and source conflicts", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-dependencies-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await dependencyFixture(root, "shared-v1", "1.0.0");
     await dependencyFixture(root, "shared-v2", "2.0.0");
-    const v1Manifest = path.join(root, "shared-v1", "harness.yaml");
-    const v2Manifest = path.join(root, "shared-v2", "harness.yaml");
+    const v1Manifest = path.join(root, "shared-v1", "woma.yaml");
+    const v2Manifest = path.join(root, "shared-v2", "woma.yaml");
     await writeFile(v1Manifest, (await readFile(v1Manifest, "utf8")).replace("name: shared-v1", "name: shared"), "utf8");
     await writeFile(v2Manifest, (await readFile(v2Manifest, "utf8")).replace("name: shared-v2", "name: shared"), "utf8");
     await dependencyFixture(root, "left", "1.0.0", [
@@ -235,8 +235,8 @@ test("dependency installation rejects version and source conflicts", { concurren
 });
 
 test("failed dependency resolution leaves the previous lock unchanged", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-dependencies-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const project = path.join(root, "project");
     await createEnvironment(project, "stable", ["codex"]);
@@ -254,14 +254,14 @@ test("failed dependency resolution leaves the previous lock unchanged", { concur
 });
 
 test("an install cannot invalidate dependencies already present in the lock", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-dependencies-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const project = path.join(root, "project");
     await dependencyFixture(root, "shared-v1", "1.0.0");
     await dependencyFixture(root, "shared-v2", "2.0.0");
     for (const version of ["v1", "v2"]) {
-      const manifest = path.join(root, `shared-${version}`, "harness.yaml");
+      const manifest = path.join(root, `shared-${version}`, "woma.yaml");
       await writeFile(manifest, (await readFile(manifest, "utf8")).replace(`name: shared-${version}`, "name: shared"), "utf8");
     }
     const firstRoot = await dependencyFixture(root, "first-root", "1.0.0", [
@@ -285,17 +285,17 @@ test("an install cannot invalidate dependencies already present in the lock", { 
 });
 
 test("a Git package cannot read a local dependency source", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependencies-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-dependencies-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const repository = await dependencyFixture(root, "remote.git", "1.0.0", [
       { name: "local-secret", version: "1.0.0", source: "../local-secret" },
     ]);
-    const manifest = path.join(repository, "harness.yaml");
+    const manifest = path.join(repository, "woma.yaml");
     await writeFile(manifest, (await readFile(manifest, "utf8")).replace("name: remote.git", "name: remote-package"), "utf8");
     await run("git", ["init"], { cwd: repository });
     await run("git", ["add", "."], { cwd: repository });
-    await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "fixture"], {
+    await run("git", ["-c", "user.name=Woma Test", "-c", "user.email=woma@example.invalid", "commit", "-m", "fixture"], {
       cwd: repository,
     });
 
@@ -309,8 +309,8 @@ test("a Git package cannot read a local dependency source", { concurrency: false
 });
 
 test("cache integrity detects package mutation", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const pkg = await installPackageSource(await packageFixture(root));
     const skillDocument = path.join(pkg.root, "skills", "integrity-skill", "SKILL.md");
@@ -324,8 +324,8 @@ test("cache integrity detects package mutation", { concurrency: false }, async (
 });
 
 test("published Package Store entries are read-only through Skill views", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-readonly-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-readonly-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const pkg = await installPackageSource(await packageFixture(root));
     const skillDocument = path.join(pkg.root, "skills", "integrity-skill", "SKILL.md");
@@ -339,8 +339,8 @@ test("published Package Store entries are read-only through Skill views", { conc
 });
 
 test("Package validation rejects Skill identity mismatches", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-skill-name-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-skill-name-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
     await writeFile(
@@ -355,15 +355,15 @@ test("Package validation rejects Skill identity mismatches", { concurrency: fals
 });
 
 test("Package validation rejects MCP targets outside Package platforms", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-mcp-platform-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-mcp-platform-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = path.join(root, "package");
     await mkdir(packageRoot);
     await writeFile(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: targeted-mcp
   version: 1.0.0
@@ -385,14 +385,14 @@ spec:
 });
 
 test("Package validation rejects Pi MCP servers and hooks until adapters exist", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-pi-resources-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-pi-resources-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const mcpRoot = path.join(root, "pi-mcp");
     await write(
-      path.join(mcpRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(mcpRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: pi-mcp
   version: 1.0.0
@@ -409,9 +409,9 @@ spec:
 
     const hookRoot = path.join(root, "pi-hook");
     await write(
-      path.join(hookRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(hookRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: pi-hook
   version: 1.0.0
@@ -430,14 +430,14 @@ spec:
 });
 
 test("Package validation accepts Qoder MCP servers and hooks", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-qoder-resources-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-qoder-resources-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = path.join(root, "qoder-resources");
     await write(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: qoder-resources
   version: 1.0.0
@@ -464,8 +464,8 @@ spec:
 });
 
 test("cache loading rejects a lock whose package identity was changed", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const pkg = await installPackageSource(await packageFixture(root));
     await assert.rejects(loadCachedPackage({ ...pkg.lock, version: "2.0.0" }), /Locked identity mismatch/);
@@ -475,8 +475,8 @@ test("cache loading rejects a lock whose package identity was changed", { concur
 });
 
 test("packages reject skill symlinks", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
     await write(path.join(root, "outside.txt"), "outside");
@@ -488,8 +488,8 @@ test("packages reject skill symlinks", { concurrency: false }, async () => {
 });
 
 test("packages reject a declared skill root symlink", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
     const skillRoot = path.join(packageRoot, "skills", "integrity-skill");
@@ -505,8 +505,8 @@ test("packages reject a declared skill root symlink", { concurrency: false }, as
 });
 
 test("install repairs a modified content-addressed cache", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
     const pkg = await installPackageSource(packageRoot);
@@ -520,8 +520,8 @@ test("install repairs a modified content-addressed cache", { concurrency: false 
 });
 
 test("repair restores a locked package after cache loss", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const pkg = await installPackageSource(await packageFixture(root));
     await removeTestTree(pkg.root);
@@ -535,8 +535,8 @@ test("repair restores a locked package after cache loss", { concurrency: false }
 });
 
 test("repair refuses a local source that drifted from its lock", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
     const pkg = await installPackageSource(packageRoot);
@@ -553,8 +553,8 @@ test("repair refuses a local source that drifted from its lock", { concurrency: 
 });
 
 test("failed repair preserves the last locked cache bytes", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-preserve-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-preserve-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
     const pkg = await installPackageSource(packageRoot);
@@ -570,11 +570,11 @@ test("failed repair preserves the last locked cache bytes", { concurrency: false
 });
 
 test("identity and integrity mismatches preserve the old cache", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-mismatch-preserve-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-mismatch-preserve-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
-    const manifestPath = path.join(packageRoot, "harness.yaml");
+    const manifestPath = path.join(packageRoot, "woma.yaml");
     const sourceManifest = await readFile(manifestPath, "utf8");
     const pkg = await installPackageSource(packageRoot);
     const cachedSkill = path.join(pkg.root, "skills", "integrity-skill", "SKILL.md");
@@ -599,8 +599,8 @@ test("identity and integrity mismatches preserve the old cache", { concurrency: 
 });
 
 test("cache repair never makes shared Skill paths disappear", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-package-observer-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-observer-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = await packageFixture(root);
     const pkg = await installPackageSource(packageRoot);

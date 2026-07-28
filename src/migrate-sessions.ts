@@ -384,7 +384,7 @@ async function restoreStructuredMerges(replaced: { merge: StructuredMerge; conte
 }
 
 async function replaceLegacyLink(staged: string, legacy: LegacyLink): Promise<ReplacedLegacyLink> {
-  const backup = `${legacy.destination}.harness-link-backup-${process.pid}-${randomUUID()}`;
+  const backup = `${legacy.destination}.woma-link-backup-${process.pid}-${randomUUID()}`;
   await rename(legacy.destination, backup);
   try {
     await rename(staged, legacy.destination);

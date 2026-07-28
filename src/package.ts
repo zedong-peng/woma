@@ -6,10 +6,10 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { satisfies } from "semver";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { assertInside, harnessHome, hashDirectory, pathExists } from "./fs.js";
+import { assertInside, EXCLUDED_PACKAGE_PATH_NAMES, womaHome, hashDirectory, pathExists } from "./fs.js";
 import { withPackageLock } from "./environment-lock.js";
 import { loadManifest } from "./schema.js";
-import type { HarnessManifest, InstalledPackage, LockedPackage, PackageDependency, Platform } from "./types.js";
+import type { WomaManifest, InstalledPackage, LockedPackage, PackageDependency, Platform } from "./types.js";
 
 interface MaterializedSource {
   root: string;
@@ -35,18 +35,18 @@ export interface PackageInstallPlan {
 }
 
 const builtinNames = new Set([
-  "harness-project-memory",
+  "woma-project-memory",
   "reproducibility-core",
   "performance-engineering",
   "paper-search",
   "idea-gen",
   "exp-design",
   "auto-research",
-  "harness-package-builder",
+  "woma-package-builder",
 ]);
 
 function builtinPath(name: string): string {
-  if (!builtinNames.has(name)) throw new Error(`Unknown built-in Harness: ${name}`);
+  if (!builtinNames.has(name)) throw new Error(`Unknown built-in Woma: ${name}`);
   const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   return path.join(packageRoot, "examples", name);
 }
@@ -118,7 +118,7 @@ async function materializeSource(source: string, cwd: string, options: PackageSo
   if (source.startsWith("builtin:")) {
     const name = source.slice("builtin:".length);
     const root = builtinPath(name);
-    if (!(await pathExists(root))) throw new Error(`Built-in Harness is missing from this installation: ${name}`);
+    if (!(await pathExists(root))) throw new Error(`Built-in Woma is missing from this installation: ${name}`);
     return { root, source: `builtin:${name}` };
   }
   const git = normalizeGitSource(source);
@@ -138,7 +138,7 @@ async function materializeSource(source: string, cwd: string, options: PackageSo
   }
   const subdirectory = options.subdirectory ? normalizedSubdirectory(options.subdirectory) : undefined;
 
-  const temp = await mkdtemp(path.join(os.tmpdir(), "harness-conda-"));
+  const temp = await mkdtemp(path.join(os.tmpdir(), "woma-"));
   try {
     if (requestedCommit) {
       await run("git", ["init", "--", temp]);
@@ -225,7 +225,16 @@ async function copyImplicitSkill(sourceRoot: string, destinationRoot: string): P
 }
 
 async function normalizeMaterializedSource(materialized: MaterializedSource): Promise<MaterializedSource> {
-  if (await pathExists(path.join(materialized.root, "harness.yaml"))) return materialized;
+  if (await pathExists(path.join(materialized.root, "woma.yaml"))) return materialized;
+  const legacyManifest = path.join(materialized.root, "harness.yaml");
+  const hasLegacyManifest = await lstat(legacyManifest).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    },
+  );
+  if (hasLegacyManifest) throw new Error(`Legacy harness.yaml is not supported; use woma.yaml`);
 
   const sourceInfo = await lstat(materialized.root);
   if (sourceInfo.isSymbolicLink()) throw new Error(`Implicit Package source is an unsupported symlink: ${materialized.root}`);
@@ -248,13 +257,13 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
     });
     if (!skillsInfo) {
       throw new Error(
-        `Unsupported Package source layout at ${materialized.root}: expected harness.yaml, SKILL.md, or skills/*/SKILL.md`,
+        `Unsupported Package source layout at ${materialized.root}: expected woma.yaml, SKILL.md, or skills/*/SKILL.md`,
       );
     }
     if (skillsInfo.isSymbolicLink()) throw new Error(`Implicit Package skills directory is an unsupported symlink: ${skillsRoot}`);
     if (!skillsInfo.isDirectory()) {
       throw new Error(
-        `Unsupported Package source layout at ${materialized.root}: expected harness.yaml, SKILL.md, or skills/*/SKILL.md`,
+        `Unsupported Package source layout at ${materialized.root}: expected woma.yaml, SKILL.md, or skills/*/SKILL.md`,
       );
     }
     selected = [];
@@ -273,14 +282,14 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
     }
     if (selected.length === 0) {
       throw new Error(
-        `Unsupported Package source layout at ${materialized.root}: expected harness.yaml, SKILL.md, or skills/*/SKILL.md`,
+        `Unsupported Package source layout at ${materialized.root}: expected woma.yaml, SKILL.md, or skills/*/SKILL.md`,
       );
     }
     packageName = implicitPackageName(sourceDirectoryName(materialized));
-    description = `Implicit Harness Package containing ${selected.length} Skills from ${sourceDirectoryName(materialized)}.`.slice(0, 300);
+    description = `Implicit Woma Package containing ${selected.length} Skills from ${sourceDirectoryName(materialized)}.`.slice(0, 300);
   }
 
-  const stagingRoot = await mkdtemp(path.join(os.tmpdir(), "harness-conda-normalized-"));
+  const stagingRoot = await mkdtemp(path.join(os.tmpdir(), "woma-normalized-"));
   try {
     const skillNames = new Set<string>();
     for (const skill of selected) {
@@ -290,9 +299,9 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
     }
     const contentHash = (await hashDirectory(stagingRoot)).slice("sha256-".length);
     const versionIdentity = materialized.commit ? `git.${materialized.commit.slice(0, 12)}` : `local.${contentHash.slice(0, 12)}`;
-    const manifest: HarnessManifest = {
-      apiVersion: "harness.conda/v1",
-      kind: "Harness",
+    const manifest: WomaManifest = {
+      apiVersion: "woma.dev/v1",
+      kind: "Woma",
       metadata: {
         name: packageName,
         version: `0.0.0+${versionIdentity}`,
@@ -309,7 +318,7 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
         hooks: [],
       },
     };
-    await writeFile(path.join(stagingRoot, "harness.yaml"), stringifyYaml(manifest), "utf8");
+    await writeFile(path.join(stagingRoot, "woma.yaml"), stringifyYaml(manifest), "utf8");
     return {
       ...materialized,
       root: stagingRoot,
@@ -334,11 +343,11 @@ async function materializePackageSource(source: string, cwd: string, options: Pa
   }
 }
 
-function selectedPlatforms(manifest: HarnessManifest, itemPlatforms?: Platform[]): Set<Platform> {
+function selectedPlatforms(manifest: WomaManifest, itemPlatforms?: Platform[]): Set<Platform> {
   return new Set(itemPlatforms ?? manifest.spec.platforms);
 }
 
-export async function validatePackage(root: string, manifest: HarnessManifest): Promise<void> {
+export async function validatePackage(root: string, manifest: WomaManifest): Promise<void> {
   const realRoot = await realpath(root);
   const names = new Set<string>();
   for (const skill of manifest.spec.skills) {
@@ -436,10 +445,10 @@ function lockedIdentity(lock: LockedPackage): string {
 
 function copyFilter(source: string): boolean {
   const name = path.basename(source);
-  return ![".git", ".harness", "node_modules", ".DS_Store"].includes(name);
+  return !EXCLUDED_PACKAGE_PATH_NAMES.has(name);
 }
 
-async function verifyCache(root: string, manifest: HarnessManifest, integrity: string): Promise<void> {
+async function verifyCache(root: string, manifest: WomaManifest, integrity: string): Promise<void> {
   await assertTreeReadonly(await realpath(root));
   const cachedIntegrity = await hashDirectory(root);
   if (cachedIntegrity !== integrity) {
@@ -469,7 +478,7 @@ async function assertTreeReadonly(root: string): Promise<void> {
 async function populateCache(
   sourceRoot: string,
   cacheRoot: string,
-  expectedManifest: HarnessManifest,
+  expectedManifest: WomaManifest,
   expectedIntegrity: string,
 ): Promise<void> {
   await mkdir(path.dirname(cacheRoot), { recursive: true });
@@ -513,7 +522,7 @@ async function cacheMaterializedPackage(materialized: MaterializedSource): Promi
   await validatePackage(materialized.root, manifest);
   const integrity = await hashDirectory(materialized.root);
   const key = packageCacheKey(materialized.source, materialized.commit ?? integrity, integrity);
-  const cacheRoot = path.join(harnessHome(), "packages", manifest.metadata.name, key);
+  const cacheRoot = path.join(womaHome(), "packages", manifest.metadata.name, key);
   await withPackageLock(manifest.metadata.name, key, async () => {
     if (await pathExists(cacheRoot)) {
       try {
@@ -621,9 +630,9 @@ export async function installPackageTree(source: string, cwd = process.cwd(), op
 }
 
 async function loadCachedPackageUnlocked(lock: LockedPackage): Promise<InstalledPackage> {
-  const root = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
+  const root = path.join(womaHome(), "packages", lock.name, lock.cacheKey);
   if (!(await pathExists(root))) {
-    throw new Error(`Package ${lock.name}@${lock.version} is not cached; run harness install ${lock.source}`);
+    throw new Error(`Package ${lock.name}@${lock.version} is not cached; run woma install ${lock.source}`);
   }
   await assertTreeReadonly(await realpath(root));
   const integrity = await hashDirectory(root);
@@ -644,7 +653,7 @@ export function loadCachedPackage(lock: LockedPackage): Promise<InstalledPackage
   return withPackageLock(lock.name, lock.cacheKey, () => loadCachedPackageUnlocked(lock));
 }
 
-export async function validateLockedPackageDirectory(lock: LockedPackage, root: string): Promise<HarnessManifest> {
+export async function validateLockedPackageDirectory(lock: LockedPackage, root: string): Promise<WomaManifest> {
   if (packageCacheKey(lock.source, lockedIdentity(lock), lock.integrity) !== lock.cacheKey) {
     throw new Error(`Package ${lock.name} has a cache key that does not match its locked source and integrity`);
   }
@@ -668,7 +677,7 @@ export async function validateLockedPackageDirectory(lock: LockedPackage, root: 
 
 export async function importLockedPackage(lock: LockedPackage, sourceRoot: string): Promise<InstalledPackage> {
   const manifest = await validateLockedPackageDirectory(lock, sourceRoot);
-  const cacheRoot = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
+  const cacheRoot = path.join(womaHome(), "packages", lock.name, lock.cacheKey);
   await withPackageLock(lock.name, lock.cacheKey, async () => {
     if (await pathExists(cacheRoot)) {
       try {
@@ -715,7 +724,7 @@ function sourceAtCommit(source: string, commit?: string): string {
 
 export async function repairLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
   return withPackageLock(lock.name, lock.cacheKey, async () => {
-    const expectedRoot = path.join(harnessHome(), "packages", lock.name, lock.cacheKey);
+    const expectedRoot = path.join(womaHome(), "packages", lock.name, lock.cacheKey);
     if (await pathExists(expectedRoot)) {
       try {
         return await loadCachedPackageUnlocked(lock);

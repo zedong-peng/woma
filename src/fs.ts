@@ -81,18 +81,24 @@ export async function writeJsonAtomic(filePath: string, value: unknown): Promise
   await writeTextAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-export function harnessHome(): string {
-  return process.env.HARNESS_HOME ? path.resolve(process.env.HARNESS_HOME) : path.join(os.homedir(), ".harness-conda");
+export function womaHome(): string {
+  return process.env.WOMA_HOME ? path.resolve(process.env.WOMA_HOME) : path.join(os.homedir(), ".woma");
 }
 
 export function assertInside(root: string, candidate: string, label: string): void {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`${label} escapes the harness package: ${candidate}`);
+    throw new Error(`${label} escapes the woma package: ${candidate}`);
   }
 }
 
-const ignoredNames = new Set([".git", ".harness", "node_modules", ".DS_Store"]);
+export const EXCLUDED_PACKAGE_PATH_NAMES: ReadonlySet<string> = new Set([
+  ".git",
+  ".harness",
+  ".woma",
+  "node_modules",
+  ".DS_Store",
+]);
 
 async function hashEntry(root: string, relative: string, hash: ReturnType<typeof createHash>): Promise<void> {
   const absolute = path.join(root, relative);
@@ -103,7 +109,7 @@ async function hashEntry(root: string, relative: string, hash: ReturnType<typeof
     return;
   }
   if (info.isDirectory()) {
-    const entries = (await readdir(absolute)).filter((entry) => !ignoredNames.has(entry)).sort();
+    const entries = (await readdir(absolute)).filter((entry) => !EXCLUDED_PACKAGE_PATH_NAMES.has(entry)).sort();
     for (const entry of entries) await hashEntry(root, path.join(relative, entry), hash);
     return;
   }

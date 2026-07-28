@@ -19,9 +19,10 @@ import {
   validateBuiltinPackageLock,
   validateLockedPackageDirectory,
 } from "./package.js";
-import type { HarnessEnvironment, HarnessManifest, LockFile } from "./types.js";
+import { EXCLUDED_PACKAGE_PATH_NAMES } from "./fs.js";
+import type { WomaEnvironment, WomaManifest, LockFile } from "./types.js";
 
-const FORMAT = "harness.conda/environment-bundle-v1";
+const FORMAT = "woma.dev/environment-bundle-v1";
 const MAX_COMPRESSED_BYTES = 128 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
 const MAX_PACKAGE_BYTES = 384 * 1024 * 1024;
@@ -64,7 +65,7 @@ interface BundledPackage {
 
 interface EnvironmentBundle {
   format: typeof FORMAT;
-  environment: HarnessEnvironment;
+  environment: WomaEnvironment;
   lock: LockFile;
   packages: BundledPackage[];
 }
@@ -95,7 +96,7 @@ function portablePath(input: string): string {
   ) {
     throw new Error(`Bundle contains an unsafe Package path: ${JSON.stringify(input)}`);
   }
-  if (segments.some((segment) => [".git", ".harness", "node_modules", ".DS_Store"].includes(segment))) {
+  if (segments.some((segment) => EXCLUDED_PACKAGE_PATH_NAMES.has(segment))) {
     throw new Error(`Bundle contains an excluded Package path: ${JSON.stringify(input)}`);
   }
   return input;
@@ -116,6 +117,7 @@ async function collectPackageFiles(root: string): Promise<BundleFile[]> {
   async function visit(relative: string): Promise<void> {
     const absolute = relative ? path.join(packageRoot, relative) : packageRoot;
     for (const name of (await readdir(absolute)).sort()) {
+      if (EXCLUDED_PACKAGE_PATH_NAMES.has(name)) continue;
       const childRelative = relative ? path.join(relative, name) : name;
       const child = path.join(packageRoot, childRelative);
       const info = await lstat(child);
@@ -237,9 +239,9 @@ async function materializeBundledPackage(root: string, pkg: BundledPackage): Pro
 }
 
 function validateBundleClosure(
-  environment: HarnessEnvironment,
+  environment: WomaEnvironment,
   lock: LockFile,
-  manifests: Map<string, HarnessManifest>,
+  manifests: Map<string, WomaManifest>,
 ): void {
   if (new Set(environment.spec.targets).size !== environment.spec.targets.length) {
     throw new Error("Environment bundle contains duplicate targets");
@@ -303,10 +305,10 @@ export async function importEnvironmentBundle(
   if (inputInfo.size > MAX_COMPRESSED_BYTES) throw new Error(`Environment bundle exceeds ${MAX_COMPRESSED_BYTES} compressed bytes`);
   const bundle = parseBundle(await readFile(source), source);
   const name = requestedName ?? bundle.environment.metadata.name;
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "harness-environment-import-"));
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "woma-environment-import-"));
   try {
     const roots = new Map<string, string>();
-    const manifests = new Map<string, HarnessManifest>();
+    const manifests = new Map<string, WomaManifest>();
     for (const pkg of bundle.packages) {
       const packageRoot = path.join(temporary, "packages", pkg.name);
       await materializeBundledPackage(packageRoot, pkg);

@@ -14,18 +14,18 @@ async function write(filePath: string, content: string): Promise<void> {
 }
 
 test("session migration is explicit and creates Environment-owned ordinary files", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-migrate-sessions-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-migrate-sessions-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   const home = path.join(root, "home");
   const codex = path.join(root, "user", ".codex");
   const claude = path.join(root, "user", ".claude");
-  process.env.HARNESS_HOME = home;
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+  process.env.WOMA_HOME = home;
+  process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
   try {
     const sourceHistory = [
       '{"session_id":"source","text":"source later","ts":30}',
@@ -92,27 +92,27 @@ test("session migration is explicit and creates Environment-owned ordinary files
     const repeated = await migrateExistingSessions({ projectRoot: root, environment: "base", from: "both" });
     assert.equal(repeated.unchanged, true);
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
 test("session migration materializes legacy links to the selected source", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-migrate-session-links-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-migrate-session-links-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   const codex = path.join(root, "codex");
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
   try {
     const sourceHistory = '{"session_id":"source","text":"source","ts":10}\n';
     await write(path.join(codex, "history.jsonl"), sourceHistory);
@@ -138,27 +138,27 @@ test("session migration materializes legacy links to the selected source", { con
     assert.equal(await readFile(path.join(codex, "history.jsonl"), "utf8"), sourceHistory);
     assert.equal(await readFile(path.join(codex, "sessions", "2026", "03", "old.jsonl"), "utf8"), "source session\n");
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
 test("session migration rejects links, conflicts, and unsupported targets before writing", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-migrate-session-conflicts-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-migrate-session-conflicts-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   const codex = path.join(root, "codex");
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
   try {
     await write(path.join(codex, "sessions", "old.jsonl"), "source session\n");
     await write(path.join(codex, "sessions", "new.jsonl"), "new source session\n");
@@ -195,12 +195,12 @@ test("session migration rejects links, conflicts, and unsupported targets before
     );
     await access(path.join(root, "outside.jsonl"));
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });

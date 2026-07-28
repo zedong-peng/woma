@@ -33,9 +33,9 @@ async function environmentPackageFixture(
   const packageRoot = path.join(root, directory);
   await mkdir(path.join(packageRoot, "skills", "upgrade-skill"), { recursive: true });
   await writeFile(
-    path.join(packageRoot, "harness.yaml"),
-    `apiVersion: harness.conda/v1
-kind: Harness
+    path.join(packageRoot, "woma.yaml"),
+    `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: upgrade-package
   version: ${version}
@@ -62,11 +62,11 @@ test("environment paths reject traversal names", () => {
 });
 
 test("Skill migration dry-run does not initialize an absent base Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-migration-base-preview-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-migration-base-preview-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     const home = path.join(root, "home");
@@ -76,9 +76,9 @@ test("Skill migration dry-run does not initialize an absent base Environment", {
       path.join(codex, "skills", "preview-skill", "SKILL.md"),
       "---\nname: preview-skill\ndescription: Preview Skill.\n---\nPreview.\n",
     );
-    process.env.HARNESS_HOME = home;
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+    process.env.WOMA_HOME = home;
+    process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
 
     const result = await migrateExistingSkills({ projectRoot: root, environment: "base", from: "codex", dryRun: true });
     assert.equal(result.environment, "base");
@@ -86,22 +86,22 @@ test("Skill migration dry-run does not initialize an absent base Environment", {
     assert.deepEqual(result.packages.map((pkg) => pkg.name), ["preview-skill"]);
     await assert.rejects(access(home), /ENOENT/);
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
 test("explicit Skill migration snapshots existing Skills into only the selected Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-existing-skills-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-existing-skills-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     const home = path.join(root, "home");
@@ -129,12 +129,12 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
       path.join(claude, "skills", "claude-notes", "SKILL.md"),
       "---\nname: claude-notes\ndescription: Existing notes Skill.\n---\nTake notes.\n",
     );
-    process.env.HARNESS_HOME = home;
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+    process.env.WOMA_HOME = home;
+    process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
 
     const base = await ensureBaseEnvironment(root);
-    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(base.spec.roots.map((item) => item.name), ["woma-project-memory", "woma-package-builder"]);
     const codexSkills = path.join(environmentViewPath("base"), "codex", "skills");
     await assert.rejects(readFile(path.join(codexSkills, "existing-review", "SKILL.md")), /ENOENT/);
     await assert.rejects(access(path.join(codexSkills, ".system")), /ENOENT/);
@@ -151,21 +151,21 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     assert.deepEqual(planned.packages.find((pkg) => pkg.name === "existing-review")?.sources, ["codex", "claude"]);
     assert.deepEqual(planned.normalized, ["existing-review"]);
     const cleanLock = await readEnvironmentLock(root, "clean");
-    assert.deepEqual(Object.keys(cleanLock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(Object.keys(cleanLock.packages), ["woma-project-memory", "woma-package-builder"]);
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
 
     const migrated = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
     assert.equal(migrated.unchanged, false);
     assert.deepEqual(
       Object.keys((await readEnvironmentLock(root, "clean")).packages),
-      ["harness-project-memory", "harness-package-builder", "claude-notes", "existing-review"],
+      ["woma-project-memory", "woma-package-builder", "claude-notes", "existing-review"],
     );
     const existingReview = migrated.packages.find((pkg) => pkg.name === "existing-review");
     assert.ok(existingReview);
     const snapshotRoot = existingReview.source.slice("file:".length);
     for (const snapshotPath of [
       snapshotRoot,
-      path.join(snapshotRoot, "harness.yaml"),
+      path.join(snapshotRoot, "woma.yaml"),
       path.join(snapshotRoot, "skills"),
       path.join(snapshotRoot, "skills", "existing-review"),
       path.join(snapshotRoot, "skills", "existing-review", "SKILL.md"),
@@ -207,22 +207,22 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     );
     await assert.rejects(access(path.join(environmentViewPath("clean"), "codex", "skills", ".system")), /ENOENT/);
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
 test("explicit Skill migration rejects source conflicts without changing the Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-existing-skill-conflict-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-existing-skill-conflict-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     const home = path.join(root, "home");
@@ -233,9 +233,9 @@ test("explicit Skill migration rejects source conflicts without changing the Env
       await mkdir(skill, { recursive: true });
       await writeFile(path.join(skill, "SKILL.md"), `---\nname: review\ndescription: Review Skill.\n---\n${body}\n`);
     }
-    process.env.HARNESS_HOME = home;
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+    process.env.WOMA_HOME = home;
+    process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
     await ensureBaseEnvironment(root);
     const before = await readFile(environmentLockPath(root, "base"));
     await assert.rejects(
@@ -247,22 +247,22 @@ test("explicit Skill migration rejects source conflicts without changing the Env
     const codexOnly = await migrateExistingSkills({ projectRoot: root, environment: "base", from: "codex" });
     assert.deepEqual(codexOnly.packages.map((pkg) => pkg.name), ["review"]);
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
 test("explicit Skill migration rejects target ownership conflicts before publishing", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-existing-skill-owner-conflict-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-existing-skill-owner-conflict-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     const home = path.join(root, "home");
@@ -273,17 +273,17 @@ test("explicit Skill migration rejects target ownership conflicts before publish
       path.join(skill, "SKILL.md"),
       "---\nname: occupied-skill\ndescription: Existing Skill.\n---\nExisting.\n",
     );
-    process.env.HARNESS_HOME = home;
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+    process.env.WOMA_HOME = home;
+    process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
 
     await createEnvironment(root, "tools", ["codex"]);
     const packageRoot = path.join(root, "owner-package");
     await mkdir(path.join(packageRoot, "skills", "occupied-skill"), { recursive: true });
     await writeFile(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: owner-package
   version: 1.0.0
@@ -318,22 +318,22 @@ spec:
     );
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
 test("explicit Skill migration does not replace a user Package with the Skill name", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-migration-package-name-conflict-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-migration-package-name-conflict-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     const home = path.join(root, "home");
@@ -343,17 +343,17 @@ test("explicit Skill migration does not replace a user Package with the Skill na
       path.join(codex, "skills", "incoming-skill", "SKILL.md"),
       "---\nname: incoming-skill\ndescription: Incoming Skill.\n---\nIncoming.\n",
     );
-    process.env.HARNESS_HOME = home;
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
+    process.env.WOMA_HOME = home;
+    process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "claude");
 
     await createEnvironment(root, "tools", ["codex"]);
     const packageRoot = path.join(root, "reserved-name-package");
     await mkdir(path.join(packageRoot, "skills", "unrelated-skill"), { recursive: true });
     await writeFile(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: incoming-skill
   version: 9.0.0
@@ -381,12 +381,12 @@ spec:
     assert.deepEqual(await readFile(environmentLockPath(root, "tools")), beforeLock);
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
@@ -395,8 +395,8 @@ test("environment recipes reject duplicate roots", () => {
   assert.throws(
     () =>
       parseEnvironment(`
-apiVersion: harness.conda/environment-v1
-kind: HarnessEnvironment
+apiVersion: woma.dev/environment-v1
+kind: WomaEnvironment
 metadata:
   name: research
 spec:
@@ -415,8 +415,8 @@ test("environment recipes reject legacy command bindings", () => {
   assert.throws(
     () =>
       parseEnvironment(`
-apiVersion: harness.conda/environment-v1
-kind: HarnessEnvironment
+apiVersion: woma.dev/environment-v1
+kind: WomaEnvironment
 metadata:
   name: research
 spec:
@@ -429,8 +429,8 @@ spec:
 });
 
 test("removing an environment preserves user-owned Project Memory", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-memory-lifecycle-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-memory-lifecycle-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
     await initializeProjectMemory(root);
@@ -448,15 +448,15 @@ test("removing an environment preserves user-owned Project Memory", { concurrenc
 });
 
 test("global environments are shared across projects while Project Memory remains isolated", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-global-environment-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-global-environment-"));
   const home = path.join(root, "home");
   const firstProject = path.join(root, "first-project");
   const secondProject = path.join(root, "second-project");
-  process.env.HARNESS_HOME = home;
+  process.env.WOMA_HOME = home;
   try {
     await Promise.all([mkdir(firstProject, { recursive: true }), mkdir(secondProject, { recursive: true })]);
     const base = await ensureBaseEnvironment(firstProject);
-    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(base.spec.roots.map((item) => item.name), ["woma-project-memory", "woma-package-builder"]);
     assert.equal(environmentPath(secondProject, "base"), path.join(home, "environments", "base", "environment.yaml"));
     await assert.rejects(createEnvironment(firstProject, "base", ["codex"]), /exists implicitly/);
     await assert.rejects(removeEnvironment(firstProject, "base"), /cannot be removed/);
@@ -466,8 +466,8 @@ test("global environments are shared across projects while Project Memory remain
     assert.deepEqual(await readEnvironmentLock(secondProject, "research"), await readEnvironmentLock(firstProject, "research"));
     await activateEnvironment(firstProject, "research");
     await activateEnvironment(secondProject, "research");
-    await assert.rejects(access(path.join(firstProject, ".harness", "state.json")));
-    await assert.rejects(access(path.join(secondProject, ".harness", "state.json")));
+    await assert.rejects(access(path.join(firstProject, ".woma", "state.json")));
+    await assert.rejects(access(path.join(secondProject, ".woma", "state.json")));
     const sharedSkill = path.join(environmentViewPath("research"), "codex", "skills", "paper-search");
     assert.equal((await lstat(sharedSkill)).isSymbolicLink(), true);
     assert.match(await readlink(sharedSkill), /packages\/paper-search\//);
@@ -489,15 +489,15 @@ test("global environments are shared across projects while Project Memory remain
 });
 
 test("activation validates an Environment before creating project files", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-activation-preflight-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-activation-preflight-"));
   const project = path.join(root, "project");
-  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await mkdir(project, { recursive: true });
 
     await assert.rejects(activateEnvironment(project, "missing"), /Unknown environment: missing/);
 
-    await assert.rejects(access(path.join(project, ".harness")));
+    await assert.rejects(access(path.join(project, ".woma")));
     await assert.rejects(access(path.join(project, ".gitignore")));
     await assert.rejects(access(path.join(project, "AGENTS.md")));
   } finally {
@@ -506,59 +506,59 @@ test("activation validates an Environment before creating project files", { conc
 });
 
 test("activation depends only on the validated target Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-invalid-current-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-invalid-current-"));
   const project = path.join(root, "project");
-  const previousEnvironment = process.env.HARNESS_ENV;
-  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  const previousEnvironment = process.env.WOMA_ENV;
+  const previousCodexHome = process.env.WOMA_ORIGINAL_CODEX_HOME;
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
   try {
     await mkdir(project, { recursive: true });
     await createEnvironment(project, "tools", ["codex"]);
-    process.env.HARNESS_ENV = "../../victim";
+    process.env.WOMA_ENV = "../../victim";
 
     await activateEnvironment(project, "tools");
 
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /Harness Project Memory/);
+    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /Woma Project Memory/);
     assert.equal((await lstat(environmentAgentHomePath("tools", "codex"))).isDirectory(), true);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
-    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodexHome;
     await removeTestTree(root);
   }
 });
 
 test("unknown target activation does not touch the current stable Agent home", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-runtime-preflight-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-runtime-preflight-"));
   const project = path.join(root, "project");
-  const previousEnvironment = process.env.HARNESS_ENV;
-  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  const previousEnvironment = process.env.WOMA_ENV;
+  const previousCodexHome = process.env.WOMA_ORIGINAL_CODEX_HOME;
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
   try {
     await mkdir(project, { recursive: true });
     await createEnvironment(project, "current", ["codex"]);
     const opaque = path.join(environmentAgentHomePath("current", "codex"), "future.sqlite");
     await writeFile(opaque, "opaque-current-state\n", "utf8");
-    process.env.HARNESS_ENV = "current";
+    process.env.WOMA_ENV = "current";
 
     await assert.rejects(activateEnvironment(project, "missing"), /Unknown environment: missing/);
 
     assert.equal(await readFile(opaque, "utf8"), "opaque-current-state\n");
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
-    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodexHome;
     await removeTestTree(root);
   }
 });
 
 test("activation keeps both Agent discovery files stable across target changes", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-stable-discovery-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-stable-discovery-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "both", ["codex", "claude"]);
     await createEnvironment(root, "codex-only", ["codex"]);
@@ -570,26 +570,26 @@ test("activation keeps both Agent discovery files stable across target changes",
     await activateEnvironment(root, "codex-only");
 
     assert.equal(await readFile(claudePath, "utf8"), before);
-    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /Harness Project Memory/);
+    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /Woma Project Memory/);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("failed discovery validation leaves project initialization unchanged", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-project-rollback-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-project-rollback-"));
   const project = path.join(root, "project");
-  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await mkdir(project, { recursive: true });
     await ensureBaseEnvironment(project);
-    const invalid = "<!-- >>> harness-conda:project-memory -->\nmodified\n<!-- <<< harness-conda:project-memory -->\n";
+    const invalid = "<!-- >>> woma:project-memory -->\nmodified\n<!-- <<< woma:project-memory -->\n";
     await writeFile(path.join(project, "CLAUDE.md"), invalid, "utf8");
 
     await assert.rejects(activateEnvironment(project, "base"), /discovery block was modified/);
 
     assert.equal(await readFile(path.join(project, "CLAUDE.md"), "utf8"), invalid);
-    await assert.rejects(access(path.join(project, ".harness")));
+    await assert.rejects(access(path.join(project, ".woma")));
     await assert.rejects(access(path.join(project, ".gitignore")));
     await assert.rejects(access(path.join(project, "AGENTS.md")));
   } finally {
@@ -598,49 +598,49 @@ test("failed discovery validation leaves project initialization unchanged", { co
 });
 
 test("environment removal is guarded by the current shell only", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-shell-removal-"));
-  const previousEnvironment = process.env.HARNESS_ENV;
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-shell-removal-"));
+  const previousEnvironment = process.env.WOMA_ENV;
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "tools", ["codex"]);
-    process.env.HARNESS_ENV = "tools";
+    process.env.WOMA_ENV = "tools";
     await assert.rejects(removeEnvironment(root, "tools"), /active in this shell/);
 
-    process.env.HARNESS_ENV = "base";
+    process.env.WOMA_ENV = "base";
     await removeEnvironment(root, "tools");
     await assert.rejects(readEnvironment(root, "tools"), /Unknown environment: tools/);
     await activateEnvironment(root, "base");
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
 
 test("global Environment reads reject missing foundational packages", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-global-environment-contract-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-global-environment-contract-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "tools", ["codex"]);
     const recipePath = environmentPath(root, "tools");
     const recipe = await readFile(recipePath, "utf8");
     await writeFile(
       recipePath,
-      recipe.replace(/    - name: harness-package-builder\n      source: builtin:harness-package-builder\n/, ""),
+      recipe.replace(/    - name: woma-package-builder\n      source: builtin:woma-package-builder\n/, ""),
       "utf8",
     );
-    await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package harness-package-builder/);
+    await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package woma-package-builder/);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("first base creation detects supported existing Agent state once without reading or migrating it", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-existing-state-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-existing-state-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     const home = path.join(root, "home");
@@ -650,9 +650,9 @@ test("first base creation detects supported existing Agent state once without re
     await mkdir(path.join(claude, "projects"), { recursive: true });
     await writeFile(path.join(claude, "projects", "private-session"), "unchanged\n", "utf8");
     await mkdir(path.join(codex, "plugins", "ignored"), { recursive: true });
-    process.env.HARNESS_HOME = home;
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+    process.env.WOMA_HOME = home;
+    process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
 
     let notices = 0;
     const options = { onExistingAgentStateDetected: () => { notices += 1; } };
@@ -667,26 +667,26 @@ test("first base creation detects supported existing Agent state once without re
     assert.equal(await readFile(path.join(claude, "projects", "private-session"), "utf8"), "unchanged\n");
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
     const lock = await readEnvironmentLock(root, "base");
-    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(Object.keys(lock.packages), ["woma-project-memory", "woma-package-builder"]);
     await ensureBaseEnvironment(root, options);
     assert.equal(notices, 1);
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
 test("first base creation ignores unsupported Agent paths and metadata types", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-no-existing-state-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-no-existing-state-"));
   const previous = {
-    home: process.env.HARNESS_HOME,
-    codex: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claude: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    home: process.env.WOMA_HOME,
+    codex: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claude: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
   try {
     const codex = path.join(root, "codex");
@@ -697,9 +697,9 @@ test("first base creation ignores unsupported Agent paths and metadata types", {
     await mkdir(external, { recursive: true });
     await symlink(external, path.join(codex, "sessions"));
     await mkdir(claude, { recursive: true });
-    process.env.HARNESS_HOME = path.join(root, "home");
-    process.env.HARNESS_ORIGINAL_CODEX_HOME = codex;
-    process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
+    process.env.WOMA_HOME = path.join(root, "home");
+    process.env.WOMA_ORIGINAL_CODEX_HOME = codex;
+    process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
 
     let notices = 0;
     await ensureBaseEnvironment(root, { onExistingAgentStateDetected: () => { notices += 1; } });
@@ -708,35 +708,35 @@ test("first base creation ignores unsupported Agent paths and metadata types", {
     assert.equal(await readFile(path.join(codex, "skills"), "utf8"), "not a directory\n");
     assert.equal((await lstat(path.join(codex, "sessions"))).isSymbolicLink(), true);
   } finally {
-    if (previous.home === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.home;
-    if (previous.codex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codex;
-    if (previous.claude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
+    if (previous.home === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.home;
+    if (previous.codex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codex;
+    if (previous.claude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claude;
     await removeTestTree(root);
   }
 });
 
 test("concurrent first reads initialize the implicit base Environment once", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-concurrent-init-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-concurrent-init-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const [environment, lock] = await Promise.all([
       readEnvironment(root, "base"),
       readEnvironmentLock(root, "base"),
     ]);
     assert.equal(environment.metadata.name, "base");
-    assert.deepEqual(environment.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
-    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(environment.spec.roots.map((item) => item.name), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(Object.keys(lock.packages), ["woma-project-memory", "woma-package-builder"]);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("existing base initialization rejects missing lock and view state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-corruption-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-corruption-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await ensureBaseEnvironment(root);
     await rm(environmentLockPath(root, "base"), { force: true });
@@ -749,13 +749,13 @@ test("existing base initialization rejects missing lock and view state", { concu
 });
 
 test("existing base initialization upgrades a legacy view containing Agent state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-legacy-view-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
-  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-legacy-view-"));
+  process.env.WOMA_HOME = path.join(root, "home");
+  const previousCodexHome = process.env.WOMA_ORIGINAL_CODEX_HOME;
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
   try {
-    await mkdir(process.env.HARNESS_ORIGINAL_CODEX_HOME, { recursive: true });
-    await writeFile(path.join(process.env.HARNESS_ORIGINAL_CODEX_HOME, "auth.json"), '{"api_key":"latest"}\n', "utf8");
+    await mkdir(process.env.WOMA_ORIGINAL_CODEX_HOME, { recursive: true });
+    await writeFile(path.join(process.env.WOMA_ORIGINAL_CODEX_HOME, "auth.json"), '{"api_key":"latest"}\n', "utf8");
     await ensureBaseEnvironment(root);
     const legacyState = path.join(environmentViewPath("base"), "codex", "goals_1.sqlite");
     await writeFile(legacyState, "legacy runtime state\n", "utf8");
@@ -768,15 +768,15 @@ test("existing base initialization upgrades a legacy view containing Agent state
       '{"api_key":"latest"}\n',
     );
   } finally {
-    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    if (previousCodexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodexHome;
     await removeTestTree(root);
   }
 });
 
 test("list and doctor remain useful when current-format base layers are corrupt", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-diagnostics-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-diagnostics-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await ensureBaseEnvironment(root);
     await createEnvironment(root, "tools", ["codex"]);
@@ -796,9 +796,9 @@ test("list and doctor remain useful when current-format base layers are corrupt"
 
     await writeFile(lockPath, lock, "utf8");
     const parsedLock = JSON.parse(lock) as { packages: Record<string, { cacheKey: string }> };
-    const packageName = "harness-project-memory";
+    const packageName = "woma-project-memory";
     const skillPath = path.join(
-      process.env.HARNESS_HOME!,
+      process.env.WOMA_HOME!,
       "packages",
       packageName,
       parsedLock.packages[packageName]!.cacheKey,
@@ -818,13 +818,13 @@ test("list and doctor remain useful when current-format base layers are corrupt"
 });
 
 test("install repairs a missing base view without requiring a healthy view first", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-install-repair-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-install-repair-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await ensureBaseEnvironment(root);
     await rm(environmentViewPath("base"), { force: true });
 
-    await installIntoEnvironment(root, "base", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "base", "builtin:woma-project-memory");
 
     assert.equal((await lstat(environmentViewPath("base"))).isSymbolicLink(), true);
     await ensureBaseEnvironment(root);
@@ -833,14 +833,14 @@ test("install repairs a missing base view without requiring a healthy view first
   }
 });
 
-test("install can initialize and lock base as the first Harness command", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-base-first-install-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+test("install can initialize and lock base as the first Woma command", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-first-install-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await installIntoEnvironment(root, "base", "builtin:paper-search");
     assert.deepEqual(Object.keys((await readEnvironmentLock(root, "base")).packages), [
-      "harness-project-memory",
-      "harness-package-builder",
+      "woma-project-memory",
+      "woma-package-builder",
       "paper-search",
     ]);
   } finally {
@@ -849,8 +849,8 @@ test("install can initialize and lock base as the first Harness command", { conc
 });
 
 test("environment locks reject keys that do not match package identities", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-lock-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-lock-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
     await installIntoEnvironment(root, "research", "builtin:paper-search");
@@ -867,8 +867,8 @@ test("environment locks reject keys that do not match package identities", { con
 });
 
 test("install rejects unreachable lock packages before resolving their sources", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-unreachable-lock-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-unreachable-lock-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
     await installIntoEnvironment(root, "research", "builtin:paper-search");
@@ -893,29 +893,29 @@ test("install rejects unreachable lock packages before resolving their sources",
 });
 
 test("doctor derives activation exclusively from the shell Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-doctor-"));
-  const previousEnvironment = process.env.HARNESS_ENV;
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-doctor-"));
+  const previousEnvironment = process.env.WOMA_ENV;
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
     await installIntoEnvironment(root, "research", "builtin:paper-search");
-    process.env.HARNESS_ENV = "research";
+    process.env.WOMA_ENV = "research";
 
     const checks = await doctorEnvironment(root, "research");
     assert.equal(checks.find((check) => check.label === "activation")?.status, "ok");
     assert.equal(checks.some((check) => check.label === "active-targets"), false);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
 
 test("doctor checks native CLIs only for Environment targets", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-agent-cli-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-agent-cli-"));
   const bin = path.join(root, "bin");
   const previousPath = process.env.PATH;
-  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await mkdir(bin, { recursive: true });
     const codex = path.join(bin, "codex");
@@ -945,15 +945,15 @@ test("doctor checks native CLIs only for Environment targets", { concurrency: fa
 });
 
 test("doctor reports modified Agent Memory discovery instructions", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-context-doctor-"));
-  const previousEnvironment = process.env.HARNESS_ENV;
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-context-doctor-"));
+  const previousEnvironment = process.env.WOMA_ENV;
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
-    await installIntoEnvironment(root, "research", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "research", "builtin:woma-project-memory");
     await installIntoEnvironment(root, "research", "builtin:paper-search");
     await activateEnvironment(root, "research");
-    process.env.HARNESS_ENV = "research";
+    process.env.WOMA_ENV = "research";
     const agentsPath = path.join(root, "AGENTS.md");
     await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("At the beginning", "Later"), "utf8");
 
@@ -962,22 +962,22 @@ test("doctor reports modified Agent Memory discovery instructions", { concurrenc
     assert.equal(checks.find((check) => check.label === "memory-bootstrap")?.status, "fail");
     await assert.rejects(activateEnvironment(root, "base"), /discovery block was modified/);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
 
 test("doctor checks commands required by stdio MCP servers", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-mcp-command-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-mcp-command-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = path.join(root, "mcp-package");
     await mkdir(packageRoot, { recursive: true });
     await writeFile(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: mcp-package
   version: 1.0.0
@@ -987,7 +987,7 @@ spec:
   mcpServers:
     - name: missing-command
       transport: stdio
-      command: harness-command-that-does-not-exist
+      command: woma-command-that-does-not-exist
 `,
       "utf8",
     );
@@ -995,9 +995,9 @@ spec:
     await installIntoEnvironment(root, "tools", packageRoot);
 
     const checks = await doctorEnvironment(root, "tools");
-    assert.deepEqual(checks.find((check) => check.label === "command:harness-command-that-does-not-exist"), {
+    assert.deepEqual(checks.find((check) => check.label === "command:woma-command-that-does-not-exist"), {
       status: "fail",
-      label: "command:harness-command-that-does-not-exist",
+      label: "command:woma-command-that-does-not-exist",
       detail: "not found on PATH",
     });
   } finally {
@@ -1006,15 +1006,15 @@ spec:
 });
 
 test("doctor ignores stdio MCP commands outside the environment targets", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-targeted-mcp-command-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-targeted-mcp-command-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = path.join(root, "mcp-package");
     await mkdir(packageRoot, { recursive: true });
     await writeFile(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: targeted-mcp-package
   version: 1.0.0
@@ -1024,7 +1024,7 @@ spec:
   mcpServers:
     - name: claude-only
       transport: stdio
-      command: harness-claude-command-that-does-not-exist
+      command: woma-claude-command-that-does-not-exist
       platforms: [claude]
 `,
       "utf8",
@@ -1033,15 +1033,15 @@ spec:
     await installIntoEnvironment(root, "tools", packageRoot);
 
     const checks = await doctorEnvironment(root, "tools");
-    assert.equal(checks.some((check) => check.label === "command:harness-claude-command-that-does-not-exist"), false);
+    assert.equal(checks.some((check) => check.label === "command:woma-claude-command-that-does-not-exist"), false);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("install atomically upgrades a package in the active environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-upgrade-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-active-upgrade-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
     const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
@@ -1053,7 +1053,7 @@ test("install atomically upgrades a package in the active environment", { concur
 
     assert.match(await readFile(path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"), "utf8"), /Version two/);
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
-    await assert.rejects(access(path.join(root, ".harness", "state.json")));
+    await assert.rejects(access(path.join(root, ".woma", "state.json")));
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
     await removeTestTree(root);
@@ -1061,8 +1061,8 @@ test("install atomically upgrades a package in the active environment", { concur
 });
 
 test("Environment snapshots wait for an in-progress metadata commit", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-snapshot-lock-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-snapshot-lock-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const fixture = await environmentPackageFixture(root, "snapshot-package", "1.0.0", "Snapshot package.");
     await createEnvironment(root, "tools", ["codex"]);
@@ -1098,17 +1098,17 @@ test("Environment snapshots wait for an in-progress metadata commit", { concurre
 });
 
 test("active install restores project state when the new package conflicts after removal", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-rollback-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "user-codex");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-active-rollback-"));
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "user-codex");
   try {
     const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
     const conflicting = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.", "node");
-    await mkdir(process.env.HARNESS_ORIGINAL_CODEX_HOME, { recursive: true });
-    await writeFile(path.join(process.env.HARNESS_ORIGINAL_CODEX_HOME, "config.toml"), '[mcp_servers.occupied]\ncommand = "other"\n', "utf8");
+    await mkdir(process.env.WOMA_ORIGINAL_CODEX_HOME, { recursive: true });
+    await writeFile(path.join(process.env.WOMA_ORIGINAL_CODEX_HOME, "config.toml"), '[mcp_servers.occupied]\ncommand = "other"\n', "utf8");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
-    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
     await activateEnvironment(root, "tools");
     const trackedPaths = [
       environmentPath(root, "tools"),
@@ -1124,20 +1124,20 @@ test("active install restores project state when the new package conflicts after
     assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
     assert.equal((await doctorEnvironment(root, "tools")).some((check) => check.status === "fail"), false);
   } finally {
-    delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
+    delete process.env.WOMA_ORIGINAL_CODEX_HOME;
     await removeTestTree(root);
   }
 });
 
 test("active install rolls back when interrupted after resources are applied", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-interruption-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-active-interruption-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
     const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
-    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
     await activateEnvironment(root, "tools");
     const trackedPaths = [
       environmentPath(root, "tools"),
@@ -1174,20 +1174,20 @@ test("active install rolls back when interrupted after resources are applied", {
 });
 
 test("reinstalling a foundational package preserves its recipe, lock, Skill, and startup pointer", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-memory-install-rollback-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-memory-install-rollback-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "minimal", ["codex"]);
     await activateEnvironment(root, "minimal");
     const trackedPaths = [environmentPath(root, "minimal"), environmentLockPath(root, "minimal")];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
 
-    await installIntoEnvironment(root, "minimal", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "minimal", "builtin:woma-project-memory");
 
     assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
-    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
+    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
     assert.match(
-      await readFile(path.join(environmentViewPath("minimal"), "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
+      await readFile(path.join(environmentViewPath("minimal"), "codex", "skills", "woma-project-memory", "SKILL.md"), "utf8"),
       /Persist stable knowledge automatically/,
     );
   } finally {
@@ -1196,8 +1196,8 @@ test("reinstalling a foundational package preserves its recipe, lock, Skill, and
 });
 
 test("install rebuilds a modified global view from immutable Package contents", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-active-preflight-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-active-preflight-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const v1 = await environmentPackageFixture(root, "upgrade-v1", "1.0.0", "Version one.");
     const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
@@ -1211,19 +1211,19 @@ test("install rebuilds a modified global view from immutable Package contents", 
     assert.equal((await lstat(skillLink)).isSymbolicLink(), true);
     assert.match(await readFile(path.join(skillLink, "SKILL.md"), "utf8"), /Version two/);
     assert.equal((await readEnvironmentLock(root, "tools")).packages["upgrade-package"]?.version, "2.0.0");
-    await assert.rejects(access(path.join(root, ".harness", "state.json")));
+    await assert.rejects(access(path.join(root, ".woma", "state.json")));
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("activation holds the target Environment lock through the project transition", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-activation-remove-lock-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
-  const previousEnvironment = process.env.HARNESS_ENV;
-  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
-  process.env.HARNESS_ENV = "base";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-activation-remove-lock-"));
+  process.env.WOMA_HOME = path.join(root, "home");
+  const previousEnvironment = process.env.WOMA_ENV;
+  const previousCodexHome = process.env.WOMA_ORIGINAL_CODEX_HOME;
+  process.env.WOMA_ENV = "base";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
   try {
     await createEnvironment(root, "tools", ["codex"]);
     let entered!: () => void;
@@ -1249,27 +1249,27 @@ test("activation holds the target Environment lock through the project transitio
     await removal;
     assert.equal(removed, true);
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
-    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodexHome;
     await removeTestTree(root);
   }
 });
 
 test("project initialization failure leaves stable Agent state unchanged", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-activation-runtime-rollback-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-activation-runtime-rollback-"));
   const project = path.join(root, "project");
-  process.env.HARNESS_HOME = path.join(root, "home");
-  const previousEnvironment = process.env.HARNESS_ENV;
-  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
-  process.env.HARNESS_ENV = "base";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.WOMA_HOME = path.join(root, "home");
+  const previousEnvironment = process.env.WOMA_ENV;
+  const previousCodexHome = process.env.WOMA_ORIGINAL_CODEX_HOME;
+  process.env.WOMA_ENV = "base";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
   try {
     await ensureBaseEnvironment(project);
     await createEnvironment(project, "tools", ["codex"]);
     await mkdir(project, { recursive: true });
-    await writeFile(path.join(project, ".harness"), "blocks memory initialization\n", "utf8");
+    await writeFile(path.join(project, ".woma"), "blocks memory initialization\n", "utf8");
     const opaque = path.join(environmentAgentHomePath("base", "codex"), "opaque.sqlite");
     await writeFile(opaque, "stable\n", "utf8");
 
@@ -1277,24 +1277,24 @@ test("project initialization failure leaves stable Agent state unchanged", { con
 
     assert.equal(await readFile(opaque, "utf8"), "stable\n");
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
-    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodexHome;
     await removeTestTree(root);
   }
 });
 
 test("managed Agent home drift is rejected before project activation", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-runtime-preflight-rollback-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-runtime-preflight-rollback-"));
   const project = path.join(root, "project");
-  process.env.HARNESS_HOME = path.join(root, "home");
-  const previousEnvironment = process.env.HARNESS_ENV;
-  const previousCodexHome = process.env.HARNESS_ORIGINAL_CODEX_HOME;
-  const previousClaudeHome = process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-  process.env.HARNESS_ENV = "base";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  process.env.WOMA_HOME = path.join(root, "home");
+  const previousEnvironment = process.env.WOMA_ENV;
+  const previousCodexHome = process.env.WOMA_ORIGINAL_CODEX_HOME;
+  const previousClaudeHome = process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+  process.env.WOMA_ENV = "base";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
   try {
     await mkdir(project, { recursive: true });
     await ensureBaseEnvironment(project);
@@ -1308,59 +1308,59 @@ test("managed Agent home drift is rejected before project activation", { concurr
     await assert.rejects(activateEnvironment(project, "tools"), /Agent Skills link does not use the shared Environment root/);
 
     assert.equal(await readFile(baseOpaque, "utf8"), "stable\n");
-    await assert.rejects(access(path.join(project, ".harness")));
+    await assert.rejects(access(path.join(project, ".woma")));
     await assert.rejects(access(path.join(project, "AGENTS.md")));
     await assert.rejects(access(path.join(project, "CLAUDE.md")));
   } finally {
-    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previousEnvironment;
-    if (previousCodexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodexHome;
-    if (previousClaudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaudeHome;
+    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previousEnvironment;
+    if (previousCodexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodexHome;
+    if (previousClaudeHome === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaudeHome;
     await removeTestTree(root);
   }
 });
 
 test("foundational Package names cannot be replaced by user sources", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-foundational-identity-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-foundational-identity-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const replacement = path.join(root, "replacement");
-    await mkdir(path.join(replacement, "skills", "harness-project-memory"), { recursive: true });
+    await mkdir(path.join(replacement, "skills", "woma-project-memory"), { recursive: true });
     await writeFile(
-      path.join(replacement, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(replacement, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
-  name: harness-project-memory
+  name: woma-project-memory
   version: 9.0.0
   description: Untrusted replacement.
 spec:
   platforms: [codex]
   skills:
-    - name: harness-project-memory
-      path: ./skills/harness-project-memory
+    - name: woma-project-memory
+      path: ./skills/woma-project-memory
 `,
       "utf8",
     );
     await writeFile(
-      path.join(replacement, "skills", "harness-project-memory", "SKILL.md"),
-      "---\nname: harness-project-memory\ndescription: Replacement.\n---\nReplacement.\n",
+      path.join(replacement, "skills", "woma-project-memory", "SKILL.md"),
+      "---\nname: woma-project-memory\ndescription: Replacement.\n---\nReplacement.\n",
       "utf8",
     );
     await createEnvironment(root, "tools", ["codex"]);
 
     await assert.rejects(installIntoEnvironment(root, "tools", replacement), /can only be installed from builtin:/);
-    assert.equal((await readEnvironmentLock(root, "tools")).packages["harness-project-memory"]?.source, "builtin:harness-project-memory");
+    assert.equal((await readEnvironmentLock(root, "tools")).packages["woma-project-memory"]?.source, "builtin:woma-project-memory");
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("doctor rejects undeclared extra Skills in an Environment view", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-view-extra-skill-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-view-extra-skill-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "tools", ["codex"]);
     await mkdir(path.join(environmentViewPath("tools"), "codex", "skills", "undeclared"));

@@ -32,9 +32,9 @@ async function packageFixture(root: string, version: string, withMcp: boolean): 
 `
     : "";
   await write(
-    path.join(packageRoot, "harness.yaml"),
-    `apiVersion: harness.conda/v1
-kind: Harness
+    path.join(packageRoot, "woma.yaml"),
+    `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: view-package
   version: ${version}
@@ -71,20 +71,20 @@ async function projectLegacySkillsLayout(environmentName: string, targets: reado
 }
 
 test("stable Agent homes isolate opaque state from atomic managed views", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-stable-home-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-stable-home-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    harnessEnvironment: process.env.HARNESS_ENV,
-    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    womaHome: process.env.WOMA_HOME,
+    womaEnvironment: process.env.WOMA_ENV,
+    codexHome: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
-  const home = path.join(root, "harness-home");
+  const home = path.join(root, "woma-home");
   const originalCodex = path.join(root, "original-codex");
   const originalClaude = path.join(root, "user", ".claude");
-  process.env.HARNESS_HOME = home;
-  process.env.HARNESS_ENV = "tools";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = originalCodex;
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
+  process.env.WOMA_HOME = home;
+  process.env.WOMA_ENV = "tools";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = originalCodex;
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
   try {
     await write(path.join(originalCodex, "config.toml"), 'model = "gpt-test"\n');
     await write(path.join(originalCodex, "auth.json"), '{"api_key":"first"}\n');
@@ -238,7 +238,7 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     assert.equal(updatedClaude.mcpServers.existing.command, "keep");
     assert.equal(updatedClaude.mcpServers["view-server"], undefined);
 
-    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite")), sqlite);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-wal")), wal);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-shm")), shm);
@@ -252,28 +252,28 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     assert.deepEqual(await readFile(unreadable), unknown);
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previous.harnessEnvironment;
-    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
-    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.womaEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previous.womaEnvironment;
+    if (previous.codexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
     await removeTestTree(root);
   }
 });
 
 test("Codex can replace legacy projected system Skills without invalidating the Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-codex-system-skills-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-codex-system-skills-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    harnessEnvironment: process.env.HARNESS_ENV,
-    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
+    womaHome: process.env.WOMA_HOME,
+    womaEnvironment: process.env.WOMA_ENV,
+    codexHome: process.env.WOMA_ORIGINAL_CODEX_HOME,
   };
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ENV = "tools";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ENV = "tools";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
   try {
     await createEnvironment(root, "tools", ["codex"]);
     const packageRoot = await packageFixture(root, "1.0.0", false);
@@ -328,40 +328,40 @@ test("Codex can replace legacy projected system Skills without invalidating the 
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
     await write(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "runtime-v2\n");
     await write(path.join(homeSkills, "future-codex-runtime", "state.bin"), Buffer.from([0, 255, 39]));
-    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
     assert.equal(await readFile(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime-v2\n");
     assert.deepEqual(await readFile(path.join(homeSkills, "future-codex-runtime", "state.bin")), Buffer.from([0, 255, 39]));
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
 
-    const managedSkill = path.join(homeSkills, "harness-project-memory");
+    const managedSkill = path.join(homeSkills, "woma-project-memory");
     await rm(managedSkill, { force: true });
     await mkdir(managedSkill);
     const drifted = (await doctorEnvironment(root, "tools")).find((check) => check.label === "view");
     assert.equal(drifted?.status, "fail");
-    assert.match(drifted?.detail ?? "", /Harness-managed shared Skill link/);
+    assert.match(drifted?.detail ?? "", /Woma-managed shared Skill link/);
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previous.harnessEnvironment;
-    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.womaEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previous.womaEnvironment;
+    if (previous.codexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codexHome;
     await removeTestTree(root);
   }
 });
 
 test("activating a legacy Environment merges Agent-installed Skills into the shared root", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-legacy-shared-skills-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-legacy-shared-skills-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    harnessEnvironment: process.env.HARNESS_ENV,
-    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    womaHome: process.env.WOMA_HOME,
+    womaEnvironment: process.env.WOMA_ENV,
+    codexHome: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ENV = "base";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ENV = "base";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
   try {
     const targets = ["codex", "claude"] as const;
     await createEnvironment(root, "tools", [...targets]);
@@ -393,30 +393,30 @@ test("activating a legacy Environment merges Agent-installed Skills into the sha
     assert.equal(JSON.parse(await readFile(path.join(environmentViewPath("tools"), "view.json"), "utf8")).viewVersion, 2);
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previous.harnessEnvironment;
-    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
-    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.womaEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previous.womaEnvironment;
+    if (previous.codexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
     await removeTestTree(root);
   }
 });
 
 test("legacy same-name Agent Skills fail without moving either source", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-legacy-shared-skills-conflict-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-legacy-shared-skills-conflict-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    harnessEnvironment: process.env.HARNESS_ENV,
-    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    womaHome: process.env.WOMA_HOME,
+    womaEnvironment: process.env.WOMA_ENV,
+    codexHome: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ENV = "base";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ENV = "base";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
   try {
     const targets = ["codex", "claude"] as const;
     await createEnvironment(root, "tools", [...targets]);
@@ -454,30 +454,30 @@ test("legacy same-name Agent Skills fail without moving either source", { concur
     await assert.rejects(access(environmentSkillsPath("tools")));
     assert.equal(await readlink(environmentViewPath("tools")), beforeView);
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previous.harnessEnvironment;
-    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
-    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.womaEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previous.womaEnvironment;
+    if (previous.codexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
     await removeTestTree(root);
   }
 });
 
 test("legacy same-name equivalent Agent Skills deduplicate into the shared root", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-legacy-shared-skills-deduplicate-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-legacy-shared-skills-deduplicate-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    harnessEnvironment: process.env.HARNESS_ENV,
-    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
+    womaHome: process.env.WOMA_HOME,
+    womaEnvironment: process.env.WOMA_ENV,
+    codexHome: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
   };
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ENV = "base";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ENV = "base";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
   try {
     const targets = ["codex", "claude"] as const;
     await createEnvironment(root, "tools", [...targets]);
@@ -550,34 +550,34 @@ test("legacy same-name equivalent Agent Skills deduplicate into the shared root"
     assert.equal((await readdir(path.dirname(shared))).some((name) => name.startsWith(".skills-merge-backup-")), false);
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previous.harnessEnvironment;
-    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
-    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.womaEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previous.womaEnvironment;
+    if (previous.codexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
     await removeTestTree(root);
   }
 });
 
 test("a Skill installed by any Agent is immediately visible to every target in only that Environment", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shared-environment-skill-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shared-environment-skill-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    harnessEnvironment: process.env.HARNESS_ENV,
-    codexHome: process.env.HARNESS_ORIGINAL_CODEX_HOME,
-    claudeHome: process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR,
-    piHome: process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR,
-    qoderHome: process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR,
+    womaHome: process.env.WOMA_HOME,
+    womaEnvironment: process.env.WOMA_ENV,
+    codexHome: process.env.WOMA_ORIGINAL_CODEX_HOME,
+    claudeHome: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
+    piHome: process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR,
+    qoderHome: process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR,
   };
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ENV = "tools";
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
-  process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR = path.join(root, "original-pi");
-  process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR = path.join(root, "original-qoder");
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ENV = "tools";
+  process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR = path.join(root, "original-pi");
+  process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR = path.join(root, "original-qoder");
   try {
     const targets = ["codex", "claude", "pi", "qoder"] as const;
     await createEnvironment(root, "tools", [...targets]);
@@ -600,10 +600,10 @@ test("a Skill installed by any Agent is immediately visible to every target in o
     await write(path.join(codexSkills, "broken-local", "SKILL.md"), "missing frontmatter\n");
     await write(
       path.join(codexSkills, "conflicting-local", "SKILL.md"),
-      "---\nname: harness-project-memory\ndescription: Conflicts with a managed Skill.\n---\nConflict.\n",
+      "---\nname: woma-project-memory\ndescription: Conflicts with a managed Skill.\n---\nConflict.\n",
     );
-    const lockPath = path.join(process.env.HARNESS_HOME, "environments", "tools", "lock.json");
-    const recipePath = path.join(process.env.HARNESS_HOME, "environments", "tools", "environment.yaml");
+    const lockPath = path.join(process.env.WOMA_HOME, "environments", "tools", "lock.json");
+    const recipePath = path.join(process.env.WOMA_HOME, "environments", "tools", "environment.yaml");
     const beforeLock = await readFile(lockPath);
     const beforeRecipe = await readFile(recipePath);
 
@@ -637,34 +637,34 @@ test("a Skill installed by any Agent is immediately visible to every target in o
     assert.deepEqual(await readFile(lockPath), beforeLock);
     assert.deepEqual(await readFile(recipePath), beforeRecipe);
     assert.equal((await readEnvironment(root, "tools")).spec.roots.some((item) => item.name.endsWith("-installed")), false);
-    await assert.rejects(access(path.join(process.env.HARNESS_HOME, "migrations", "skills", "codex-installed")));
+    await assert.rejects(access(path.join(process.env.WOMA_HOME, "migrations", "skills", "codex-installed")));
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
     assert.deepEqual((await inspectEnvironmentLocalSkills(await readEnvironment(root, "isolated"))).skills, []);
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.harnessEnvironment === undefined) delete process.env.HARNESS_ENV;
-    else process.env.HARNESS_ENV = previous.harnessEnvironment;
-    if (previous.codexHome === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
-    if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
-    if (previous.piHome === undefined) delete process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR;
-    else process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR = previous.piHome;
-    if (previous.qoderHome === undefined) delete process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR = previous.qoderHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.womaEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previous.womaEnvironment;
+    if (previous.codexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codexHome;
+    if (previous.claudeHome === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    if (previous.piHome === undefined) delete process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR;
+    else process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR = previous.piHome;
+    if (previous.qoderHome === undefined) delete process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR = previous.qoderHome;
     await removeTestTree(root);
   }
 });
 
 test("Pi uses a stable Agent home with only Skills managed by the Environment view", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-pi-home-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-pi-home-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    piHome: process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR,
+    womaHome: process.env.WOMA_HOME,
+    piHome: process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR,
   };
-  process.env.HARNESS_HOME = path.join(root, "home");
-  process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR = path.join(root, "original-pi");
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR = path.join(root, "original-pi");
   try {
     await createEnvironment(root, "pi-tools", ["pi"]);
     const home = environmentAgentHomePath("pi-tools", "pi");
@@ -690,28 +690,28 @@ test("Pi uses a stable Agent home with only Skills managed by the Environment vi
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.deepEqual((await readdir(path.join(view, "pi"))).sort(), ["skills"]);
 
-    await installIntoEnvironment(root, "pi-tools", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "pi-tools", "builtin:woma-project-memory");
     assert.equal(await readFile(path.join(home, "settings.json"), "utf8"), '{"theme":"light"}\n');
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.equal((await doctorEnvironment(root, "pi-tools")).find((check) => check.label === "view")?.status, "ok");
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.piHome === undefined) delete process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR;
-    else process.env.HARNESS_ORIGINAL_PI_CODING_AGENT_DIR = previous.piHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.piHome === undefined) delete process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR;
+    else process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR = previous.piHome;
     await removeTestTree(root);
   }
 });
 
 test("Qoder merges MCP servers and Hooks into a managed settings.json view", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-qoder-home-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-qoder-home-"));
   const previous = {
-    harnessHome: process.env.HARNESS_HOME,
-    qoderHome: process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR,
+    womaHome: process.env.WOMA_HOME,
+    qoderHome: process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR,
   };
-  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.WOMA_HOME = path.join(root, "home");
   const originalQoder = path.join(root, "original-qoder");
-  process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR = originalQoder;
+  process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR = originalQoder;
   try {
     await write(
       path.join(originalQoder, "settings.json"),
@@ -729,9 +729,9 @@ test("Qoder merges MCP servers and Hooks into a managed settings.json view", { c
 
     const packageRoot = path.join(root, "qoder-package");
     await write(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: qoder-package
   version: 1.0.0
@@ -771,7 +771,7 @@ spec:
     const metadata = JSON.parse(await readFile(path.join(view, "view.json"), "utf8"));
     assert.deepEqual(metadata.resources.qoderMcpServers, ["view-server"]);
 
-    await installIntoEnvironment(root, "qoder-tools", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "qoder-tools", "builtin:woma-project-memory");
     const updated = JSON.parse(await readFile(settingsLink, "utf8"));
     assert.deepEqual(updated.mcpServers["view-server"], { type: "stdio", command: "node", args: ["server.mjs"] });
     assert.deepEqual(updated.hooks.PostToolUse, [
@@ -780,19 +780,19 @@ spec:
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.equal((await doctorEnvironment(root, "qoder-tools")).find((check) => check.label === "view")?.status, "ok");
   } finally {
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
-    if (previous.qoderHome === undefined) delete process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_QODER_CONFIG_DIR = previous.qoderHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.qoderHome === undefined) delete process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR = previous.qoderHome;
     await removeTestTree(root);
   }
 });
 
 test("failed publication rolls stable Agent home metadata back without touching opaque state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-stable-home-rollback-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
-  const previousClaude = process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-stable-home-rollback-"));
+  process.env.WOMA_HOME = path.join(root, "home");
+  const previousClaude = process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
   try {
     await createEnvironment(root, "tools", ["codex", "claude"]);
     const packageRoot = await packageFixture(root, "1.0.0", false);
@@ -817,21 +817,21 @@ test("failed publication rolls stable Agent home metadata back without touching 
     assert.deepEqual(await readFile(claudeStatePath), beforeClaude);
     assert.deepEqual(await readFile(path.join(home, "opaque.db")), state);
   } finally {
-    if (previousClaude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaude;
+    if (previousClaude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaude;
     await removeTestTree(root);
   }
 });
 
 test("shared credential links migrate into Environment views", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-credential-link-migration-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
-  const previousCodex = process.env.HARNESS_ORIGINAL_CODEX_HOME;
-  const previousClaude = process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-credential-link-migration-"));
+  process.env.WOMA_HOME = path.join(root, "home");
+  const previousCodex = process.env.WOMA_ORIGINAL_CODEX_HOME;
+  const previousClaude = process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
   const originalCodex = path.join(root, "original-codex");
   const originalClaude = path.join(root, "original-claude");
-  process.env.HARNESS_ORIGINAL_CODEX_HOME = originalCodex;
-  process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
+  process.env.WOMA_ORIGINAL_CODEX_HOME = originalCodex;
+  process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = originalClaude;
   try {
     await write(path.join(originalCodex, "auth.json"), '{"api_key":"legacy"}\n');
     await write(path.join(originalClaude, ".credentials.json"), '{"oauth":"legacy"}\n');
@@ -844,7 +844,7 @@ test("shared credential links migrate into Environment views", { concurrency: fa
     await symlink(path.join(originalCodex, "auth.json"), codexCredential);
     await symlink(path.join(originalClaude, ".credentials.json"), claudeCredential);
 
-    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
 
     assert.equal(
       path.resolve(path.dirname(codexCredential), await readlink(codexCredential)),
@@ -861,17 +861,17 @@ test("shared credential links migrate into Environment views", { concurrency: fa
     assert.equal(await readFile(codexCredential, "utf8"), '{"api_key":"legacy"}\n');
     assert.equal(await readFile(claudeCredential, "utf8"), '{"oauth":"legacy"}\n');
   } finally {
-    if (previousCodex === undefined) delete process.env.HARNESS_ORIGINAL_CODEX_HOME;
-    else process.env.HARNESS_ORIGINAL_CODEX_HOME = previousCodex;
-    if (previousClaude === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
-    else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaude;
+    if (previousCodex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
+    else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodex;
+    if (previousClaude === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previousClaude;
     await removeTestTree(root);
   }
 });
 
 test("doctor rejects managed home drift but ignores opaque Agent files", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-stable-home-doctor-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-stable-home-doctor-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "tools", ["codex"]);
     const home = environmentAgentHomePath("tools", "codex");

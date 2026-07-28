@@ -1,0 +1,4 @@
+interface:
+  display_name: "Woma Package Builder"
+  short_description: "Create and update valid Woma Packages"
+  default_prompt: "Use $woma-package-builder to turn my Agent resources or requirements into a validated Woma Package."

@@ -1,6 +1,6 @@
-# Harness Package authoring reference
+# Woma Package authoring reference
 
-Use this contract when creating or updating a Package. Omit empty optional sections instead of inventing resources or requirements. Harness has one Package type; the fields present describe what it provides.
+Use this contract when creating or updating a Package. Omit empty optional sections instead of inventing resources or requirements. Woma has one Package type; the fields present describe what it provides.
 
 ## Directory layouts
 
@@ -8,7 +8,7 @@ A wrapped standalone Skill becomes self-contained:
 
 ```text
 paper-search/
-├── harness.yaml
+├── woma.yaml
 └── skills/
     └── paper-search/
         ├── SKILL.md
@@ -19,7 +19,7 @@ A Package may combine resource kinds:
 
 ```text
 repository-tools/
-├── harness.yaml
+├── woma.yaml
 └── skills/
     └── repository-review/
         └── SKILL.md
@@ -30,8 +30,8 @@ Keep every declared path inside the Package root. Copy external resources rather
 ## General manifest
 
 ```yaml
-apiVersion: harness.conda/v1
-kind: Harness
+apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: repository-tools
   version: 0.1.0
@@ -103,7 +103,7 @@ For a standalone Skill:
 
 1. Read its complete `SKILL.md` and inspect bundled files.
 2. Derive the manifest Skill name from valid frontmatter, not only the directory name.
-3. Copy the complete Skill directory into `skills/<name>/`, excluding source-control metadata, dependency caches, Harness project state, and OS metadata.
+3. Copy the complete Skill directory into `skills/<name>/`, excluding source-control metadata, dependency caches, Woma project state, and OS metadata.
 4. Preserve executable bits required by bundled scripts.
 5. Reject or resolve symbolic links before packaging; never allow a link to escape the captured content.
 6. Leave the original directory unchanged.
@@ -135,9 +135,9 @@ spec:
       path: ./skills/auto-research
 ```
 
-Make every dependency `name` match the Package returned by `harness inspect <source>`. Accepted sources are `builtin:name`, local paths, `gh:owner/repository#tag-or-revision`, HTTPS Git, and SSH Git. Relative local sources resolve from the parent Package and are appropriate only for local development. Git and built-in Packages cannot depend on local paths.
+Make every dependency `name` match the Package returned by `woma inspect <source>`. Accepted sources are `builtin:name`, local paths, `gh:owner/repository#tag-or-revision`, HTTPS Git, and SSH Git. Relative local sources resolve from the parent Package and are appropriate only for local development. Git and built-in Packages cannot depend on local paths.
 
-A dependency-only Package may omit Skills and entrypoints. Add a coordinating entrypoint Skill only when the Package must teach the Agent a reusable method. That Skill may describe normal capability ordering, evidence-based branching, retries, returns, interruption checkpoints, success and failure conditions, budgets, no-progress limits, and outputs. It must not turn the dependency array into steps or require a Harness workflow engine.
+A dependency-only Package may omit Skills and entrypoints. Add a coordinating entrypoint Skill only when the Package must teach the Agent a reusable method. That Skill may describe normal capability ordering, evidence-based branching, retries, returns, interruption checkpoints, success and failure conditions, budgets, no-progress limits, and outputs. It must not turn the dependency array into steps or require a Woma workflow engine.
 
 ## Updating an existing Package
 
@@ -153,7 +153,7 @@ A dependency-only Package may omit Skills and entrypoints. Add a coordinating en
 From the Package's parent directory, run:
 
 ```bash
-harness inspect ./repository-tools
+woma inspect ./repository-tools
 ```
 
 This resolves the complete dependency closure and validates manifest structure, Package identities, versions, Skill frontmatter and paths, MCP and hook declarations, source portability, and Package contents. Do not report completion until it succeeds. To test activation separately, install into an inactive disposable Environment only with explicit user authorization.

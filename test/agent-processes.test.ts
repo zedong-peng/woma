@@ -12,7 +12,7 @@ test("Agent process detection recognizes native and Node CLIs without matching a
   const processes = parseAgentProcesses([
     "  123 codex /usr/local/bin/codex",
     "  456 node node --no-warnings /opt/@anthropic-ai/claude-code/cli.js",
-    "  789 node node /opt/harness/cli.js migrate sessions --from codex",
+    "  789 node node /opt/woma/cli.js migrate sessions --from codex",
     "  999 bash bash -c claude",
   ].join("\n"), 9999);
   assert.deepEqual(processes, running);

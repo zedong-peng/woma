@@ -3,7 +3,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { requireAgentMigrationConfirmation } from "./agent-processes.js";
 import { detectAgentClis } from "./agent-cli.js";
-import { captureHarness } from "./capture.js";
+import { captureWoma } from "./capture.js";
 import { exportEnvironmentBundle, importEnvironmentBundle } from "./environment-bundle.js";
 import {
   activateEnvironment,
@@ -35,21 +35,21 @@ import { migrateExistingSessions } from "./migrate-sessions.js";
 import { runInEnvironment } from "./run.js";
 import type { Action, LockedPackage, Platform } from "./types.js";
 
-const EXISTING_AGENT_STATE_NOTICE = `Harness created an isolated base Environment.
+const EXISTING_AGENT_STATE_NOTICE = `Woma created an isolated base Environment.
 
 Existing Codex or Claude data remains unchanged in the original Agent homes.
 Supported configuration and credentials are seeded separately where supported.
 Existing Agent Skills, sessions, and history were detected but were not imported.
 
 Preview migration:
-  harness migrate skills --dry-run
-  harness migrate sessions --dry-run
+  woma migrate skills --dry-run
+  woma migrate sessions --dry-run
 
 Import Skills into base:
-  harness migrate skills
+  woma migrate skills
 
 After stopping all Codex and Claude processes, import sessions:
-  harness migrate sessions
+  woma migrate sessions
 `;
 
 const baseInitializationOptions: BaseEnvironmentInitializationOptions = {
@@ -69,7 +69,7 @@ async function ensureSelectedBase(project: string, name: string): Promise<void> 
 
 function selectedEnvironment(requested?: string): string {
   if (requested) return requested;
-  return process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT;
+  return process.env.WOMA_ENV || DEFAULT_ENVIRONMENT;
 }
 
 function targets(input: string): Platform[] {
@@ -120,7 +120,7 @@ function printPackageProvenance(lock: LockedPackage, indent = "  "): void {
 }
 
 program
-  .name("harness")
+  .name("woma")
   .description("Create, reproduce, and switch isolated Agent environments")
   .version("0.6.0")
   .enablePositionalOptions()
@@ -132,7 +132,7 @@ program
 
 program
   .command("init [shell]")
-  .description("initialize Harness for shell interaction")
+  .description("initialize Woma for shell interaction")
   .option("--dry-run", "print the initialization plan without changing files", false)
   .option("--reverse", "undo shell initialization", false)
   .action(async (shell: string | undefined, options: { dryRun: boolean; reverse: boolean }) => {
@@ -150,7 +150,7 @@ program
     }
   });
 
-const skeletonCommand = program.command("skeleton").description("generate an editable Harness Package recipe");
+const skeletonCommand = program.command("skeleton").description("generate an editable Woma Package recipe");
 
 skeletonCommand
   .command("workflow <name>")
@@ -199,7 +199,7 @@ program
   .description("create a new Agent environment")
   .requiredOption("-n, --name <environment>", "environment name")
   .option("-t, --target <target>", "codex, claude, pi, qoder, both, all, or a comma-separated list")
-  .option("-f, --file <bundle>", "create from a portable .harness-env bundle")
+  .option("-f, --file <bundle>", "create from a portable .woma-env bundle")
   .action(createCommand);
 
 function migrationSource(input: string): SkillMigrationSource {
@@ -393,7 +393,7 @@ envCommand
   .command("export")
   .description("export a portable Environment bundle with its complete Package closure")
   .requiredOption("-n, --name <environment>", "environment to export")
-  .requiredOption("-o, --output <file>", "destination .harness-env file")
+  .requiredOption("-o, --output <file>", "destination .woma-env file")
   .action(async (options: { name: string; output: string }, command: Command) => {
     const project = projectRoot(command);
     await ensureSelectedBase(project, options.name);
@@ -407,7 +407,7 @@ program
   .command("export")
   .description("export a portable Environment bundle with its complete Package closure")
   .option("-n, --name <environment>", "environment to export; defaults to the active environment, then base")
-  .requiredOption("-f, --file <file>", "destination .harness-env file")
+  .requiredOption("-f, --file <file>", "destination .woma-env file")
   .action(async (options: { name?: string; file: string }, command: Command) => {
     const project = projectRoot(command);
     const name = selectedEnvironment(options.name);
@@ -505,7 +505,7 @@ program
 
 program
   .command("deactivate")
-  .description("leave the selected Harness environment and restore the original Agent homes")
+  .description("leave the selected Woma environment and restore the original Agent homes")
   .action(() => {
     const previous = selectedEnvironment();
     console.log(`Deactivated environment ${previous}`);
@@ -558,12 +558,12 @@ program
 
 program
   .command("capture <directory>")
-  .description("capture one Agent's Skills, MCP servers, and hooks as a Harness package")
+  .description("capture one Agent's Skills, MCP servers, and hooks as a Woma package")
   .requiredOption("--from <platform>", "codex or claude")
   .option("--name <name>", "package name")
   .action(async (directory: string, options: { from: string; name?: string }, command: Command) => {
     if (options.from !== "codex" && options.from !== "claude") throw new Error("--from must be codex or claude");
-    const result = await captureHarness({
+    const result = await captureWoma({
       sourceRoot: projectRoot(command),
       outputRoot: directory,
       platform: options.from,
@@ -604,11 +604,11 @@ program
     console.log(`  hooks         ${manifest.spec.hooks.map((hook) => hook.event).join(", ") || "none"}`);
   });
 
-program.configureOutput({ outputError: (message, write) => write(`harness: ${message}`) });
+program.configureOutput({ outputError: (message, write) => write(`woma: ${message}`) });
 
 try {
   await program.parseAsync(process.argv);
 } catch (error) {
-  console.error(`harness: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`woma: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 }

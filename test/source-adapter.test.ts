@@ -27,7 +27,7 @@ async function runCli(args: string[], cwd: string, home: string): Promise<{ code
   const previous = {
     argv: process.argv,
     cwd: process.cwd(),
-    harnessHome: process.env.HARNESS_HOME,
+    womaHome: process.env.WOMA_HOME,
     exitCode: process.exitCode,
     stdoutWrite: process.stdout.write,
     stderrWrite: process.stderr.write,
@@ -36,7 +36,7 @@ async function runCli(args: string[], cwd: string, home: string): Promise<{ code
   let stderr = "";
   process.argv = [process.execPath, cli, ...args];
   process.chdir(cwd);
-  process.env.HARNESS_HOME = home;
+  process.env.WOMA_HOME = home;
   process.exitCode = undefined;
   process.stdout.write = ((chunk: string | Uint8Array) => {
     stdout += chunk.toString();
@@ -52,8 +52,8 @@ async function runCli(args: string[], cwd: string, home: string): Promise<{ code
   } finally {
     process.argv = previous.argv;
     process.chdir(previous.cwd);
-    if (previous.harnessHome === undefined) delete process.env.HARNESS_HOME;
-    else process.env.HARNESS_HOME = previous.harnessHome;
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
     process.exitCode = previous.exitCode;
     process.stdout.write = previous.stdoutWrite;
     process.stderr.write = previous.stderrWrite;
@@ -69,9 +69,9 @@ function skill(name: string, description = `Use ${name}.`): string {
   return `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`;
 }
 
-test("a root harness.yaml remains authoritative", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-native-source-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+test("a root woma.yaml remains authoritative", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-native-source-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const pkg = await installPackageSource(path.join(fixtures, "native"));
     assert.equal(pkg.manifest.metadata.name, "native-fixture");
@@ -83,9 +83,36 @@ test("a root harness.yaml remains authoritative", { concurrency: false }, async 
   }
 });
 
+test("legacy manifests are rejected before implicit Package normalization", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-legacy-manifest-"));
+  process.env.WOMA_HOME = path.join(root, "home");
+  try {
+    const source = path.join(root, "legacy-package");
+    await write(
+      path.join(source, "harness.yaml"),
+      `apiVersion: harness.conda/v1
+kind: Harness
+metadata:
+  name: legacy-package
+  version: 1.0.0
+  description: Legacy Package.
+spec:
+  skills:
+    - name: legacy-skill
+      path: ./skills/legacy-skill
+`,
+    );
+    await write(path.join(source, "skills", "legacy-skill", "SKILL.md"), skill("legacy-skill"));
+
+    await assert.rejects(installPackageSource(source), /Legacy harness\.yaml is not supported; use woma\.yaml/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("a root SKILL.md becomes one implicit Package without modifying its source", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-standalone-source-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-standalone-source-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   const source = path.join(fixtures, "standalone");
   try {
     const before = await hashDirectory(source);
@@ -94,7 +121,7 @@ test("a root SKILL.md becomes one implicit Package without modifying its source"
     assert.match(pkg.manifest.metadata.version, /^0\.0\.0\+local\.[a-f0-9]{12}$/);
     assert.deepEqual(pkg.manifest.spec.platforms, ["codex", "claude", "pi", "qoder"]);
     assert.deepEqual(pkg.manifest.spec.skills, [{ name: "standalone-research", path: "./skills/standalone" }]);
-    assert.equal(await pathExists(path.join(source, "harness.yaml")), false);
+    assert.equal(await pathExists(path.join(source, "woma.yaml")), false);
     assert.equal(await hashDirectory(source), before);
     assert.match(await readFile(path.join(pkg.root, "skills", "standalone", "references", "method.md"), "utf8"), /supporting content/);
   } finally {
@@ -103,7 +130,7 @@ test("a root SKILL.md becomes one implicit Package without modifying its source"
 });
 
 test("inspect uses implicit Package normalization", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-inspect-implicit-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-inspect-implicit-"));
   try {
     const result = await runCli(["inspect", path.join(fixtures, "standalone")], repositoryRoot, path.join(root, "home"));
     assert.equal(result.code, 0, result.stderr);
@@ -115,8 +142,8 @@ test("inspect uses implicit Package normalization", { concurrency: false }, asyn
 });
 
 test("direct skills children become one deterministic implicit multi-Skill Package", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-multi-source-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-multi-source-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   const source = path.join(fixtures, "ResearchStudio", "ResearchStudio-Idea");
   try {
     const before = await hashDirectory(source);
@@ -129,7 +156,7 @@ test("direct skills children become one deterministic implicit multi-Skill Packa
     ]);
     assert.deepEqual(pkg.manifest.spec.dependencies, []);
     assert.deepEqual(pkg.manifest.spec.entrypoints, []);
-    assert.equal(await pathExists(path.join(source, "harness.yaml")), false);
+    assert.equal(await pathExists(path.join(source, "woma.yaml")), false);
     assert.equal(await hashDirectory(source), before);
   } finally {
     await removeTestTree(root);
@@ -137,14 +164,14 @@ test("direct skills children become one deterministic implicit multi-Skill Packa
 });
 
 test("dependency resolution uses implicit Package normalization", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-dependency-implicit-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-dependency-implicit-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const packageRoot = path.join(root, "native-parent");
     await write(
-      path.join(packageRoot, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: native-parent
   version: 1.0.0
@@ -166,8 +193,8 @@ spec:
 });
 
 test("a Package collection root is rejected without changing Environment state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-collection-source-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-collection-source-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   const project = path.join(root, "project");
   try {
     await createEnvironment(project, "research", ["codex"]);
@@ -177,7 +204,7 @@ test("a Package collection root is rejected without changing Environment state",
 
     await assert.rejects(
       installIntoEnvironment(project, "research", path.join(fixtures, "ResearchStudio")),
-      /Unsupported Package source layout.*expected harness\.yaml, SKILL\.md, or skills\/\*\/SKILL\.md/,
+      /Unsupported Package source layout.*expected woma\.yaml, SKILL\.md, or skills\/\*\/SKILL\.md/,
     );
     assert.deepEqual(await readFile(environmentPath(project, "research")), beforeRecipe);
     assert.deepEqual(await readEnvironmentLock(project, "research"), beforeLock);
@@ -188,35 +215,35 @@ test("a Package collection root is rejected without changing Environment state",
 });
 
 test("implicit Packages reject invalid Skill frontmatter", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-invalid-skill-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-invalid-skill-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const source = path.join(root, "invalid");
     await write(path.join(source, "SKILL.md"), "---\nname: invalid\ndescription: [unterminated\n---\n");
     await assert.rejects(installPackageSource(source), /invalid YAML frontmatter/);
-    assert.equal(await pathExists(path.join(source, "harness.yaml")), false);
+    assert.equal(await pathExists(path.join(source, "woma.yaml")), false);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("implicit multi-Skill Packages reject duplicate Skill names", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-duplicate-skills-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-duplicate-skills-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const source = path.join(root, "duplicate-package");
     await write(path.join(source, "skills", "first", "SKILL.md"), skill("duplicate"));
     await write(path.join(source, "skills", "second", "SKILL.md"), skill("duplicate"));
     await assert.rejects(installPackageSource(source), /Duplicate skill name: duplicate/);
-    assert.equal(await pathExists(path.join(source, "harness.yaml")), false);
+    assert.equal(await pathExists(path.join(source, "woma.yaml")), false);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("implicit Packages reject unsafe Skill names and symbolic links", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-unsafe-implicit-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-unsafe-implicit-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const unsafeName = path.join(root, "unsafe-name");
     await write(path.join(unsafeName, "SKILL.md"), skill("../../escape"));
@@ -227,15 +254,15 @@ test("implicit Packages reject unsafe Skill names and symbolic links", { concurr
     await write(path.join(root, "outside.txt"), "outside\n");
     await symlink(path.join(root, "outside.txt"), path.join(linked, "outside.txt"));
     await assert.rejects(installPackageSource(linked), /contains unsupported symlink/);
-    assert.equal(await pathExists(path.join(linked, "harness.yaml")), false);
+    assert.equal(await pathExists(path.join(linked, "woma.yaml")), false);
   } finally {
     await removeTestTree(root);
   }
 });
 
 test("repeated installation and repair reproduce implicit Package identity and bytes", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-repeat-implicit-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-repeat-implicit-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   const source = path.join(fixtures, "ResearchStudio", "ResearchStudio-Idea");
   try {
     const first = await installPackageSource(source);
@@ -258,8 +285,8 @@ test("repeated installation and repair reproduce implicit Package identity and b
 });
 
 test("Skill ownership conflicts use the ordinary Environment transaction", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-implicit-conflict-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-implicit-conflict-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   const project = path.join(root, "project");
   try {
     const first = path.join(root, "first-package");
@@ -285,15 +312,15 @@ test("Skill ownership conflicts use the ordinary Environment transaction", { con
 });
 
 test("local and Git sources use the same implicit normalization", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-git-implicit-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-git-implicit-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   try {
     const local = await installPackageSource(path.join(fixtures, "standalone"));
     const repository = path.join(root, "standalone.git");
     await cp(path.join(fixtures, "standalone"), repository, { recursive: true });
     await run("git", ["init"], { cwd: repository });
     await run("git", ["add", "."], { cwd: repository });
-    await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "fixture"], {
+    await run("git", ["-c", "user.name=Woma Test", "-c", "user.email=woma@example.invalid", "commit", "-m", "fixture"], {
       cwd: repository,
     });
 
@@ -304,7 +331,7 @@ test("local and Git sources use the same implicit normalization", { concurrency:
     assert.match(fromGit.manifest.metadata.version, /^0\.0\.0\+git\.[a-f0-9]{12}$/);
     assert.match(fromGit.lock.commit!, /^[a-f0-9]{40,64}$/);
     assert.equal(fromGit.lock.resolved, undefined);
-    assert.equal(await pathExists(path.join(repository, "harness.yaml")), false);
+    assert.equal(await pathExists(path.join(repository, "woma.yaml")), false);
 
     await removeTestTree(fromGit.root);
     const restored = await repairLockedPackage(fromGit.lock);
@@ -316,14 +343,14 @@ test("local and Git sources use the same implicit normalization", { concurrency:
 });
 
 test("Git subdirectory installs preserve immutable provenance and repair after a branch moves", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-git-subdir-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-git-subdir-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   const repository = path.join(root, "research-studio.git");
   try {
     await write(path.join(repository, "ResearchStudio-Idea", "skills", "idea", "SKILL.md"), skill("idea"));
     await run("git", ["init", "-b", "main"], { cwd: repository });
     await run("git", ["add", "."], { cwd: repository });
-    await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "first"], { cwd: repository });
+    await run("git", ["-c", "user.name=Woma Test", "-c", "user.email=woma@example.invalid", "commit", "-m", "first"], { cwd: repository });
     const firstCommit = (await run("git", ["rev-parse", "HEAD"], { cwd: repository })).stdout.trim();
     const installed = await installPackageSource(repository, root, { subdirectory: "ResearchStudio-Idea" });
     assert.equal(installed.lock.source, repository);
@@ -336,7 +363,7 @@ test("Git subdirectory installs preserve immutable provenance and repair after a
 
     await write(path.join(repository, "README.md"), "branch moved\n");
     await run("git", ["add", "."], { cwd: repository });
-    await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "second"], { cwd: repository });
+    await run("git", ["-c", "user.name=Woma Test", "-c", "user.email=woma@example.invalid", "commit", "-m", "second"], { cwd: repository });
     await removeTestTree(installed.root);
     const restored = await repairLockedPackage(installed.lock);
     assert.equal(restored.lock.commit, firstCommit);
@@ -362,7 +389,7 @@ test("Git subdirectory installs preserve immutable provenance and repair after a
     const shown = await runCli(
       ["--project", project, "list", "--name", "research"],
       root,
-      process.env.HARNESS_HOME!,
+      process.env.WOMA_HOME!,
     );
     assert.equal(shown.code, 0, shown.stderr);
     assert.match(shown.stdout, /^\s+researchstudio-idea@/m);
@@ -373,15 +400,15 @@ test("Git subdirectory installs preserve immutable provenance and repair after a
 });
 
 test("Git subdirectory installs reject unsafe paths and symlinks", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-git-subdir-safety-"));
-  process.env.HARNESS_HOME = path.join(root, "home");
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-git-subdir-safety-"));
+  process.env.WOMA_HOME = path.join(root, "home");
   const repository = path.join(root, "repository.git");
   try {
     await write(path.join(repository, "package", "SKILL.md"), skill("safe"));
     await symlink("package", path.join(repository, "linked-package"));
     await run("git", ["init", "-b", "main"], { cwd: repository });
     await run("git", ["add", "."], { cwd: repository });
-    await run("git", ["-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-m", "fixture"], { cwd: repository });
+    await run("git", ["-c", "user.name=Woma Test", "-c", "user.email=woma@example.invalid", "commit", "-m", "fixture"], { cwd: repository });
 
     await assert.rejects(
       installPackageSource(repository, root, { commit: "main" }),

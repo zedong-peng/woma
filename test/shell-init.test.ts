@@ -21,7 +21,7 @@ test("shell profile paths follow Conda conventions", () => {
 });
 
 test("shell initialization installs a static hook without replacing user profile content", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-init-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-init-"));
   const profileTarget = path.join(root, "shared-profile");
   const profilePath = path.join(root, ".bashrc");
   const stateHome = path.join(root, "state");
@@ -29,26 +29,26 @@ test("shell initialization installs a static hook without replacing user profile
     await writeFile(profileTarget, "# user shell settings\n", { encoding: "utf8", mode: 0o640 });
     await symlink(profileTarget, profilePath);
 
-    const initialized = await initializeShell("bash", { profilePath, harnessHome: stateHome });
+    const initialized = await initializeShell("bash", { profilePath, womaHome: stateHome });
     assert.deepEqual(initialized.actions.map((entry) => entry.verb), ["create", "merge"]);
     assert.equal(await readFile(initialized.hookPath, "utf8"), renderShellHook("bash"));
     const profile = await readFile(profilePath, "utf8");
     assert.match(profile, /^# user shell settings/);
-    assert.match(profile, /# >>> harness initialize >>>/);
-    assert.match(profile, /managed by 'harness init'/);
+    assert.match(profile, /# >>> woma initialize >>>/);
+    assert.match(profile, /managed by 'woma init'/);
     assert.ok(profile.includes(`. '${initialized.hookPath}'`));
-    assert.doesNotMatch(profile, /eval .*harness|node .*harness/);
+    assert.doesNotMatch(profile, /eval .*woma|node .*woma/);
     assert.equal((await lstat(profilePath)).isSymbolicLink(), true);
     assert.equal(await readlink(profilePath), profileTarget);
     assert.equal((await stat(profileTarget)).mode & 0o777, 0o640);
     await run("bash", ["-n", initialized.hookPath]);
     await run("bash", ["-n", profilePath]);
 
-    const repeated = await initializeShell("bash", { profilePath, harnessHome: stateHome });
+    const repeated = await initializeShell("bash", { profilePath, womaHome: stateHome });
     assert.deepEqual(repeated.actions, []);
     assert.equal(await readFile(profilePath, "utf8"), profile);
 
-    const reversed = await initializeShell("bash", { profilePath, harnessHome: stateHome, reverse: true });
+    const reversed = await initializeShell("bash", { profilePath, womaHome: stateHome, reverse: true });
     assert.deepEqual(reversed.actions.map((entry) => entry.verb), ["remove", "merge"]);
     assert.equal(await readFile(profilePath, "utf8"), "# user shell settings\n");
     await assert.rejects(access(initialized.hookPath), { code: "ENOENT" });
@@ -59,11 +59,11 @@ test("shell initialization installs a static hook without replacing user profile
 });
 
 test("shell initialization dry-run reports changes without writing files", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-init-dry-run-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-init-dry-run-"));
   const profilePath = path.join(root, ".zshrc");
   const stateHome = path.join(root, "state");
   try {
-    const result = await initializeShell("zsh", { profilePath, harnessHome: stateHome, dryRun: true });
+    const result = await initializeShell("zsh", { profilePath, womaHome: stateHome, dryRun: true });
     assert.deepEqual(result.actions.map((entry) => entry.verb), ["create", "create"]);
     await assert.rejects(access(profilePath), { code: "ENOENT" });
     await assert.rejects(access(result.hookPath), { code: "ENOENT" });
@@ -72,43 +72,15 @@ test("shell initialization dry-run reports changes without writing files", async
   }
 });
 
-test("shell initialization migrates legacy eval shell-hook lines", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-init-legacy-"));
-  const profilePath = path.join(root, ".zshrc");
-  const stateHome = path.join(root, "state");
-  try {
-    await writeFile(
-      profilePath,
-      ["# user shell settings", 'eval "$(harness shell hook)"', 'eval "$(harness-conda shell hook zsh)"', "alias evaluate='echo shell hook docs'", ""].join("\n"),
-      "utf8",
-    );
-
-    const initialized = await initializeShell("zsh", { profilePath, harnessHome: stateHome });
-    assert.deepEqual(initialized.actions.map((entry) => entry.verb), ["create", "merge"]);
-    const profile = await readFile(profilePath, "utf8");
-    assert.match(profile, /^# user shell settings/);
-    assert.match(profile, /# >>> harness initialize >>>/);
-    assert.equal(profile.includes("shell hook)"), false);
-    assert.ok(profile.includes("alias evaluate='echo shell hook docs'"));
-
-    await writeFile(profilePath, `eval "$(harness shell hook)"\n${profile}`, "utf8");
-    const repeated = await initializeShell("zsh", { profilePath, harnessHome: stateHome });
-    assert.deepEqual(repeated.actions.map((entry) => entry.verb), ["merge"]);
-    assert.equal(await readFile(profilePath, "utf8"), profile);
-  } finally {
-    await removeTestTree(root);
-  }
-});
-
 test("shell initialization rejects malformed managed blocks without changing them", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-shell-init-markers-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-init-markers-"));
   const profilePath = path.join(root, ".bashrc");
-  const original = "# >>> harness initialize >>>\nmodified\n";
+  const original = "# >>> woma initialize >>>\nmodified\n";
   try {
     await writeFile(profilePath, original, "utf8");
     await assert.rejects(
-      initializeShell("bash", { profilePath, harnessHome: path.join(root, "state") }),
-      /invalid Harness initialization block/,
+      initializeShell("bash", { profilePath, womaHome: path.join(root, "state") }),
+      /invalid Woma initialization block/,
     );
     assert.equal(await readFile(profilePath, "utf8"), original);
     await assert.rejects(access(path.join(root, "state")), { code: "ENOENT" });
@@ -118,30 +90,30 @@ test("shell initialization rejects malformed managed blocks without changing the
 });
 
 test("CLI init installs shell integration and supports reverse", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-cli-init-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-init-"));
   const stateHome = path.join(root, "state");
   const profilePath = path.join(root, process.platform === "darwin" ? ".bash_profile" : ".bashrc");
   const cli = path.resolve("dist/src/cli.js");
-  const environment = { ...process.env, HOME: root, HARNESS_HOME: stateHome, SHELL: "/bin/bash" };
+  const environment = { ...process.env, HOME: root, WOMA_HOME: stateHome, SHELL: "/bin/bash" };
   try {
     const initialized = await run(process.execPath, [cli, "init", "bash"], { cwd: root, env: environment });
     assert.match(initialized.stdout, /Initialized bash shell integration/);
-    assert.match(await readFile(profilePath, "utf8"), /# >>> harness initialize >>>/);
-    await access(path.join(stateHome, "shell", "harness.bash"));
+    assert.match(await readFile(profilePath, "utf8"), /# >>> woma initialize >>>/);
+    await access(path.join(stateHome, "shell", "woma.bash"));
 
     const reversed = await run(process.execPath, [cli, "init", "bash", "--reverse"], { cwd: root, env: environment });
     assert.match(reversed.stdout, /Reversed bash shell initialization/);
     assert.equal(await readFile(profilePath, "utf8"), "");
-    await assert.rejects(access(path.join(stateHome, "shell", "harness.bash")), { code: "ENOENT" });
+    await assert.rejects(access(path.join(stateHome, "shell", "woma.bash")), { code: "ENOENT" });
   } finally {
     await removeTestTree(root);
   }
 });
 
-test("installation guidance directs users to harness init", async () => {
+test("installation guidance directs users to woma init", async () => {
   const environment: NodeJS.ProcessEnv = { ...process.env };
   delete environment.CI;
   const result = await run(process.execPath, [path.resolve("scripts/postinstall.mjs")], { env: environment });
-  assert.match(result.stdout, /Harness Conda installed/);
-  assert.match(result.stdout, /harness init/);
+  assert.match(result.stdout, /Woma installed/);
+  assert.match(result.stdout, /woma init/);
 });

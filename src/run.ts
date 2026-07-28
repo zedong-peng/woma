@@ -21,7 +21,7 @@ export async function runInEnvironment(options: {
 }): Promise<number> {
   const { environment } = await environmentSnapshot(options.projectRoot, options.environment);
   const selected = new Set(environment.spec.targets);
-  const env: NodeJS.ProcessEnv = { ...process.env, HARNESS_ENV: environment.metadata.name };
+  const env: NodeJS.ProcessEnv = { ...process.env, WOMA_ENV: environment.metadata.name };
   for (const platform of Object.keys(HOME_VARIABLES) as Platform[]) {
     env[HOME_VARIABLES[platform]] = selected.has(platform)
       ? environmentAgentHomePath(environment.metadata.name, platform)

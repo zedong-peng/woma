@@ -1,7 +1,7 @@
-apiVersion: harness.conda/project-v1
-kind: HarnessProject
+apiVersion: woma.dev/project-v1
+kind: WomaProject
 metadata:
-  name: harness-conda
+  name: woma
 spec:
   agent: codex
   targets:
@@ -29,4 +29,4 @@ spec:
     build: npm run build
     test: npm test
     benchmark: npm run benchmark
-  handoffDirectory: .harness/handoffs
+  handoffDirectory: .woma/handoffs

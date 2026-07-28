@@ -32,7 +32,7 @@ export async function createWorkflowSkeleton(
   if (semver.valid(version) !== version) throw new Error(`Invalid Package version: ${version}`);
   const outputDirectory = path.resolve(options.outputDirectory ?? ".");
   const root = path.join(outputDirectory, name);
-  const manifestPath = path.join(root, "harness.yaml");
+  const manifestPath = path.join(root, "woma.yaml");
   const skillPath = path.join(root, "skills", `${name}-workflow`, "SKILL.md");
   const rootExists = await pathExists(root);
   if (rootExists) {
@@ -42,17 +42,17 @@ export async function createWorkflowSkeleton(
   await mkdir(outputDirectory, { recursive: true });
   const temporary = await mkdtemp(path.join(outputDirectory, `.${name}.skeleton-`));
   try {
-    const temporaryManifest = path.join(temporary, "harness.yaml");
+    const temporaryManifest = path.join(temporary, "woma.yaml");
     const temporarySkill = path.join(temporary, "skills", `${name}-workflow`, "SKILL.md");
     await mkdir(path.dirname(temporarySkill), { recursive: true });
     await writeTextAtomic(
       temporaryManifest,
-      `apiVersion: harness.conda/v1
-kind: Harness
+      `apiVersion: woma.dev/v1
+kind: Woma
 metadata:
   name: ${name}
   version: ${version}
-  description: Describe the repeatable outcome this Harness Package delivers.
+  description: Describe the repeatable outcome this Woma Package delivers.
   tags: []
 spec:
   platforms: [codex, claude, pi, qoder]

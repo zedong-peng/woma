@@ -4,11 +4,11 @@ import { parse as parseToml } from "smol-toml";
 import { stringify as stringifyYaml } from "yaml";
 import { pathExists, writeTextAtomic } from "./fs.js";
 import { validatePackage } from "./package.js";
-import type { CodexClaudePlatform, HarnessManifest, HookSpec, McpServer, SkillSpec } from "./types.js";
+import type { CodexClaudePlatform, WomaManifest, HookSpec, McpServer, SkillSpec } from "./types.js";
 
 export interface CaptureResult {
   root: string;
-  manifest: HarnessManifest;
+  manifest: WomaManifest;
   warnings: string[];
 }
 
@@ -163,7 +163,7 @@ async function captureClaudeConfig(sourceRoot: string, warnings: string[]): Prom
   return { servers, hooks: await captureCommandHooks(path.join(sourceRoot, ".claude", "settings.json"), warnings, "claude") };
 }
 
-export async function captureHarness(options: {
+export async function captureWoma(options: {
   sourceRoot: string;
   outputRoot: string;
   platform: CodexClaudePlatform;
@@ -190,13 +190,13 @@ export async function captureHarness(options: {
       else Object.values(server.headers).forEach((name) => envNames.add(name));
     }
     const name = slug(options.name ?? path.basename(outputRoot));
-    const manifest: HarnessManifest = {
-      apiVersion: "harness.conda/v1",
-      kind: "Harness",
+    const manifest: WomaManifest = {
+      apiVersion: "woma.dev/v1",
+      kind: "Woma",
       metadata: {
         name,
         version: "0.1.0",
-        description: `Captured ${options.platform} harness from ${path.basename(sourceRoot)}.`,
+        description: `Captured ${options.platform} woma from ${path.basename(sourceRoot)}.`,
         tags: ["captured"],
       },
       spec: {
@@ -212,7 +212,7 @@ export async function captureHarness(options: {
         hooks,
       },
     };
-    await writeTextAtomic(path.join(temporary, "harness.yaml"), stringifyYaml(manifest, { lineWidth: 120 }));
+    await writeTextAtomic(path.join(temporary, "woma.yaml"), stringifyYaml(manifest, { lineWidth: 120 }));
     await validatePackage(temporary, manifest);
     await rename(temporary, outputRoot);
     return { root: outputRoot, manifest, warnings };

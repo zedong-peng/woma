@@ -6,7 +6,7 @@ import { satisfies } from "semver";
 import { z } from "zod";
 import { AGENT_SESSION_ENTRIES, AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
 import { detectAgentCli, detectAgentClis, findExecutable, type AgentCliStatus } from "./agent-cli.js";
-import { harnessHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
+import { womaHome, pathExists, writeJsonAtomic, writeTextAtomic, writeTextPreservingFile } from "./fs.js";
 import { withEnvironmentLock, withProjectLock } from "./environment-lock.js";
 import { installPackageTree, loadCachedPackage, repairLockedPackage, type PackageInstallPlan, type PackageSourceOptions } from "./package.js";
 import {
@@ -29,7 +29,7 @@ import {
   sourceAgentHome,
   validateEnvironmentView,
 } from "./view.js";
-import type { Action, CodexClaudePlatform, HarnessEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
+import type { Action, CodexClaudePlatform, WomaEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
 
 const environmentName = z
   .string()
@@ -39,9 +39,9 @@ const environmentName = z
 const platform = z.enum(["codex", "claude", "pi", "qoder"]);
 
 export const DEFAULT_ENVIRONMENT = "base";
-export const FOUNDATIONAL_PACKAGES = ["harness-project-memory", "harness-package-builder"] as const;
+export const FOUNDATIONAL_PACKAGES = ["woma-project-memory", "woma-package-builder"] as const;
 const FOUNDATIONAL_SOURCES = new Map(FOUNDATIONAL_PACKAGES.map((name) => [name, `builtin:${name}`]));
-const baseInitializations = new Map<string, Promise<HarnessEnvironment>>();
+const baseInitializations = new Map<string, Promise<WomaEnvironment>>();
 
 const lockedPackageSchema = z
   .object({
@@ -68,8 +68,8 @@ const lockSchema = z
 
 const environmentSchema = z
   .object({
-    apiVersion: z.literal("harness.conda/environment-v1"),
-    kind: z.literal("HarnessEnvironment"),
+    apiVersion: z.literal("woma.dev/environment-v1"),
+    kind: z.literal("WomaEnvironment"),
     metadata: z.object({ name: environmentName }).strict(),
     spec: z
       .object({
@@ -117,12 +117,12 @@ export interface CurrentEnvironmentContext {
 }
 
 export interface EnvironmentSnapshot {
-  environment: HarnessEnvironment;
+  environment: WomaEnvironment;
   lock: LockFile;
 }
 
 interface LoadedEnvironment {
-  environment: HarnessEnvironment;
+  environment: WomaEnvironment;
   lock: LockFile;
   names: string[];
   packages: Map<string, InstalledPackage>;
@@ -143,7 +143,7 @@ interface EnvironmentUninstallOptions extends EnvironmentMutationHooks {
 }
 
 export interface EnvironmentUninstallResult {
-  environment: HarnessEnvironment;
+  environment: WomaEnvironment;
   root: InstalledPackage;
   packages: InstalledPackage[];
   dependencies: InstalledPackage[];
@@ -158,7 +158,7 @@ interface EnvironmentActivationHooks {
 }
 
 export function environmentsRoot(_projectRoot?: string): string {
-  return path.join(harnessHome(), "environments");
+  return path.join(womaHome(), "environments");
 }
 
 export function environmentPath(_projectRoot: string, name: string): string {
@@ -175,7 +175,7 @@ function formatIssues(error: z.ZodError): string {
   return error.issues.map((issue) => `${issue.path.join(".") || "environment"}: ${issue.message}`).join("\n");
 }
 
-export function parseEnvironment(input: string, source = "environment.yaml"): HarnessEnvironment {
+export function parseEnvironment(input: string, source = "environment.yaml"): WomaEnvironment {
   let document: unknown;
   try {
     document = parseYaml(input);
@@ -192,11 +192,11 @@ export function parseEnvironment(input: string, source = "environment.yaml"): Ha
   return parsed.data;
 }
 
-async function readEnvironmentFile(projectRoot: string, name: string): Promise<HarnessEnvironment> {
+async function readEnvironmentFile(projectRoot: string, name: string): Promise<WomaEnvironment> {
   const filePath = environmentPath(projectRoot, name);
   const input = await readFile(filePath, "utf8").catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") {
-      throw new Error(`Unknown environment: ${name}; run harness create --name ${name}`);
+      throw new Error(`Unknown environment: ${name}; run woma create --name ${name}`);
     }
     throw error;
   });
@@ -216,12 +216,12 @@ async function readEnvironmentFile(projectRoot: string, name: string): Promise<H
   return environment;
 }
 
-export async function readEnvironment(projectRoot: string, name: string): Promise<HarnessEnvironment> {
+export async function readEnvironment(projectRoot: string, name: string): Promise<WomaEnvironment> {
   if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
   return readEnvironmentFile(projectRoot, name);
 }
 
-async function writeEnvironment(projectRoot: string, environment: HarnessEnvironment): Promise<void> {
+async function writeEnvironment(projectRoot: string, environment: WomaEnvironment): Promise<void> {
   const validated = environmentSchema.parse(environment);
   await writeTextAtomic(environmentPath(projectRoot, validated.metadata.name), stringifyYaml(validated, { lineWidth: 120 }));
 }
@@ -236,7 +236,7 @@ async function prepareLocalGitExcludes(projectRoot: string): Promise<PreparedPro
     if (error.code === "ENOENT") return null;
     throw error;
   });
-  const required = "/.harness/local/";
+  const required = "/.woma/local/";
   const lines = (original ?? "").split(/\r?\n/);
   const desired = lines.includes(required)
     ? original
@@ -315,7 +315,7 @@ export async function environmentSnapshot(projectRoot: string, name: string): Pr
   });
 }
 
-async function initializeEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<HarnessEnvironment> {
+async function initializeEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<WomaEnvironment> {
   environmentName.parse(name);
   if (await pathExists(environmentPath(projectRoot, name))) throw new Error(`Environment already exists: ${name}`);
   const installations = [];
@@ -330,9 +330,9 @@ async function initializeEnvironment(projectRoot: string, name: string, targets:
     installations.flatMap((installation) => installation.packages).map((pkg) => [pkg.lock.name, pkg]),
   );
   const packages = Object.fromEntries([...installed].map(([packageName, pkg]) => [packageName, pkg.lock]));
-  const environment: HarnessEnvironment = {
-    apiVersion: "harness.conda/environment-v1",
-    kind: "HarnessEnvironment",
+  const environment: WomaEnvironment = {
+    apiVersion: "woma.dev/environment-v1",
+    kind: "WomaEnvironment",
     metadata: { name },
     spec: { targets: [...new Set(targets)], roots },
   };
@@ -383,7 +383,7 @@ async function existingAgentStateDetected(): Promise<boolean> {
 export function ensureBaseEnvironment(
   projectRoot = process.cwd(),
   options: BaseEnvironmentInitializationOptions = {},
-): Promise<HarnessEnvironment> {
+): Promise<WomaEnvironment> {
   const filePath = environmentPath(projectRoot, DEFAULT_ENVIRONMENT);
   const existing = baseInitializations.get(filePath);
   if (existing) return existing;
@@ -421,7 +421,7 @@ export function ensureBaseEnvironment(
   return initialization;
 }
 
-export async function createEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<HarnessEnvironment> {
+export async function createEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<WomaEnvironment> {
   if (name === DEFAULT_ENVIRONMENT) {
     await ensureBaseEnvironment(projectRoot);
     throw new Error("The base environment exists implicitly and cannot be created");
@@ -431,7 +431,7 @@ export async function createEnvironment(projectRoot: string, name: string, targe
 
 export async function importEnvironmentSnapshot(
   projectRoot: string,
-  sourceEnvironment: HarnessEnvironment,
+  sourceEnvironment: WomaEnvironment,
   lock: LockFile,
   requestedName = sourceEnvironment.metadata.name,
 ): Promise<EnvironmentSnapshot> {
@@ -439,7 +439,7 @@ export async function importEnvironmentSnapshot(
   if (requestedName === DEFAULT_ENVIRONMENT) {
     throw new Error("The base environment exists implicitly and cannot be imported; pass --name <name>");
   }
-  const environment: HarnessEnvironment = {
+  const environment: WomaEnvironment = {
     ...sourceEnvironment,
     metadata: { name: requestedName },
     spec: {
@@ -486,7 +486,7 @@ export async function listEnvironments(projectRoot: string): Promise<string[]> {
 
 export async function removeEnvironment(projectRoot: string, name: string): Promise<void> {
   if (name === DEFAULT_ENVIRONMENT) throw new Error("The base environment cannot be removed");
-  if (process.env.HARNESS_ENV === name) throw new Error(`Environment ${name} is active in this shell; run harness deactivate first`);
+  if (process.env.WOMA_ENV === name) throw new Error(`Environment ${name} is active in this shell; run woma deactivate first`);
   await withEnvironmentLock(name, async () => {
     await readEnvironmentFile(projectRoot, name);
     await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
@@ -529,15 +529,15 @@ async function withEnvironmentPairLock<T>(left: string, right: string, operation
   return withEnvironmentLock(first!, () => withEnvironmentLock(second!, operation));
 }
 
-export async function renameEnvironment(projectRoot: string, source: string, destination: string): Promise<HarnessEnvironment> {
+export async function renameEnvironment(projectRoot: string, source: string, destination: string): Promise<WomaEnvironment> {
   environmentName.parse(source);
   environmentName.parse(destination);
   if (source === DEFAULT_ENVIRONMENT || destination === DEFAULT_ENVIRONMENT) {
     throw new Error("The base environment cannot be renamed or replaced");
   }
   if (source === destination) throw new Error("Source and destination environment names must differ");
-  if (process.env.HARNESS_ENV === source) {
-    throw new Error(`Environment ${source} is active in this shell; run harness deactivate first`);
+  if (process.env.WOMA_ENV === source) {
+    throw new Error(`Environment ${source} is active in this shell; run woma deactivate first`);
   }
   return withEnvironmentPairLock(source, destination, async () => {
     const sourceRoot = path.dirname(environmentPath(projectRoot, source));
@@ -546,7 +546,7 @@ export async function renameEnvironment(projectRoot: string, source: string, des
     const lock = await readEnvironmentLockFile(projectRoot, source);
     const loaded = await loadEnvironmentSnapshot(environment, lock);
     if (await pathExists(destinationRoot)) throw new Error(`Environment already exists: ${destination}`);
-    const renamed: HarnessEnvironment = { ...environment, metadata: { name: destination } };
+    const renamed: WomaEnvironment = { ...environment, metadata: { name: destination } };
     let moved = false;
     try {
       await rename(sourceRoot, destinationRoot);
@@ -617,7 +617,7 @@ async function validateLock(lock: LockFile): Promise<void> {
   }
 }
 
-function validateEnvironmentLockGraph(environment: HarnessEnvironment, lock: LockFile): string[] {
+function validateEnvironmentLockGraph(environment: WomaEnvironment, lock: LockFile): string[] {
   const rootNames = environment.spec.roots.map((root) => root.name);
   const names = dependencyOrder(lock, rootNames);
   for (const root of environment.spec.roots) {
@@ -633,7 +633,7 @@ function validateEnvironmentLockGraph(environment: HarnessEnvironment, lock: Loc
   return names;
 }
 
-async function validateEnvironmentLock(environment: HarnessEnvironment, lock: LockFile): Promise<string[]> {
+async function validateEnvironmentLock(environment: WomaEnvironment, lock: LockFile): Promise<string[]> {
   const names = validateEnvironmentLockGraph(environment, lock);
   await validateLock(lock);
   return names;
@@ -667,7 +667,7 @@ function reachableLock(lock: LockFile, roots: string[]): LockFile {
 async function writeEnvironmentInstall(
   projectRoot: string,
   environmentNameValue: string,
-  environment: HarnessEnvironment,
+  environment: WomaEnvironment,
   lock: LockFile,
   previousLock: LockFile,
 ): Promise<void> {
@@ -683,10 +683,10 @@ async function writeEnvironmentInstall(
 async function publishEnvironmentUpdate(
   projectRoot: string,
   environmentNameValue: string,
-  previousEnvironment: HarnessEnvironment,
+  previousEnvironment: WomaEnvironment,
   previousLock: LockFile,
   previous: LoadedEnvironment,
-  updatedEnvironment: HarnessEnvironment,
+  updatedEnvironment: WomaEnvironment,
   updatedLock: LockFile,
   desired: LoadedEnvironment,
   hooks: EnvironmentMutationHooks,
@@ -728,7 +728,7 @@ export async function installIntoEnvironment(
   source: string,
   cwd = process.cwd(),
   hooks: EnvironmentInstallHooks = {},
-): Promise<{ environment: HarnessEnvironment; root: InstalledPackage; packages: InstalledPackage[] }> {
+): Promise<{ environment: WomaEnvironment; root: InstalledPackage; packages: InstalledPackage[] }> {
   const result = await installPackagesIntoEnvironment(projectRoot, environmentNameValue, [source], cwd, hooks);
   return { environment: result.environment, root: result.roots[0]!, packages: result.packages };
 }
@@ -739,7 +739,7 @@ export async function installPackagesIntoEnvironment(
   sources: string[],
   cwd = process.cwd(),
   hooks: EnvironmentInstallHooks = {},
-): Promise<{ environment: HarnessEnvironment; roots: InstalledPackage[]; packages: InstalledPackage[] }> {
+): Promise<{ environment: WomaEnvironment; roots: InstalledPackage[]; packages: InstalledPackage[] }> {
   if (sources.length === 0) throw new Error("Install at least one Package source");
   if (environmentNameValue === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, environmentNameValue)))) {
     await ensureBaseEnvironment(projectRoot);
@@ -799,7 +799,7 @@ export async function installPackagesIntoEnvironment(
         : [...roots, { name: installation.root.lock.name, source: installation.root.lock.source }];
     }
     const pruned = reachableLock(next, roots.map((root) => root.name));
-    const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
+    const updated: WomaEnvironment = { ...environment, spec: { ...environment.spec, roots } };
     const desired = await loadEnvironmentSnapshot(updated, pruned);
     await publishEnvironmentUpdate(
       projectRoot,
@@ -820,14 +820,14 @@ export async function installPackagesIntoEnvironment(
   });
 }
 
-function requiringRoots(environment: HarnessEnvironment, lock: LockFile, packageName: string): string[] {
+function requiringRoots(environment: WomaEnvironment, lock: LockFile, packageName: string): string[] {
   return environment.spec.roots
     .map((root) => root.name)
     .filter((root) => dependencyOrder(lock, [root]).includes(packageName));
 }
 
 function effectivePlatforms(
-  environment: HarnessEnvironment,
+  environment: WomaEnvironment,
   pkg: InstalledPackage,
   resourcePlatforms?: Platform[],
 ): Platform[] {
@@ -841,7 +841,7 @@ interface EnvironmentResourceKeys {
   hooks: Map<string, string>;
 }
 
-function environmentResourceKeys(environment: HarnessEnvironment, packages: InstalledPackage[]): EnvironmentResourceKeys {
+function environmentResourceKeys(environment: WomaEnvironment, packages: InstalledPackage[]): EnvironmentResourceKeys {
   const result: EnvironmentResourceKeys = {
     skills: new Map(),
     mcpServers: new Map(),
@@ -908,7 +908,7 @@ export async function uninstallFromEnvironment(
     }
 
     const roots = environment.spec.roots.filter((candidate) => candidate.name !== packageName);
-    const updated: HarnessEnvironment = { ...environment, spec: { ...environment.spec, roots } };
+    const updated: WomaEnvironment = { ...environment, spec: { ...environment.spec, roots } };
     const pruned = reachableLock(currentLock, roots.map((candidate) => candidate.name));
     const desired = await loadEnvironmentSnapshot(updated, pruned);
     const removedNames = previous.names.filter((name) => !desired.packages.has(name));
@@ -951,7 +951,7 @@ export async function uninstallFromEnvironment(
   });
 }
 
-async function loadEnvironmentSnapshot(environment: HarnessEnvironment, lock: LockFile): Promise<LoadedEnvironment> {
+async function loadEnvironmentSnapshot(environment: WomaEnvironment, lock: LockFile): Promise<LoadedEnvironment> {
   const names = await validateEnvironmentLock(environment, lock);
   const packages = new Map<string, InstalledPackage>();
   for (const packageName of names) packages.set(packageName, await loadCachedPackage(lock.packages[packageName]!));
@@ -983,7 +983,7 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
   const project = path.resolve(projectRoot);
   const memory = { project: projectMemoryPath(project), local: localMemoryPath(project) };
   const agentsPromise = detectAgentClis();
-  const selected = process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT;
+  const selected = process.env.WOMA_ENV || DEFAULT_ENVIRONMENT;
   if (selected === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(project);
   const agentClis = await agentsPromise;
   return withEnvironmentLock(selected, async () => {
@@ -1094,7 +1094,7 @@ export async function activateEnvironment(
 
 async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Promise<EnvironmentCheck[]> {
   const checks: EnvironmentCheck[] = [];
-  let environment: HarnessEnvironment;
+  let environment: WomaEnvironment;
   try {
     environment = await readEnvironmentFile(projectRoot, name);
     checks.push({ status: "ok", label: "recipe", detail: environmentPath(projectRoot, name) });
@@ -1173,7 +1173,7 @@ async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Pro
       detail: issue.detail,
     });
   }
-  const active = (process.env.HARNESS_ENV || DEFAULT_ENVIRONMENT) === name;
+  const active = (process.env.WOMA_ENV || DEFAULT_ENVIRONMENT) === name;
   checks.push({ status: active ? "ok" : "warn", label: "activation", detail: active ? environment.spec.targets.join(", ") : "inactive" });
   if (active) {
     try {
