@@ -26,7 +26,7 @@ Conda-style Environment and Package management for Codex, Claude Code, Pi, and Q
 ## Installation
 
 ```bash
-git clone https://github.com/zedong-peng/harness-conda.git woma
+git clone https://github.com/zedong-peng/woma.git
 cd woma
 npm ci
 npm run build
