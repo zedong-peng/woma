@@ -1,9 +1,10 @@
 {
-  "name": "harness-conda",
+  "name": "woma",
   "version": "0.6.0",
-  "description": "Create, reproduce, and switch isolated Agent environments.",
+  "description": "Reproducible environments and packages for coding agents.",
   "type": "module",
   "bin": {
+    "woma": "dist/src/cli.js",
     "harness": "dist/src/cli.js",
     "harness-conda": "dist/src/cli.js"
   },
