@@ -49,11 +49,11 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zedong-peng/harness-conda.git"
+    "url": "git+https://github.com/zedong-peng/woma.git"
   },
-  "homepage": "https://github.com/zedong-peng/harness-conda#readme",
+  "homepage": "https://github.com/zedong-peng/woma#readme",
   "bugs": {
-    "url": "https://github.com/zedong-peng/harness-conda/issues"
+    "url": "https://github.com/zedong-peng/woma/issues"
   },
   "dependencies": {
     "commander": "^14.0.0",
