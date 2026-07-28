@@ -102,7 +102,7 @@ export interface EnvironmentRoot {
 }
 
 export interface HarnessEnvironment {
-  apiVersion: "harness.conda/environment-v1";
+  apiVersion: "harness.conda/environment-v1" | "harness.conda/environment-v2";
   kind: "HarnessEnvironment";
   metadata: {
     name: string;

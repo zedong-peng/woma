@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -89,7 +89,7 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     );
     const before = await environmentSnapshot(projectA, "performance");
     const first = await exportEnvironmentBundle(projectA, "performance", bundle);
-    assert.equal(first.packages, 3);
+    assert.equal(first.packages, 1);
 
     const secondBundle = path.join(root, "performance-copy.harness-env");
     await exportEnvironmentBundle(projectA, "performance", secondBundle);
@@ -126,6 +126,42 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     else process.env.HARNESS_ORIGINAL_CODEX_HOME = previous.codexHome;
     if (previous.claudeHome === undefined) delete process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR;
     else process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    await removeTestTree(root);
+  }
+});
+
+test("Environment bundle migration drops legacy implicit builtins before cache import", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-bundle-legacy-context-"));
+  const previousHome = process.env.HARNESS_HOME;
+  try {
+    const source = await portablePackage(root);
+    const bundle = path.join(root, "source.harness-env");
+    const legacyBundle = path.join(root, "legacy.harness-env");
+    process.env.HARNESS_HOME = path.join(root, "source-home");
+    await createEnvironment(root, "source", ["codex"]);
+    await installIntoEnvironment(root, "source", source);
+    await installIntoEnvironment(root, "source", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "source", "builtin:harness-package-builder");
+    await exportEnvironmentBundle(root, "source", bundle);
+    await writeFile(
+      legacyBundle,
+      rewriteBundle(await readFile(bundle), (document) => {
+        document.environment.apiVersion = "harness.conda/environment-v1";
+      }),
+    );
+
+    process.env.HARNESS_HOME = path.join(root, "destination-home");
+    const imported = await importEnvironmentBundle(root, legacyBundle, "restored");
+
+    assert.equal(imported.packages, 1);
+    assert.equal(imported.snapshot.environment.apiVersion, "harness.conda/environment-v2");
+    assert.deepEqual(imported.snapshot.environment.spec.roots.map((item) => item.name), ["local-performance"]);
+    assert.deepEqual(Object.keys(imported.snapshot.lock.packages), ["local-performance"]);
+    await assert.rejects(access(path.join(process.env.HARNESS_HOME, "packages", "harness-project-memory")), /ENOENT/);
+    await assert.rejects(access(path.join(process.env.HARNESS_HOME, "packages", "harness-package-builder")), /ENOENT/);
+  } finally {
+    if (previousHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previousHome;
     await removeTestTree(root);
   }
 });

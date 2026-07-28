@@ -12,8 +12,6 @@ import { sourceAgentHome } from "./view.js";
 import type { CodexClaudePlatform, HarnessManifest, SkillSpec } from "./types.js";
 
 const EXCLUDED_NAMES = new Set([".git", ".harness", "node_modules", ".DS_Store"]);
-const FOUNDATIONAL_SKILLS = new Set(["harness-project-memory", "harness-package-builder"]);
-
 export type SkillMigrationSource = CodexClaudePlatform | "both";
 
 interface ExistingSkill {
@@ -89,9 +87,6 @@ async function discoverSkills(platform: CodexClaudePlatform): Promise<ExistingSk
     const root = await realpath(candidate);
     if (!(await lstat(root)).isDirectory() || !(await pathExists(path.join(root, "SKILL.md")))) continue;
     const name = skillName(entry);
-    if (FOUNDATIONAL_SKILLS.has(name)) {
-      throw new Error(`Existing Agent Skill ${name} conflicts with a foundational Harness Skill`);
-    }
     const skillDocument = await readFile(path.join(root, "SKILL.md"), "utf8");
     skills.push({
       name,

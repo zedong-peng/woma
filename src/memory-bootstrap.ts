@@ -1,15 +1,10 @@
 import { lstat, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { writeTextPreservingFile } from "./fs.js";
-import type { Action, Platform } from "./types.js";
+import type { Action } from "./types.js";
 
 const markerStart = "<!-- >>> harness-conda:project-memory -->";
 const markerEnd = "<!-- <<< harness-conda:project-memory -->";
-
-export interface MemoryBootstrapEnvironment {
-  targets: Platform[];
-  hasMemoryPackage: boolean;
-}
 
 interface PreparedFile {
   path: string;
@@ -19,12 +14,12 @@ interface PreparedFile {
   detail: string;
 }
 
-export interface PreparedMemoryBootstrapTransition {
+export interface PreparedMemoryBootstrapCleanup {
   actions: Action[];
   apply: () => Promise<() => Promise<void>>;
 }
 
-function discoveryBlock(_platform: Platform): string {
+function discoveryBlock(): string {
   return `${markerStart}
 ## Harness Project Memory
 
@@ -58,15 +53,9 @@ function occurrenceCount(content: string, value: string): number {
   return content.split(value).length - 1;
 }
 
-function reconcileBlock(
-  original: string | null,
-  platform: Platform,
-  include: boolean,
-  required: boolean,
-  display: string,
-): string | null {
+function removeDiscoveryBlock(original: string | null, display: string): string | null {
   const content = original ?? "";
-  const block = discoveryBlock(platform);
+  const block = discoveryBlock();
   const starts = occurrenceCount(content, markerStart);
   const ends = occurrenceCount(content, markerEnd);
   if (starts > 1 || ends > 1 || starts !== ends) {
@@ -74,53 +63,35 @@ function reconcileBlock(
   }
   const blockAt = content.indexOf(block);
   if (starts === 1 && blockAt === -1) {
-    throw new Error(`${display} Harness Project Memory discovery block was modified; restore it before changing environments`);
+    throw new Error(`${display} Harness Project Memory discovery block was modified; restore or remove it before continuing`);
   }
-  if (starts === 0) {
-    if (required) throw new Error(`${display} Harness Project Memory discovery block is missing; restore it before changing environments`);
-    if (!include) return original;
-    if (!content) return `${block}\n`;
-    const prefix = content.endsWith("\n") ? content : `${content}\n`;
-    return `${prefix}\n${block}\n`;
-  }
-  return original;
+  if (starts === 0) return original;
+  let before = content.slice(0, blockAt);
+  let after = content.slice(blockAt + block.length);
+  if (before.endsWith("\n\n")) before = before.slice(0, -1);
+  if (after.startsWith("\n")) after = after.slice(1);
+  const desired = `${before}${after}`;
+  return desired.trim() ? desired : null;
 }
 
 function actionFor(file: PreparedFile): Action | undefined {
   if (file.original === file.desired) return undefined;
   if (file.desired === null) return { verb: "remove", path: file.display, detail: file.detail };
-  return { verb: file.original === null ? "create" : "merge", path: file.display, detail: file.detail };
+  return { verb: "merge", path: file.display, detail: file.detail };
 }
 
-export async function prepareMemoryBootstrapTransition(
-  projectRoot: string,
-  previous: MemoryBootstrapEnvironment | undefined,
-  desired: MemoryBootstrapEnvironment | undefined,
-  options: { requirePrevious?: boolean } = {},
-): Promise<PreparedMemoryBootstrapTransition> {
+export async function prepareMemoryBootstrapCleanup(projectRoot: string): Promise<PreparedMemoryBootstrapCleanup> {
   const project = path.resolve(projectRoot);
   const files: PreparedFile[] = [];
-  const instructionTargets: { filePlatform: "codex" | "claude"; targets: Platform[] }[] = [
-    { filePlatform: "codex", targets: ["codex", "pi", "qoder"] },
-    { filePlatform: "claude", targets: ["claude"] },
-  ];
-  for (const { filePlatform, targets } of instructionTargets) {
+  for (const filePlatform of ["codex", "claude"] as const) {
     const filePath = instructionPath(project, filePlatform);
     const original = await readOptional(filePath);
-    const previousIncluded = previous?.hasMemoryPackage === true && targets.some((target) => previous.targets.includes(target));
-    const desiredIncluded = desired?.hasMemoryPackage === true && targets.some((target) => desired.targets.includes(target));
     files.push({
       path: filePath,
       display: path.basename(filePath),
       original,
-      desired: reconcileBlock(
-        original,
-        filePlatform,
-        desiredIncluded,
-        options.requirePrevious === true && previousIncluded,
-        path.basename(filePath),
-      ),
-      detail: `${targets.join("/")} Project Memory discovery`,
+      desired: removeDiscoveryBlock(original, path.basename(filePath)),
+      detail: "legacy Project Memory discovery",
     });
   }
 
@@ -139,7 +110,7 @@ export async function prepareMemoryBootstrapTransition(
             errors.push(error);
           }
         }
-        if (errors.length > 0) throw new AggregateError(errors, "Could not restore Project Memory discovery files");
+        if (errors.length > 0) throw new AggregateError(errors, "Could not restore legacy Project Memory discovery files");
       };
 
       try {
@@ -155,7 +126,7 @@ export async function prepareMemoryBootstrapTransition(
         try {
           await restore();
         } catch (rollbackError) {
-          throw new AggregateError([error, rollbackError], "Project Memory discovery failed and rollback could not restore the project");
+          throw new AggregateError([error, rollbackError], "Project Memory cleanup failed and rollback could not restore the project");
         }
         throw error;
       }

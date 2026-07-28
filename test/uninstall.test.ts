@@ -117,13 +117,9 @@ test("uninstall prunes orphaned dependencies and resources while retaining share
       "PostToolUse (orphan-package): orphan-package-hook",
     ]);
     assert.deepEqual((await readEnvironment(root, "tools")).spec.roots.map((item) => item.name), [
-      "harness-project-memory",
-      "harness-package-builder",
       "second-root",
     ]);
     assert.deepEqual(Object.keys((await readEnvironmentLock(root, "tools")).packages), [
-      "harness-project-memory",
-      "harness-package-builder",
       "shared-package",
       "second-root",
     ]);
@@ -160,7 +156,7 @@ test("uninstall prunes orphaned dependencies and resources while retaining share
   }
 });
 
-test("uninstall rejects foundational, dependency-only, and unknown Packages without changing the Environment", { concurrency: false }, async () => {
+test("uninstall rejects dependency-only and unknown Packages without changing the Environment", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-uninstall-rejections-"));
   const previousHome = process.env.HARNESS_HOME;
   process.env.HARNESS_HOME = path.join(root, "home");
@@ -182,15 +178,31 @@ test("uninstall rejects foundational, dependency-only, and unknown Packages with
       /not a root Package.*required by roots: parent-root/,
     );
     await assert.rejects(
-      uninstallFromEnvironment(root, "tools", "harness-project-memory"),
-      /Cannot uninstall foundational Package harness-project-memory/,
-    );
-    await assert.rejects(
       uninstallFromEnvironment(root, "tools", "not-installed"),
       /Package not-installed is not installed in Environment tools/,
     );
     assert.deepEqual(await Promise.all(tracked.map((filePath) => readFile(filePath, "utf8"))), before);
     assert.equal(await readlink(environmentViewPath("tools")), beforeView);
+  } finally {
+    if (previousHome === undefined) delete process.env.HARNESS_HOME;
+    else process.env.HARNESS_HOME = previousHome;
+    await removeTestTree(root);
+  }
+});
+
+test("uninstall removes an explicitly installed builtin Package", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-uninstall-builtin-"));
+  const previousHome = process.env.HARNESS_HOME;
+  process.env.HARNESS_HOME = path.join(root, "home");
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
+
+    const result = await uninstallFromEnvironment(root, "tools", "harness-project-memory");
+
+    assert.equal(result.root.lock.name, "harness-project-memory");
+    assert.deepEqual((await readEnvironment(root, "tools")).spec.roots, []);
+    assert.deepEqual(Object.keys((await readEnvironmentLock(root, "tools")).packages), []);
   } finally {
     if (previousHome === undefined) delete process.env.HARNESS_HOME;
     else process.env.HARNESS_HOME = previousHome;

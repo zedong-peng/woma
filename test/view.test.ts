@@ -599,8 +599,8 @@ test("a Skill installed by any Agent is immediately visible to every target in o
     );
     await write(path.join(codexSkills, "broken-local", "SKILL.md"), "missing frontmatter\n");
     await write(
-      path.join(codexSkills, "conflicting-local", "SKILL.md"),
-      "---\nname: harness-project-memory\ndescription: Conflicts with a managed Skill.\n---\nConflict.\n",
+      path.join(codexSkills, "memory-local", "SKILL.md"),
+      "---\nname: harness-project-memory\ndescription: Ordinary external Skill with a formerly reserved name.\n---\nExternal.\n",
     );
     const lockPath = path.join(process.env.HARNESS_HOME, "environments", "tools", "lock.json");
     const recipePath = path.join(process.env.HARNESS_HOME, "environments", "tools", "environment.yaml");
@@ -608,20 +608,20 @@ test("a Skill installed by any Agent is immediately visible to every target in o
     const beforeRecipe = await readFile(recipePath);
 
     const inventory = await inspectEnvironmentLocalSkills(await readEnvironment(root, "tools"));
-    assert.deepEqual(inventory.skills.map((skill) => skill.name), targets.map((platform) => `${platform}-installed`).sort());
+    const externalSkillNames = [...targets.map((platform) => `${platform}-installed`), "harness-project-memory"].sort();
+    assert.deepEqual(inventory.skills.map((skill) => skill.name), externalSkillNames);
     assert.equal(inventory.skills.every((skill) => skill.origin === "external" && skill.platform === "environment"), true);
     assert.deepEqual(inventory.skills[0]?.platforms, targets);
-    assert.deepEqual(inventory.issues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
+    assert.deepEqual(inventory.issues.map((issue) => issue.entry), ["broken-local"]);
     const context = await environmentInfo(root);
-    assert.deepEqual(context.environmentSkills.map((skill) => skill.name), targets.map((platform) => `${platform}-installed`).sort());
-    assert.deepEqual(context.environmentSkillIssues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
+    assert.deepEqual(context.environmentSkills.map((skill) => skill.name), externalSkillNames);
+    assert.deepEqual(context.environmentSkillIssues.map((issue) => issue.entry), ["broken-local"]);
 
     const checks = await doctorEnvironment(root, "tools");
-    for (const platform of targets) {
-      assert.equal(checks.find((check) => check.label === `environment-skill:${platform}-installed`)?.status, "ok");
+    for (const skillName of externalSkillNames) {
+      assert.equal(checks.find((check) => check.label === `environment-skill:${skillName}`)?.status, "ok");
     }
     assert.equal(checks.find((check) => check.label === "environment-skill:broken-local")?.status, "warn");
-    assert.equal(checks.find((check) => check.label === "environment-skill:conflicting-local")?.status, "fail");
 
     for (const source of targets) {
       for (const target of targets) {

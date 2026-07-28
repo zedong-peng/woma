@@ -144,8 +144,9 @@ test("the built-in Project Memory manager is a normal installable Skill package"
       "utf8",
     );
     assert.match(instructions, /harness info --json/);
-    assert.match(instructions, /even if the user does not explicitly ask to remember it/);
-    assert.match(instructions, /before using another active Skill/);
+    assert.match(instructions, /only when the user explicitly asks/);
+    assert.match(instructions, /Do not run this Skill automatically at session startup/);
+    assert.match(instructions, /Do not infer permission to persist/);
     assert.match(instructions, /--project <project-root> info --json/);
     assert.doesNotMatch(instructions, /current project or a nested directory/);
   } finally {

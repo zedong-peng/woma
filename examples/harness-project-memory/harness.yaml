@@ -2,15 +2,15 @@ apiVersion: harness.conda/v1
 kind: Harness
 metadata:
   name: harness-project-memory
-  version: 0.1.0
-  description: Load and maintain durable project-specific knowledge for every Skill in an active Harness Environment.
+  version: 0.2.0
+  description: Load and update project-specific knowledge when a user explicitly requests it.
   tags: [memory, project-context]
 spec:
   platforms: [codex, claude, pi, qoder]
   entrypoints:
     - name: manage-project-memory
       skill: harness-project-memory
-      description: Load relevant project knowledge and persist stable facts in the correct scope.
+      description: Load or update project knowledge on explicit user request.
   skills:
     - name: harness-project-memory
       path: ./skills/harness-project-memory

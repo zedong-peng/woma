@@ -109,4 +109,4 @@ Codex owns the hidden `home/skills/.system` entry as mutable per-Environment sta
 
 `commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values.
 
-Repository-specific build, test, benchmark, and operational knowledge does not belong in a portable package manifest. Harness Agent Adapters expose natural-language [Project Memory](project-memory.md) before a Skill is selected, so third-party package contents do not need Harness-specific discovery instructions. Harness manages the storage boundary but does not interpret or execute that context.
+Repository-specific build, test, benchmark, and operational knowledge does not belong in a portable package manifest. A project may keep that context in optional [Project Memory](project-memory.md), but Harness never injects it before a Skill is selected. Third-party Packages remain portable and do not need Harness-specific discovery instructions. Harness exposes stable path conventions without interpreting or executing that context.

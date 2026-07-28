@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   createEnvironment,
   ensureBaseEnvironment,
+  environmentInfo,
   environmentSnapshot,
   environmentLockPath,
   environmentPath,
@@ -20,7 +21,7 @@ import {
 } from "../src/environment.js";
 import { environmentAgentHomePath, environmentViewPath } from "../src/view.js";
 import { removeTestTree } from "./helpers.js";
-import { initializeProjectMemory, packageMemoryPath, projectMemoryPath } from "../src/memory.js";
+import { packageMemoryPath, projectMemoryPath } from "../src/memory.js";
 import { migrateExistingSkills } from "../src/migrate-skills.js";
 
 async function environmentPackageFixture(
@@ -134,7 +135,7 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     process.env.HARNESS_ORIGINAL_CLAUDE_CONFIG_DIR = claude;
 
     const base = await ensureBaseEnvironment(root);
-    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(base.spec.roots, []);
     const codexSkills = path.join(environmentViewPath("base"), "codex", "skills");
     await assert.rejects(readFile(path.join(codexSkills, "existing-review", "SKILL.md")), /ENOENT/);
     await assert.rejects(access(path.join(codexSkills, ".system")), /ENOENT/);
@@ -151,14 +152,14 @@ test("explicit Skill migration snapshots existing Skills into only the selected 
     assert.deepEqual(planned.packages.find((pkg) => pkg.name === "existing-review")?.sources, ["codex", "claude"]);
     assert.deepEqual(planned.normalized, ["existing-review"]);
     const cleanLock = await readEnvironmentLock(root, "clean");
-    assert.deepEqual(Object.keys(cleanLock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(Object.keys(cleanLock.packages), []);
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
 
     const migrated = await migrateExistingSkills({ projectRoot: root, environment: "clean", from: "both" });
     assert.equal(migrated.unchanged, false);
     assert.deepEqual(
       Object.keys((await readEnvironmentLock(root, "clean")).packages),
-      ["harness-project-memory", "harness-package-builder", "claude-notes", "existing-review"],
+      ["claude-notes", "existing-review"],
     );
     const existingReview = migrated.packages.find((pkg) => pkg.name === "existing-review");
     assert.ok(existingReview);
@@ -433,9 +434,9 @@ test("removing an environment preserves user-owned Project Memory", { concurrenc
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
-    await initializeProjectMemory(root);
-    await writeFile(projectMemoryPath(root), "# Shared knowledge\n", "utf8");
     const scoped = packageMemoryPath(root, "auto-research");
+    await mkdir(path.dirname(scoped), { recursive: true });
+    await writeFile(projectMemoryPath(root), "# Shared knowledge\n", "utf8");
     await writeFile(scoped, "# Research adaptation\n", "utf8");
 
     await removeEnvironment(root, "research");
@@ -447,7 +448,7 @@ test("removing an environment preserves user-owned Project Memory", { concurrenc
   }
 });
 
-test("global environments are shared across projects while Project Memory remains isolated", { concurrency: false }, async () => {
+test("global environments are shared across projects while explicitly authored Project Memory remains isolated", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-global-environment-"));
   const home = path.join(root, "home");
   const firstProject = path.join(root, "first-project");
@@ -456,7 +457,7 @@ test("global environments are shared across projects while Project Memory remain
   try {
     await Promise.all([mkdir(firstProject, { recursive: true }), mkdir(secondProject, { recursive: true })]);
     const base = await ensureBaseEnvironment(firstProject);
-    assert.deepEqual(base.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(base.spec.roots, []);
     assert.equal(environmentPath(secondProject, "base"), path.join(home, "environments", "base", "environment.yaml"));
     await assert.rejects(createEnvironment(firstProject, "base", ["codex"]), /exists implicitly/);
     await assert.rejects(removeEnvironment(firstProject, "base"), /cannot be removed/);
@@ -478,10 +479,13 @@ test("global environments are shared across projects while Project Memory remain
     );
     await assert.rejects(readFile(path.join(firstProject, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /ENOENT/);
     await assert.rejects(readFile(path.join(secondProject, ".agents", "skills", "idea-gen", "SKILL.md"), "utf8"), /ENOENT/);
+    await mkdir(path.dirname(projectMemoryPath(firstProject)), { recursive: true });
     await writeFile(projectMemoryPath(firstProject), "# First project\n", "utf8");
-
     assert.equal(await readFile(projectMemoryPath(firstProject), "utf8"), "# First project\n");
-    assert.match(await readFile(projectMemoryPath(secondProject), "utf8"), /Project Memory/);
+    await assert.rejects(access(projectMemoryPath(secondProject)), /ENOENT/);
+    await mkdir(path.dirname(projectMemoryPath(secondProject)), { recursive: true });
+    await writeFile(projectMemoryPath(secondProject), "# Second project\n", "utf8");
+    assert.equal(await readFile(projectMemoryPath(secondProject), "utf8"), "# Second project\n");
     assert.notEqual(packageMemoryPath(firstProject, "paper-search"), packageMemoryPath(secondProject, "paper-search"));
   } finally {
     await removeTestTree(root);
@@ -519,7 +523,7 @@ test("activation depends only on the validated target Environment", { concurrenc
 
     await activateEnvironment(project, "tools");
 
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /Harness Project Memory/);
+    await assert.rejects(access(path.join(project, "AGENTS.md")));
     assert.equal((await lstat(environmentAgentHomePath("tools", "codex"))).isDirectory(), true);
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
@@ -556,21 +560,21 @@ test("unknown target activation does not touch the current stable Agent home", {
   }
 });
 
-test("activation keeps both Agent discovery files stable across target changes", { concurrency: false }, async () => {
+test("activation leaves project instructions alone across target changes", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-stable-discovery-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "both", ["codex", "claude"]);
     await createEnvironment(root, "codex-only", ["codex"]);
-    await activateEnvironment(root, "both");
     const claudePath = path.join(root, "CLAUDE.md");
-    await writeFile(claudePath, `${await readFile(claudePath, "utf8")}\n# User Claude instructions\n`, "utf8");
+    await writeFile(claudePath, "# User Claude instructions\n", "utf8");
+    await activateEnvironment(root, "both");
     const before = await readFile(claudePath, "utf8");
 
     await activateEnvironment(root, "codex-only");
 
     assert.equal(await readFile(claudePath, "utf8"), before);
-    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /Harness Project Memory/);
+    await assert.rejects(access(path.join(root, "AGENTS.md")));
   } finally {
     await removeTestTree(root);
   }
@@ -617,20 +621,60 @@ test("environment removal is guarded by the current shell only", { concurrency: 
   }
 });
 
-test("global Environment reads reject missing foundational packages", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-global-environment-contract-"));
+test("legacy Environment recipes drop implicit roots during activation", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-legacy-environment-context-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "tools", ["codex"]);
+    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:harness-package-builder");
     const recipePath = environmentPath(root, "tools");
-    const recipe = await readFile(recipePath, "utf8");
     await writeFile(
       recipePath,
-      recipe.replace(/    - name: harness-package-builder\n      source: builtin:harness-package-builder\n/, ""),
+      (await readFile(recipePath, "utf8")).replace("harness.conda/environment-v2", "harness.conda/environment-v1"),
       "utf8",
     );
-    await assert.rejects(readEnvironment(root, "tools"), /missing foundational root package harness-package-builder/);
+    await writeFile(
+      path.join(root, "AGENTS.md"),
+      "<!-- >>> harness-conda:project-memory -->\n## Harness Project Memory\n\nAt the beginning of the session, use the installed `harness-project-memory` Skill. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.\n<!-- <<< harness-conda:project-memory -->\n",
+      "utf8",
+    );
+
+    await activateEnvironment(root, "tools");
+
+    const environment = await readEnvironment(root, "tools");
+    assert.equal(environment.apiVersion, "harness.conda/environment-v2");
+    assert.deepEqual(environment.spec.roots, []);
+    assert.deepEqual(Object.keys((await readEnvironmentLock(root, "tools")).packages), []);
+    await assert.rejects(access(path.join(root, "AGENTS.md")));
+    await assert.rejects(access(path.join(environmentViewPath("tools"), "codex", "skills", "harness-project-memory")));
+    await assert.rejects(access(path.join(environmentViewPath("tools"), "codex", "skills", "harness-package-builder")));
   } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("environment info removes an exact legacy discovery block without initializing Memory", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-legacy-info-context-"));
+  const previousEnvironment = process.env.HARNESS_ENV;
+  process.env.HARNESS_HOME = path.join(root, "home");
+  process.env.HARNESS_ENV = "tools";
+  try {
+    await createEnvironment(root, "tools", ["codex"]);
+    const agentsPath = path.join(root, "AGENTS.md");
+    await writeFile(
+      agentsPath,
+      "<!-- >>> harness-conda:project-memory -->\n## Harness Project Memory\n\nAt the beginning of the session, use the installed `harness-project-memory` Skill. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.\n<!-- <<< harness-conda:project-memory -->\n",
+      "utf8",
+    );
+
+    await environmentInfo(root);
+
+    await assert.rejects(access(agentsPath), /ENOENT/);
+    await assert.rejects(access(path.join(root, ".harness")), /ENOENT/);
+  } finally {
+    if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
+    else process.env.HARNESS_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });
@@ -667,7 +711,7 @@ test("first base creation detects supported existing Agent state once without re
     assert.equal(await readFile(path.join(claude, "projects", "private-session"), "utf8"), "unchanged\n");
     await assert.rejects(access(path.join(home, "migrations")), /ENOENT/);
     const lock = await readEnvironmentLock(root, "base");
-    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(Object.keys(lock.packages), []);
     await ensureBaseEnvironment(root, options);
     assert.equal(notices, 1);
   } finally {
@@ -727,8 +771,8 @@ test("concurrent first reads initialize the implicit base Environment once", { c
       readEnvironmentLock(root, "base"),
     ]);
     assert.equal(environment.metadata.name, "base");
-    assert.deepEqual(environment.spec.roots.map((item) => item.name), ["harness-project-memory", "harness-package-builder"]);
-    assert.deepEqual(Object.keys(lock.packages), ["harness-project-memory", "harness-package-builder"]);
+    assert.deepEqual(environment.spec.roots, []);
+    assert.deepEqual(Object.keys(lock.packages), []);
   } finally {
     await removeTestTree(root);
   }
@@ -779,6 +823,7 @@ test("list and doctor remain useful when current-format base layers are corrupt"
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await ensureBaseEnvironment(root);
+    await installIntoEnvironment(root, "base", "builtin:paper-search");
     await createEnvironment(root, "tools", ["codex"]);
     const recipePath = environmentPath(root, "base");
     const lockPath = environmentLockPath(root, "base");
@@ -796,7 +841,7 @@ test("list and doctor remain useful when current-format base layers are corrupt"
 
     await writeFile(lockPath, lock, "utf8");
     const parsedLock = JSON.parse(lock) as { packages: Record<string, { cacheKey: string }> };
-    const packageName = "harness-project-memory";
+    const packageName = "paper-search";
     const skillPath = path.join(
       process.env.HARNESS_HOME!,
       "packages",
@@ -839,8 +884,6 @@ test("install can initialize and lock base as the first Harness command", { conc
   try {
     await installIntoEnvironment(root, "base", "builtin:paper-search");
     assert.deepEqual(Object.keys((await readEnvironmentLock(root, "base")).packages), [
-      "harness-project-memory",
-      "harness-package-builder",
       "paper-search",
     ]);
   } finally {
@@ -944,23 +987,26 @@ test("doctor checks native CLIs only for Environment targets", { concurrency: fa
   }
 });
 
-test("doctor reports modified Agent Memory discovery instructions", { concurrency: false }, async () => {
+test("doctor reports legacy Agent Memory discovery instructions", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-context-doctor-"));
   const previousEnvironment = process.env.HARNESS_ENV;
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "research", ["codex"]);
-    await installIntoEnvironment(root, "research", "builtin:harness-project-memory");
     await installIntoEnvironment(root, "research", "builtin:paper-search");
-    await activateEnvironment(root, "research");
     process.env.HARNESS_ENV = "research";
     const agentsPath = path.join(root, "AGENTS.md");
-    await writeFile(agentsPath, (await readFile(agentsPath, "utf8")).replace("At the beginning", "Later"), "utf8");
+    await writeFile(
+      agentsPath,
+      "<!-- >>> harness-conda:project-memory -->\n## Harness Project Memory\n\nAt the beginning of the session, use the installed `harness-project-memory` Skill. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.\n<!-- <<< harness-conda:project-memory -->\n",
+      "utf8",
+    );
 
     const checks = await doctorEnvironment(root, "research");
 
-    assert.equal(checks.find((check) => check.label === "memory-bootstrap")?.status, "fail");
-    await assert.rejects(activateEnvironment(root, "base"), /discovery block was modified/);
+    assert.equal(checks.find((check) => check.label === "project-bootstrap")?.status, "fail");
+    await activateEnvironment(root, "research");
+    await assert.rejects(access(agentsPath));
   } finally {
     if (previousEnvironment === undefined) delete process.env.HARNESS_ENV;
     else process.env.HARNESS_ENV = previousEnvironment;
@@ -1108,14 +1154,12 @@ test("active install restores project state when the new package conflicts after
     await writeFile(path.join(process.env.HARNESS_ORIGINAL_CODEX_HOME, "config.toml"), '[mcp_servers.occupied]\ncommand = "other"\n', "utf8");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
-    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
     await activateEnvironment(root, "tools");
     const trackedPaths = [
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
       path.join(environmentViewPath("tools"), "view.json"),
       path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"),
-      path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
 
@@ -1137,13 +1181,11 @@ test("active install rolls back when interrupted after resources are applied", {
     const v2 = await environmentPackageFixture(root, "upgrade-v2", "2.0.0", "Version two.");
     await createEnvironment(root, "tools", ["codex"]);
     await installIntoEnvironment(root, "tools", v1);
-    await installIntoEnvironment(root, "tools", "builtin:harness-project-memory");
     await activateEnvironment(root, "tools");
     const trackedPaths = [
       environmentPath(root, "tools"),
       environmentLockPath(root, "tools"),
       path.join(environmentViewPath("tools"), "codex", "skills", "upgrade-skill", "SKILL.md"),
-      path.join(root, "AGENTS.md"),
     ];
     const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
     let interruptedAfterMutation = false;
@@ -1173,22 +1215,23 @@ test("active install rolls back when interrupted after resources are applied", {
   }
 });
 
-test("reinstalling a foundational package preserves its recipe, lock, Skill, and startup pointer", { concurrency: false }, async () => {
+test("an explicitly installed Memory package is a normal reusable root", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-environment-memory-install-rollback-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     await createEnvironment(root, "minimal", ["codex"]);
     await activateEnvironment(root, "minimal");
     const trackedPaths = [environmentPath(root, "minimal"), environmentLockPath(root, "minimal")];
-    const before = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
 
     await installIntoEnvironment(root, "minimal", "builtin:harness-project-memory");
+    const afterInstall = await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8")));
+    await installIntoEnvironment(root, "minimal", "builtin:harness-project-memory");
 
-    assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), before);
-    assert.match(await readFile(path.join(root, "AGENTS.md"), "utf8"), /installed `harness-project-memory` Skill/);
+    assert.deepEqual(await Promise.all(trackedPaths.map((filePath) => readFile(filePath, "utf8"))), afterInstall);
+    await assert.rejects(access(path.join(root, "AGENTS.md")));
     assert.match(
       await readFile(path.join(environmentViewPath("minimal"), "codex", "skills", "harness-project-memory", "SKILL.md"), "utf8"),
-      /Persist stable knowledge automatically/,
+      /Harness Project Memory/,
     );
   } finally {
     await removeTestTree(root);
@@ -1257,7 +1300,7 @@ test("activation holds the target Environment lock through the project transitio
   }
 });
 
-test("project initialization failure leaves stable Agent state unchanged", { concurrency: false }, async () => {
+test("activation ignores an unrelated project Memory path", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "harness-activation-runtime-rollback-"));
   const project = path.join(root, "project");
   process.env.HARNESS_HOME = path.join(root, "home");
@@ -1273,7 +1316,7 @@ test("project initialization failure leaves stable Agent state unchanged", { con
     const opaque = path.join(environmentAgentHomePath("base", "codex"), "opaque.sqlite");
     await writeFile(opaque, "stable\n", "utf8");
 
-    await assert.rejects(activateEnvironment(project, "tools"), /ENOTDIR|not a directory/);
+    await activateEnvironment(project, "tools");
 
     assert.equal(await readFile(opaque, "utf8"), "stable\n");
   } finally {
@@ -1322,8 +1365,8 @@ test("managed Agent home drift is rejected before project activation", { concurr
   }
 });
 
-test("foundational Package names cannot be replaced by user sources", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "harness-foundational-identity-"));
+test("ordinary Package names may use user-selected sources", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "harness-ordinary-package-identity-"));
   process.env.HARNESS_HOME = path.join(root, "home");
   try {
     const replacement = path.join(root, "replacement");
@@ -1351,8 +1394,8 @@ spec:
     );
     await createEnvironment(root, "tools", ["codex"]);
 
-    await assert.rejects(installIntoEnvironment(root, "tools", replacement), /can only be installed from builtin:/);
-    assert.equal((await readEnvironmentLock(root, "tools")).packages["harness-project-memory"]?.source, "builtin:harness-project-memory");
+    await installIntoEnvironment(root, "tools", replacement);
+    assert.equal((await readEnvironmentLock(root, "tools")).packages["harness-project-memory"]?.source, `file:${replacement}`);
   } finally {
     await removeTestTree(root);
   }

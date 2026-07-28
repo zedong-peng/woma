@@ -1,53 +1,65 @@
 # Project Memory
 
-Project Memory adapts portable Packages and Skills to one repository using natural-language context. Harness Conda defines and initializes the storage boundary; users and Agents author the content. Harness does not parse the prose, inject Memory contents into Agent configuration, execute commands from it, or treat it as workflow state.
+Project Memory is optional, project-local context for people and Agents. It can record stable repository conventions without putting those conventions into a reusable Package.
+
+It is not an Environment dependency, lockfile input, activation setting, or task state. A project does not need Memory to use Harness, and an Environment does not gain or lose reproducibility based on Memory files.
+
+## Optional helper
+
+`harness-project-memory` is an ordinary built-in Package. Install it only in an Environment where an Agent should be able to help inspect or update project context:
+
+```bash
+harness install -n <environment> builtin:harness-project-memory
+```
+
+It is removable like every other root Package. Installing it only makes the Skill available through that Environment's Agent view. It does not create Memory files, edit `.gitignore`, write `AGENTS.md` or `CLAUDE.md`, or require the Skill to run at session startup. Select the Skill explicitly when the user asks to load, inspect, or update project knowledge.
+
+`harness-package-builder` follows the same model: it is optional authoring tooling, not an implicit Environment dependency. This mirrors Conda's separation between an Environment's requested packages and optional tooling such as `conda-build`.
 
 ## Layout and isolation
 
+Projects that choose to use Memory can keep it in this layout:
+
 ```text
 .harness/
-├── memory/
-│   ├── project.md
-│   └── packages/
-│       ├── performance-engineering.md
-│       └── auto-research.md
-└── local/
-    └── memory.md
+|-- memory/
+|   |-- project.md
+|   `-- packages/
+|       |-- performance-engineering.md
+|       `-- auto-research.md
+`-- local/
+    `-- memory.md
 ```
 
-`.harness/memory/project.md` contains stable knowledge useful across Agent packages in the repository: build systems, test conventions, repository constraints, and verification expectations.
+`.harness/memory/project.md` can hold knowledge useful across the repository, such as build systems, test conventions, generated-file rules, or verification expectations.
 
-`.harness/memory/packages/<package-name>.md` contains project adaptation for exactly one Package. A Package must not use another Package's scoped Memory as its private state. Package names use the same validated lowercase identity as Harness manifests, so a name cannot escape the Memory directory.
+`.harness/memory/packages/<package-name>.md` can adapt one Package to the project. A Package must not use another Package's scoped Memory as private state. Package names use the same validated lowercase identity as Harness manifests, so a name cannot escape the Memory directory.
 
-`.harness/local/memory.md` contains optional machine-specific context such as dataset paths, hardware selection, or local tool locations. `.harness/local/` is git-ignored and is not portable.
+`.harness/local/memory.md` can hold machine-specific context such as dataset paths, hardware selection, or local tool locations. Decide and maintain ignore rules in the project; Harness does not modify `.gitignore`.
 
-Project Memory is user-owned context, not an activation artifact. Activating, deactivating, switching, or removing an Environment must not delete or rewrite it. Removing a package from an Environment must also preserve its package-scoped memory for review or later reuse; users and Agents delete obsolete memory explicitly. Memory contents do not affect package integrity or Environment lock identities.
-
-## Startup discovery
-
-`harness-project-memory` is an ordinary Harness package with the same manifest, cache, lock, and global target view as every other Skill package. It and `harness-package-builder` are foundational roots in every Environment, including the implicit global `base`, so Project Memory behavior is consistently available and cannot be omitted at Environment creation time.
-
-On first activation, the Codex, Claude, and Pi Adapters add exact marker-delimited instructions to use the installed `harness-project-memory` Skill in project-root `AGENTS.md` for Codex and Pi and `CLAUDE.md` for Claude. These project-global pointers are independent of shell-local Environment targets and are never removed by switching. The Skill itself comes from the selected global Environment view. Existing user instructions, symbolic links, and file modes are preserved; modified managed blocks are treated as drift.
-
-At session start the Memory Skill runs `harness info --json`. This dynamically returns the current working directory, or the explicit global `--project` directory, plus the active Environment, shared/local Memory paths, and each active package's version, Skills, entrypoints, and isolated Memory path. Harness never searches parent directories to guess the project boundary. No derived context file is maintained. The Skill reads shared and local Memory, then reads package Memory before the Agent uses a mapped Skill. Third-party Skills do not need to mention Harness or modify their contents.
+`harness info --json` reports the paths for an explicit project directory and maps active Skills to Packages. It does not create, parse, inject, or execute Memory contents. Harness deliberately does not search parent directories to guess the project boundary.
 
 ## Authoring contract
 
-Before using project-specific guidance, an Agent should:
+When an Agent is explicitly asked to use Project Memory, it should:
 
-1. Read shared, package-scoped, and local memory when present.
-2. Treat memory as context rather than unquestionable instructions.
+1. Read the relevant shared, Package-scoped, and local files when they exist.
+2. Treat their content as context rather than unquestionable instructions.
 3. Verify stored commands and constraints against the current repository before acting.
 4. Inspect the repository or ask the user when essential knowledge is missing.
-5. When the user states a durable project-specific fact, persist it automatically in the narrowest correct scope even without an explicit request to remember it.
-6. Do not persist temporary, one-off, speculative, or current-task-only statements.
-7. Resolve conflicts or ambiguous durability with the user instead of silently overwriting Memory.
-8. Briefly report which Memory file changed.
+5. Write or update Memory only when the user explicitly asks to remember, record, or update it.
+6. Keep changes concise, scoped, reviewable, and reported to the user.
 
-Good Project Memory includes build and test conventions, slow-test warnings, benchmark protocols, generated-file rules, compatibility constraints, and repository-specific acceptance criteria.
+Do not store credentials, tokens, transient task progress, workflow phases, handoffs, outcomes, process identifiers, benchmark results, or unverified guesses. Durable task artifacts and resumable checkpoints belong in user-selected project outputs, not Project Memory.
 
-Do not store credentials, tokens, transient task progress, current workflow phases, handoffs, outcomes, temporary process identifiers, benchmark results, or unverified guesses. Durable task artifacts and resumable workflow checkpoints belong in user-selected project outputs, not in Project Memory.
+## Legacy migration
+
+Environment recipes written by earlier Harness releases contained `harness-project-memory` and `harness-package-builder` as implicit roots. The next operation that loads or updates such an Environment upgrades its recipe to `environment-v2` and removes those former implicit built-in roots from its lock and Agent view. Install either Package explicitly afterward when it is wanted.
+
+Earlier releases also wrote marker-delimited Project Memory discovery blocks to `AGENTS.md` and `CLAUDE.md`. `harness activate` and `harness info` remove an unchanged legacy block once; no current command writes one. Harness preserves surrounding user content, symbolic links, and file modes. A modified managed block is not removed automatically and is reported for manual review by `harness doctor`.
 
 ## Portability
 
-Commit `.harness/memory/` when its contents are appropriate for collaborators and other machines. Keep machine-specific information under `.harness/local/`. Review Project Memory like code because it can influence Agent behavior. Environment export should include portable Project Memory and exclude local memory when bundle support is added.
+Commit `.harness/memory/` only when its contents are appropriate for collaborators and other machines. Keep machine-specific information in project-owned local files and exclude it according to the repository's own policy. Review Project Memory like any other Agent-influencing project content.
+
+Environment bundles exclude Project Memory and all project instruction files. Package export remains a portable capability distribution mechanism, not a project-context backup.

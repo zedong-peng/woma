@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Changed Environment recipes to `environment-v2`: new Environments have no implicit Package roots, and Project Memory and Package Builder are now optional built-ins that can be installed or removed like any other Package. Legacy implicit roots and exact legacy Project Memory discovery blocks migrate away without creating new project files or startup instructions.
 - Added opt-in Qoder CLI Agent targets with isolated `QODER_CONFIG_DIR` homes, atomic Skill views, Package MCP servers and Hooks merged into the managed `settings.json`, shell activation, and inclusion in `--target all`; Harness does not capture, migrate, or seed Qoder credentials or sessions.
 - Fixed `harness init` to remove legacy `eval "$(harness shell hook)"` profile lines while installing the managed block, so profiles written before the public `shell` command was removed no longer fail at shell startup.
 - Added Conda-style top-level `create`, `export`, `remove`, `run`, and `rename` commands; portable bundles are now restored with `create --file`, and the former `env import` command has been removed.

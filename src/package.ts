@@ -681,31 +681,6 @@ export async function importLockedPackage(lock: LockedPackage, sourceRoot: strin
   return { manifest, root: cacheRoot, lock };
 }
 
-export async function validateBuiltinPackageLock(lock: LockedPackage): Promise<void> {
-  const source = `builtin:${lock.name}`;
-  if (lock.source !== source) throw new Error(`Foundational Package ${lock.name} must resolve from ${source}`);
-  const root = builtinPath(lock.name);
-  const manifest = await loadManifest(root);
-  await validatePackage(root, manifest);
-  const integrity = await hashDirectory(root);
-  const expected = {
-    name: manifest.metadata.name,
-    version: manifest.metadata.version,
-    source,
-    integrity,
-    cacheKey: packageCacheKey(source, integrity, integrity),
-    dependencies: manifest.spec.dependencies.map((dependency) => dependency.name),
-  };
-  for (const key of ["name", "version", "source", "integrity", "cacheKey"] as const) {
-    if (lock[key] !== expected[key]) {
-      throw new Error(`Bundled foundational Package ${lock.name} does not match the installed ${source}`);
-    }
-  }
-  if (JSON.stringify(lock.dependencies) !== JSON.stringify(expected.dependencies)) {
-    throw new Error(`Bundled foundational Package ${lock.name} dependencies do not match the installed ${source}`);
-  }
-}
-
 function sourceAtCommit(source: string, commit?: string): string {
   if (source.startsWith("file:") || source.startsWith("builtin:")) return source;
   if (!commit) throw new Error("Locked Git Package has no commit");

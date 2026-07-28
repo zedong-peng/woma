@@ -12,7 +12,7 @@ Conda-style Environment and Package management for Codex, Claude Code, Pi, and Q
 - **Direct Skill installation** from standalone and conventional multi-Skill sources.
 - **Immediate cross-Agent Skill sharing** inside each Environment alongside explicit migration into reusable Packages.
 - **Portable Environment bundles** for moving complete Package closures between machines.
-- **Project Memory** and Package authoring tools in every Environment.
+- **Optional Project Memory** and Package authoring tools installed where they are needed.
 
 ## Requirements
 
@@ -51,6 +51,15 @@ harness install builtin:auto-research
 harness activate base
 codex
 ```
+
+Project Memory and Package authoring are opt-in helpers, not hidden `base` dependencies:
+
+```bash
+harness install builtin:harness-project-memory
+harness install builtin:harness-package-builder
+```
+
+Installing either Package makes its Skill available in the selected Environment. It does not create project Memory, edit `.gitignore`, or add startup instructions to `AGENTS.md` or `CLAUDE.md`.
 
 Use `claude` instead of `codex` to start Claude Code. Pi and Qoder are opt-in because the existing `base` compatibility default targets Codex and Claude; create their Environments explicitly:
 
@@ -163,7 +172,7 @@ harness skeleton workflow research-review --output-dir ./packages --version 0.1.
 harness inspect ./packages/research-review
 ```
 
-The provider-oriented `skeleton` interface follows `conda skeleton` while adding the Harness-specific `workflow` recipe type. Use the foundational `harness-package-builder` Skill for richer Package composition and updates.
+The provider-oriented `skeleton` interface follows `conda skeleton` while adding the Harness-specific `workflow` recipe type. Install the optional `harness-package-builder` Skill for richer Package composition and updates.
 
 ## Documentation
 
