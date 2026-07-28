@@ -4,9 +4,7 @@
   "description": "Reproducible environments and packages for coding agents.",
   "type": "module",
   "bin": {
-    "woma": "dist/src/cli.js",
-    "harness": "dist/src/cli.js",
-    "harness-conda": "dist/src/cli.js"
+    "woma": "dist/src/cli.js"
   },
   "files": [
     "dist/src",
