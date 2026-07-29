@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
-import { access, chmod, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdtemp, mkdir, readFile, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -451,6 +451,10 @@ test("CLI renames an inactive Environment without losing Agent-owned state", { c
   try {
     delete process.env.WOMA_ENV;
     assert.equal((await runCli(["--project", project, "create", "-n", "before", "--target", "codex"], root, home)).code, 0);
+    const legacyAuthView = path.join(home, "environments", "before", "view", "codex", "auth.json");
+    const legacyAuthHome = path.join(home, "environments", "before", "home", "codex", "auth.json");
+    await write(legacyAuthView, '{"token":"legacy"}\n');
+    await symlink(legacyAuthView, legacyAuthHome);
     const opaque = path.join(home, "environments", "before", "home", "codex", "session.sqlite");
     await write(opaque, "state\n");
     const futureLink = path.join(home, "environments", "before", "home", "codex", "future.json");
@@ -460,6 +464,9 @@ test("CLI renames an inactive Environment without losing Agent-owned state", { c
     assert.equal(renamed.code, 0, renamed.stderr);
     assert.match(renamed.stdout, /Renamed environment before to after/);
     await assert.rejects(access(path.join(home, "environments", "before")), /ENOENT/);
+    const renamedAuth = path.join(home, "environments", "after", "home", "codex", "auth.json");
+    assert.equal((await lstat(renamedAuth)).isSymbolicLink(), false);
+    assert.equal(await readFile(renamedAuth, "utf8"), '{"token":"legacy"}\n');
     assert.equal(await readFile(path.join(home, "environments", "after", "home", "codex", "session.sqlite"), "utf8"), "state\n");
     assert.equal(
       await readlink(path.join(home, "environments", "after", "home", "codex", "future.json")),

@@ -48,6 +48,7 @@ test("session migration is explicit and creates Environment-owned ordinary files
     await ensureBaseEnvironment(root);
     const codexHome = environmentAgentHomePath("base", "codex");
     const claudeHome = environmentAgentHomePath("base", "claude");
+    await assert.rejects(readFile(path.join(codexHome, "auth.json")), /ENOENT/);
     await assert.rejects(readFile(path.join(codexHome, "sessions", "2026", "old.jsonl")), /ENOENT/);
     await assert.rejects(readFile(path.join(claudeHome, "projects", "repo", "old.jsonl")), /ENOENT/);
     await write(path.join(codexHome, "sessions", "2026", "new.jsonl"), "codex new\n");

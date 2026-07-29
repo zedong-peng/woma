@@ -37,7 +37,8 @@ import type { Action, LockedPackage, Platform } from "./types.js";
 const EXISTING_AGENT_STATE_NOTICE = `Woma created an isolated base Environment.
 
 Existing Codex or Claude data remains unchanged in the original Agent homes.
-Supported configuration and credentials are seeded separately where supported.
+Supported provider configuration and Claude credentials are seeded separately.
+Codex auth.json is not seeded; log in separately inside the Environment.
 Existing Agent Skills, sessions, and history were detected but were not imported.
 
 Preview migration:

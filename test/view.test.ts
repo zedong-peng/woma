@@ -110,22 +110,21 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     const claudeHome = environmentAgentHomePath("tools", "claude");
     assert.equal((await lstat(codexHome)).isDirectory(), true);
     assert.equal((await lstat(claudeHome)).isDirectory(), true);
-    assert.equal(
-      await realpath(path.join(codexHome, "auth.json")),
-      await realpath(path.join(toolsView, "codex", "auth.json")),
-    );
+    await assert.rejects(access(path.join(codexHome, "auth.json")), /ENOENT/);
+    await assert.rejects(access(path.join(toolsView, "codex", "auth.json")), /ENOENT/);
     assert.equal(
       await realpath(path.join(claudeHome, ".credentials.json")),
       await realpath(path.join(toolsView, "claude", ".credentials.json")),
     );
     await write(path.join(originalCodex, "auth.json"), '{"api_key":"latest"}\n');
     await write(path.join(originalClaude, ".credentials.json"), '{"oauth":"latest"}\n');
-    assert.equal(await readFile(path.join(codexHome, "auth.json"), "utf8"), '{"api_key":"first"}\n');
+    await assert.rejects(access(path.join(codexHome, "auth.json")), /ENOENT/);
     assert.equal(await readFile(path.join(claudeHome, ".credentials.json"), "utf8"), '{"oauth":"first"}\n');
     await writeFile(path.join(codexHome, "auth.json"), '{"api_key":"environment"}\n');
+    const codexAuthInode = (await stat(path.join(codexHome, "auth.json"))).ino;
     await writeFile(path.join(claudeHome, ".credentials.json"), '{"oauth":"environment"}\n');
     for (const [platform, names] of [
-      ["codex", ["auth.json", "config.toml", "hooks.json"]],
+      ["codex", ["config.toml", "hooks.json"]],
       ["claude", [".credentials.json", "settings.json"]],
     ] as const) {
       for (const name of names) {
@@ -205,6 +204,8 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     await installIntoEnvironment(root, "tools", packageRoot);
     assert.notEqual(await readlink(toolsView), firstGeneration);
     assert.equal(await readFile(path.join(codexHome, "auth.json"), "utf8"), '{"api_key":"environment"}\n');
+    assert.equal((await lstat(path.join(codexHome, "auth.json"))).isSymbolicLink(), false);
+    assert.equal((await stat(path.join(codexHome, "auth.json"))).ino, codexAuthInode);
     assert.equal(await readFile(path.join(claudeHome, ".credentials.json"), "utf8"), '{"oauth":"environment"}\n');
     const updatedCodexConfig = parseToml(await readFile(path.join(codexHome, "config.toml"), "utf8")) as Record<string, any>;
     assert.equal(updatedCodexConfig.model_provider, "custom");
@@ -823,7 +824,7 @@ test("failed publication rolls stable Agent home metadata back without touching 
   }
 });
 
-test("shared credential links migrate into Environment views", { concurrency: false }, async () => {
+test("legacy Codex credential links detach from views while Claude credentials remain managed", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-credential-link-migration-"));
   process.env.WOMA_HOME = path.join(root, "home");
   const previousCodex = process.env.WOMA_ORIGINAL_CODEX_HOME;
@@ -839,17 +840,28 @@ test("shared credential links migrate into Environment views", { concurrency: fa
 
     const codexCredential = path.join(environmentAgentHomePath("tools", "codex"), "auth.json");
     const claudeCredential = path.join(environmentAgentHomePath("tools", "claude"), ".credentials.json");
-    await rm(codexCredential, { force: true });
+    const legacyCodexCredential = path.join(environmentViewPath("tools"), "codex", "auth.json");
+    await write(legacyCodexCredential, '{"api_key":"legacy"}\n');
     await rm(claudeCredential, { force: true });
-    await symlink(path.join(originalCodex, "auth.json"), codexCredential);
+    await symlink(legacyCodexCredential, codexCredential);
     await symlink(path.join(originalClaude, ".credentials.json"), claudeCredential);
 
-    await installIntoEnvironment(root, "tools", "builtin:woma-package-builder");
-
-    assert.equal(
-      path.resolve(path.dirname(codexCredential), await readlink(codexCredential)),
-      path.join(environmentViewPath("tools"), "codex", "auth.json"),
+    await assert.rejects(
+      installIntoEnvironment(root, "tools", "builtin:woma-package-builder", process.cwd(), {
+        onMetadataPrepared: () => {
+          throw new Error("injected credential migration failure");
+        },
+      }),
+      /injected credential migration failure/,
     );
+    assert.equal((await lstat(codexCredential)).isSymbolicLink(), true);
+    assert.equal(path.resolve(path.dirname(codexCredential), await readlink(codexCredential)), legacyCodexCredential);
+    assert.equal(await readFile(codexCredential, "utf8"), '{"api_key":"legacy"}\n');
+
+    await activateEnvironment(root, "tools");
+
+    assert.equal((await lstat(codexCredential)).isSymbolicLink(), false);
+    await assert.rejects(access(path.join(environmentViewPath("tools"), "codex", "auth.json")), /ENOENT/);
     assert.equal(
       path.resolve(path.dirname(claudeCredential), await readlink(claudeCredential)),
       path.join(environmentViewPath("tools"), "claude", ".credentials.json"),
@@ -860,6 +872,12 @@ test("shared credential links migrate into Environment views", { concurrency: fa
     await write(path.join(originalClaude, ".credentials.json"), '{"oauth":"original-updated"}\n');
     assert.equal(await readFile(codexCredential, "utf8"), '{"api_key":"legacy"}\n');
     assert.equal(await readFile(claudeCredential, "utf8"), '{"oauth":"legacy"}\n');
+
+    await createEnvironment(root, "external-auth", ["codex"]);
+    const externalCredential = path.join(environmentAgentHomePath("external-auth", "codex"), "auth.json");
+    await symlink(path.join(originalCodex, "auth.json"), externalCredential);
+    await activateEnvironment(root, "external-auth");
+    assert.equal(await readlink(externalCredential), path.join(originalCodex, "auth.json"));
   } finally {
     if (previousCodex === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
     else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodex;

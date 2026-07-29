@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Changed Codex `auth.json` to Agent-owned opaque state: new Environments no longer read or seed it, view updates no longer manage it, and legacy Woma credential links detach transactionally into ordinary stable-home files.
 - Breaking: removed Woma-owned Project Memory, startup injection, and Memory paths in `info --json`. Environment schema v2 starts empty and upgrades v1 by pruning the exact formerly implicit helper roots without touching user-owned Memory data. `woma-project-memory` remains available as an explicit, removable ordinary built-in Package with no core or Agent-native Memory integration.
 - Breaking: renamed the project, npm package, CLI, environment variables, paths, manifests, bundle format, and built-in Packages to Woma. Existing installations and project metadata must be recreated with the Woma names.
 - Added opt-in Qoder CLI Agent targets with isolated `QODER_CONFIG_DIR` homes, atomic Skill views, Package MCP servers and Hooks merged into the managed `settings.json`, shell activation, and inclusion in `--target all`; Woma does not capture, migrate, or seed Qoder credentials or sessions.
@@ -19,7 +20,7 @@
 - Added `woma list` to show an Environment's locked Packages and every Package-managed Skill, MCP server, and hook with providing Package versions and effective target platforms.
 - Added a current-user Codex/Claude process check and mandatory interactive confirmation before migration while an Agent is running.
 - Added explicit `woma migrate sessions` snapshots from original Agent homes into Environment-owned ordinary files, including structured JSONL history merging, without implicit initialization-time migration or links back to the source.
-- Replaced shared runtime adoption with stable per-Environment Agent homes and inherited Environment-specific credentials/provider settings, so unknown state and SQLite databases are never copied across view generations.
+- Replaced shared runtime adoption with stable per-Environment Agent homes and inherited managed provider settings and Claude credentials, so unknown state and SQLite databases are never copied across view generations. Codex credentials remain Codex-owned opaque state.
 - Added deterministic installation of standalone Skills and direct conventional multi-Skill sources through one shared Source Adapter.
 - Added the optional `woma-package-builder` for wrapping resources and creating dependency-based Packages with optional coordinating Skills.
 - Added explicit migration of existing Agent Skills into a selected Environment and stable per-Environment Codex system Skills.
