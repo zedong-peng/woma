@@ -2,10 +2,6 @@ node_modules/
 dist/
 .DS_Store
 .woma/state.json
-.woma/local/
 .woma/cache/
-.woma/memory/
-AGENTS.md
-CLAUDE.md
 *.log
 talk.txt

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -51,7 +51,7 @@ spec:
   );
   await write(path.join(packageRoot, "skills", "local-performance", "data.bin"), Buffer.from([0, 255, 128, 1, 2, 0]));
   await write(path.join(packageRoot, "skills", "local-performance", "run.sh"), "#!/bin/sh\nexit 0\n", 0o755);
-  await write(path.join(packageRoot, ".harness", "local", "memory.md"), "legacy-private-memory\n");
+  await write(path.join(packageRoot, ".woma", "local", "private.md"), "private-package-state\n");
   return packageRoot;
 }
 
@@ -90,7 +90,7 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     );
     const before = await environmentSnapshot(projectA, "performance");
     const first = await exportEnvironmentBundle(projectA, "performance", bundle);
-    assert.equal(first.packages, 3);
+    assert.equal(first.packages, 1);
 
     const secondBundle = path.join(root, "performance-copy.woma-env");
     await exportEnvironmentBundle(projectA, "performance", secondBundle);
@@ -99,7 +99,7 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     await assert.rejects(exportEnvironmentBundle(projectA, "performance", bundle), /Refusing to overwrite/);
     assert.deepEqual(await readFile(bundle), unchanged);
     const document = gunzipSync(await readFile(bundle)).toString("utf8");
-    assert.doesNotMatch(document, /must-not-export|private project memory|legacy-private-memory|auth\.json|private-runtime-skill/);
+    assert.doesNotMatch(document, /must-not-export|private project memory|private-package-state|auth\.json|private-runtime-skill/);
 
     await rm(source, { recursive: true, force: true });
     await removeTestTree(process.env.WOMA_HOME);
@@ -127,6 +127,66 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     else process.env.WOMA_ORIGINAL_CODEX_HOME = previous.codexHome;
     if (previous.claudeHome === undefined) delete process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR;
     else process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = previous.claudeHome;
+    await removeTestTree(root);
+  }
+});
+
+test("Environment bundle migration drops legacy implicit helpers before Store import", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-bundle-legacy-helpers-"));
+  const previousHome = process.env.WOMA_HOME;
+  try {
+    const source = await portablePackage(root);
+    const memory = path.join(root, "legacy-memory");
+    await write(
+      path.join(memory, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
+metadata:
+  name: woma-project-memory
+  version: 0.1.0
+  description: Legacy bundle migration fixture.
+spec:
+  platforms: [codex, claude]
+  skills:
+    - name: woma-project-memory
+      path: ./skills/woma-project-memory
+`,
+    );
+    await write(
+      path.join(memory, "skills", "woma-project-memory", "SKILL.md"),
+      "---\nname: woma-project-memory\ndescription: Legacy bundle fixture.\n---\nLegacy.\n",
+    );
+    const bundle = path.join(root, "source.woma-env");
+    const legacyBundle = path.join(root, "legacy.woma-env");
+    process.env.WOMA_HOME = path.join(root, "source-home");
+    await createEnvironment(root, "source", ["codex", "claude"]);
+    await installIntoEnvironment(root, "source", source);
+    await installIntoEnvironment(root, "source", "builtin:woma-package-builder");
+    await installIntoEnvironment(root, "source", memory);
+    await exportEnvironmentBundle(root, "source", bundle);
+    await writeFile(
+      legacyBundle,
+      rewriteBundle(await readFile(bundle), (document) => {
+        document.environment.apiVersion = "woma.dev/environment-v1";
+        const memoryRoot = document.environment.spec.roots.find((item: any) => item.name === "woma-project-memory");
+        memoryRoot.source = "builtin:woma-project-memory";
+        document.lock.packages["woma-project-memory"].source = "builtin:woma-project-memory";
+      }),
+    );
+
+    const destinationHome = path.join(root, "destination-home");
+    process.env.WOMA_HOME = destinationHome;
+    const imported = await importEnvironmentBundle(root, legacyBundle, "restored");
+
+    assert.equal(imported.packages, 1);
+    assert.equal(imported.snapshot.environment.apiVersion, "woma.dev/environment-v2");
+    assert.deepEqual(imported.snapshot.environment.spec.roots.map((item) => item.name), ["local-performance"]);
+    assert.deepEqual(Object.keys(imported.snapshot.lock.packages), ["local-performance"]);
+    await assert.rejects(access(path.join(destinationHome, "packages", "woma-project-memory")), /ENOENT/);
+    await assert.rejects(access(path.join(destinationHome, "packages", "woma-package-builder")), /ENOENT/);
+  } finally {
+    if (previousHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previousHome;
     await removeTestTree(root);
   }
 });
@@ -182,15 +242,15 @@ test("Environment bundle rejects unsafe paths and tampered Package bytes without
     await assert.rejects(importEnvironmentBundle(root, windowsTraversal, "windows-unsafe"), /unsafe Package path/);
     await assert.rejects(readFile(environmentPath(root, "windows-unsafe")), /ENOENT/);
 
-    const legacyState = path.join(root, "legacy-state.woma-env");
+    const privateState = path.join(root, "private-state.woma-env");
     await writeFile(
-      legacyState,
+      privateState,
       rewriteBundle(original, (document) => {
-        document.packages[0].files[0].path = ".harness/local/memory.md";
+        document.packages[0].files[0].path = ".woma/local/private.md";
       }),
     );
-    await assert.rejects(importEnvironmentBundle(root, legacyState, "legacy-state"), /excluded Package path/);
-    await assert.rejects(readFile(environmentPath(root, "legacy-state")), /ENOENT/);
+    await assert.rejects(importEnvironmentBundle(root, privateState, "private-state"), /excluded Package path/);
+    await assert.rejects(readFile(environmentPath(root, "private-state")), /ENOENT/);
 
     const corrupted = path.join(root, "corrupted.woma-env");
     await writeFile(

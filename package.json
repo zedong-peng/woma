@@ -9,7 +9,6 @@
   "files": [
     "dist/src",
     "docs",
-    "examples/woma-project-memory",
     "examples/performance-engineering",
     "examples/reproducibility-core",
     "examples/paper-search",
@@ -17,6 +16,7 @@
     "examples/exp-design",
     "examples/auto-research",
     "examples/woma-package-builder",
+    "examples/woma-project-memory",
     "scripts/benchmark-switch.mjs",
     "scripts/postinstall.mjs",
     "CHANGELOG.md",

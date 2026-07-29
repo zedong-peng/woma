@@ -1,4 +1,4 @@
 interface:
   display_name: "Woma Project Memory"
-  short_description: "Maintain durable Woma project knowledge"
-  default_prompt: "Use $woma-project-memory to load and maintain durable project knowledge."
+  short_description: "Use opt-in project knowledge"
+  default_prompt: "Use $woma-project-memory to load or update relevant project knowledge without changing Agent-owned memory."

@@ -83,33 +83,6 @@ test("a root woma.yaml remains authoritative", { concurrency: false }, async () 
   }
 });
 
-test("legacy manifests are rejected before implicit Package normalization", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "woma-legacy-manifest-"));
-  process.env.WOMA_HOME = path.join(root, "home");
-  try {
-    const source = path.join(root, "legacy-package");
-    await write(
-      path.join(source, "harness.yaml"),
-      `apiVersion: harness.conda/v1
-kind: Harness
-metadata:
-  name: legacy-package
-  version: 1.0.0
-  description: Legacy Package.
-spec:
-  skills:
-    - name: legacy-skill
-      path: ./skills/legacy-skill
-`,
-    );
-    await write(path.join(source, "skills", "legacy-skill", "SKILL.md"), skill("legacy-skill"));
-
-    await assert.rejects(installPackageSource(source), /Legacy harness\.yaml is not supported; use woma\.yaml/);
-  } finally {
-    await removeTestTree(root);
-  }
-});
-
 test("a root SKILL.md becomes one implicit Package without modifying its source", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-standalone-source-"));
   process.env.WOMA_HOME = path.join(root, "home");

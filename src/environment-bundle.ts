@@ -7,8 +7,8 @@ import { satisfies } from "semver";
 import { z } from "zod";
 import {
   environmentSnapshot,
-  FOUNDATIONAL_PACKAGES,
   importEnvironmentSnapshot,
+  normalizeLegacyEnvironmentSnapshot,
   parseEnvironment,
   parseEnvironmentLock,
   type EnvironmentSnapshot,
@@ -16,7 +16,6 @@ import {
 import {
   importLockedPackage,
   loadCachedPackage,
-  validateBuiltinPackageLock,
   validateLockedPackageDirectory,
 } from "./package.js";
 import { EXCLUDED_PACKAGE_PATH_NAMES } from "./fs.js";
@@ -281,17 +280,6 @@ function validateBundleClosure(
     const unsupported = environment.spec.targets.filter((target) => !manifest.spec.platforms.includes(target));
     if (unsupported.length > 0) throw new Error(`Bundled Package ${name} does not support Environment target ${unsupported.join(", ")}`);
   }
-  for (const foundational of FOUNDATIONAL_PACKAGES) {
-    const root = environment.spec.roots.find((candidate) => candidate.name === foundational);
-    const lockEntry = lock.packages[foundational];
-    const manifest = manifests.get(foundational);
-    if (!root || root.source !== `builtin:${foundational}` || lockEntry?.source !== `builtin:${foundational}`) {
-      throw new Error(`Foundational Package ${foundational} must resolve from builtin:${foundational}`);
-    }
-    if (!manifest?.spec.skills.some((skill) => skill.name === foundational)) {
-      throw new Error(`Foundational Package ${foundational} must provide Skill ${foundational}`);
-    }
-  }
 }
 
 export async function importEnvironmentBundle(
@@ -304,26 +292,27 @@ export async function importEnvironmentBundle(
   if (!inputInfo.isFile()) throw new Error(`Environment bundle is not a file: ${source}`);
   if (inputInfo.size > MAX_COMPRESSED_BYTES) throw new Error(`Environment bundle exceeds ${MAX_COMPRESSED_BYTES} compressed bytes`);
   const bundle = parseBundle(await readFile(source), source);
-  const name = requestedName ?? bundle.environment.metadata.name;
+  const normalized = normalizeLegacyEnvironmentSnapshot(bundle.environment, bundle.lock);
+  const environment = normalized.environment;
+  const lock = normalized.lock;
+  const packages = bundle.packages.filter((pkg) => lock.packages[pkg.name] !== undefined);
+  const name = requestedName ?? environment.metadata.name;
   const temporary = await mkdtemp(path.join(os.tmpdir(), "woma-environment-import-"));
   try {
     const roots = new Map<string, string>();
     const manifests = new Map<string, WomaManifest>();
-    for (const pkg of bundle.packages) {
+    for (const pkg of packages) {
       const packageRoot = path.join(temporary, "packages", pkg.name);
       await materializeBundledPackage(packageRoot, pkg);
-      manifests.set(pkg.name, await validateLockedPackageDirectory(bundle.lock.packages[pkg.name]!, packageRoot));
+      manifests.set(pkg.name, await validateLockedPackageDirectory(lock.packages[pkg.name]!, packageRoot));
       roots.set(pkg.name, packageRoot);
     }
-    validateBundleClosure(bundle.environment, bundle.lock, manifests);
-    for (const foundational of FOUNDATIONAL_PACKAGES) {
-      await validateBuiltinPackageLock(bundle.lock.packages[foundational]!);
+    validateBundleClosure(environment, lock, manifests);
+    for (const pkg of packages) {
+      await importLockedPackage(lock.packages[pkg.name]!, roots.get(pkg.name)!);
     }
-    for (const pkg of bundle.packages) {
-      await importLockedPackage(bundle.lock.packages[pkg.name]!, roots.get(pkg.name)!);
-    }
-    const snapshot = await importEnvironmentSnapshot(projectRoot, bundle.environment, bundle.lock, name);
-    return { snapshot, path: source, packages: bundle.packages.length, bytes: inputInfo.size };
+    const snapshot = await importEnvironmentSnapshot(projectRoot, environment, lock, name);
+    return { snapshot, path: source, packages: packages.length, bytes: inputInfo.size };
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

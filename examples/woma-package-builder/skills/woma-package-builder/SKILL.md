@@ -32,7 +32,7 @@ Use the user's available Woma CLI invocation for all commands below. Examples sh
 ## Preserve Boundaries
 
 - Treat Package as the only distribution type. A coordinating Skill remains a Skill, and a Package with dependencies remains a Package.
-- Keep repository-specific build, test, benchmark, and operational knowledge in Project Memory rather than portable Package content.
+- Keep repository-specific build, test, benchmark, and operational knowledge in repository-owned documentation or Agent context rather than portable Package content.
 - Prefer immutable Git tags or revisions for shared dependencies. Treat local dependency sources as development-only and report their portability limit.
 - Do not publish, push, install into an Environment, alter Agent-global configuration, or delete source files without explicit authorization.
 - Do not add a workflow runtime, DAG, phase state, handoff protocol, or mandatory linear execution model.

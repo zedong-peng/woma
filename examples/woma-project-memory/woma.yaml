@@ -2,15 +2,15 @@ apiVersion: woma.dev/v1
 kind: Woma
 metadata:
   name: woma-project-memory
-  version: 0.1.0
-  description: Load and maintain durable project-specific knowledge for every Skill in an active Woma Environment.
+  version: 1.0.0
+  description: Load and maintain opt-in, project-owned Woma context without modifying Agent-owned memory or configuration.
   tags: [memory, project-context]
 spec:
   platforms: [codex, claude, pi, qoder]
   entrypoints:
     - name: manage-project-memory
       skill: woma-project-memory
-      description: Load relevant project knowledge and persist stable facts in the correct scope.
+      description: Load relevant project knowledge or persist explicitly requested durable facts.
   skills:
     - name: woma-project-memory
       path: ./skills/woma-project-memory

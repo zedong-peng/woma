@@ -1,53 +1,15 @@
-# Project Memory
+# Optional Project Memory
 
-Project Memory adapts portable Packages and Skills to one repository using natural-language context. Woma defines and initializes the storage boundary; users and Agents author the content. Woma does not parse the prose, inject Memory contents into Agent configuration, execute commands from it, or treat it as workflow state.
+Woma core manages Agent capabilities and isolated Environments, not Agent Memory or project context. It never creates project Memory, injects startup instructions, or reads and writes native Agent memory stores.
 
-## Layout and isolation
+Projects that need shared build commands, test procedures, coding conventions, or operational knowledge can explicitly install the ordinary, removable Project Memory Package:
 
-```text
-.woma/
-├── memory/
-│   ├── project.md
-│   └── packages/
-│       ├── performance-engineering.md
-│       └── auto-research.md
-└── local/
-    └── memory.md
+```bash
+woma install builtin:woma-project-memory
 ```
 
-`.woma/memory/project.md` contains stable knowledge useful across Agent packages in the repository: build systems, test conventions, repository constraints, and verification expectations.
+The Package contributes one Skill to the selected Environment. It has no special runtime semantics and is not installed into `base` or new Environments automatically. Installation, activation, deactivation, and Environment switching do not invoke the Skill or create project files.
 
-`.woma/memory/packages/<package-name>.md` contains project adaptation for exactly one Package. A Package must not use another Package's scoped Memory as its private state. Package names use the same validated lowercase identity as Woma manifests, so a name cannot escape the Memory directory.
+When relevant work selects the Skill, it reads the project-owned `.woma/memory.md` file if present. It creates or updates that file only when the user explicitly asks to persist durable knowledge. The Skill does not run `woma info`, enumerate Packages, edit `AGENTS.md` or `CLAUDE.md`, or inspect Agent-native memory, configuration, history, databases, or credentials.
 
-`.woma/local/memory.md` contains optional machine-specific context such as dataset paths, hardware selection, or local tool locations. `.woma/local/` is git-ignored and is not portable.
-
-Project Memory is user-owned context, not an activation artifact. Activating, deactivating, switching, or removing an Environment must not delete or rewrite it. Removing a package from an Environment must also preserve its package-scoped memory for review or later reuse; users and Agents delete obsolete memory explicitly. Memory contents do not affect package integrity or Environment lock identities.
-
-## Startup discovery
-
-`woma-project-memory` is an ordinary Woma package with the same manifest, cache, lock, and global target view as every other Skill package. It and `woma-package-builder` are foundational roots in every Environment, including the implicit global `base`, so Project Memory behavior is consistently available and cannot be omitted at Environment creation time.
-
-On first activation, the Codex, Claude, and Pi Adapters add exact marker-delimited instructions to use the installed `woma-project-memory` Skill in project-root `AGENTS.md` for Codex and Pi and `CLAUDE.md` for Claude. These project-global pointers are independent of shell-local Environment targets and are never removed by switching. The Skill itself comes from the selected global Environment view. Existing user instructions, symbolic links, and file modes are preserved; modified managed blocks are treated as drift.
-
-At session start the Memory Skill runs `woma info --json`. This dynamically returns the current working directory, or the explicit global `--project` directory, plus the active Environment, shared/local Memory paths, and each active package's version, Skills, entrypoints, and isolated Memory path. Woma never searches parent directories to guess the project boundary. No derived context file is maintained. The Skill reads shared and local Memory, then reads package Memory before the Agent uses a mapped Skill. Third-party Skills do not need to mention Woma or modify their contents.
-
-## Authoring contract
-
-Before using project-specific guidance, an Agent should:
-
-1. Read shared, package-scoped, and local memory when present.
-2. Treat memory as context rather than unquestionable instructions.
-3. Verify stored commands and constraints against the current repository before acting.
-4. Inspect the repository or ask the user when essential knowledge is missing.
-5. When the user states a durable project-specific fact, persist it automatically in the narrowest correct scope even without an explicit request to remember it.
-6. Do not persist temporary, one-off, speculative, or current-task-only statements.
-7. Resolve conflicts or ambiguous durability with the user instead of silently overwriting Memory.
-8. Briefly report which Memory file changed.
-
-Good Project Memory includes build and test conventions, slow-test warnings, benchmark protocols, generated-file rules, compatibility constraints, and repository-specific acceptance criteria.
-
-Do not store credentials, tokens, transient task progress, current workflow phases, handoffs, outcomes, temporary process identifiers, benchmark results, or unverified guesses. Durable task artifacts and resumable workflow checkpoints belong in user-selected project outputs, not in Project Memory.
-
-## Portability
-
-Commit `.woma/memory/` when its contents are appropriate for collaborators and other machines. Keep machine-specific information under `.woma/local/`. Review Project Memory like code because it can influence Agent behavior. Environment export should include portable Project Memory and exclude local memory when bundle support is added.
+The repository owner decides whether `.woma/memory.md` is version-controlled or ignored. Do not store credentials, personal data, transient progress, or unverified conclusions in it.

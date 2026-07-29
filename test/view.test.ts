@@ -238,7 +238,7 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     assert.equal(updatedClaude.mcpServers.existing.command, "keep");
     assert.equal(updatedClaude.mcpServers["view-server"], undefined);
 
-    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:woma-package-builder");
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite")), sqlite);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-wal")), wal);
     assert.deepEqual(await readFile(path.join(codexHome, "goals_1.sqlite-shm")), shm);
@@ -328,12 +328,12 @@ test("Codex can replace legacy projected system Skills without invalidating the 
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
     await write(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "runtime-v2\n");
     await write(path.join(homeSkills, "future-codex-runtime", "state.bin"), Buffer.from([0, 255, 39]));
-    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:woma-package-builder");
     assert.equal(await readFile(path.join(homeSkills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime-v2\n");
     assert.deepEqual(await readFile(path.join(homeSkills, "future-codex-runtime", "state.bin")), Buffer.from([0, 255, 39]));
     assert.equal((await doctorEnvironment(root, "tools")).find((check) => check.label === "view")?.status, "ok");
 
-    const managedSkill = path.join(homeSkills, "woma-project-memory");
+    const managedSkill = path.join(homeSkills, "woma-package-builder");
     await rm(managedSkill, { force: true });
     await mkdir(managedSkill);
     const drifted = (await doctorEnvironment(root, "tools")).find((check) => check.label === "view");
@@ -600,7 +600,7 @@ test("a Skill installed by any Agent is immediately visible to every target in o
     await write(path.join(codexSkills, "broken-local", "SKILL.md"), "missing frontmatter\n");
     await write(
       path.join(codexSkills, "conflicting-local", "SKILL.md"),
-      "---\nname: woma-project-memory\ndescription: Conflicts with a managed Skill.\n---\nConflict.\n",
+      "---\nname: woma-project-memory\ndescription: Ordinary external Skill with a formerly reserved name.\n---\nExternal.\n",
     );
     const lockPath = path.join(process.env.WOMA_HOME, "environments", "tools", "lock.json");
     const recipePath = path.join(process.env.WOMA_HOME, "environments", "tools", "environment.yaml");
@@ -608,20 +608,20 @@ test("a Skill installed by any Agent is immediately visible to every target in o
     const beforeRecipe = await readFile(recipePath);
 
     const inventory = await inspectEnvironmentLocalSkills(await readEnvironment(root, "tools"));
-    assert.deepEqual(inventory.skills.map((skill) => skill.name), targets.map((platform) => `${platform}-installed`).sort());
+    const externalSkillNames = [...targets.map((platform) => `${platform}-installed`), "woma-project-memory"].sort();
+    assert.deepEqual(inventory.skills.map((skill) => skill.name), externalSkillNames);
     assert.equal(inventory.skills.every((skill) => skill.origin === "external" && skill.platform === "environment"), true);
     assert.deepEqual(inventory.skills[0]?.platforms, targets);
-    assert.deepEqual(inventory.issues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
+    assert.deepEqual(inventory.issues.map((issue) => issue.entry), ["broken-local"]);
     const context = await environmentInfo(root);
-    assert.deepEqual(context.environmentSkills.map((skill) => skill.name), targets.map((platform) => `${platform}-installed`).sort());
-    assert.deepEqual(context.environmentSkillIssues.map((issue) => issue.entry), ["broken-local", "conflicting-local"]);
+    assert.deepEqual(context.environmentSkills.map((skill) => skill.name), externalSkillNames);
+    assert.deepEqual(context.environmentSkillIssues.map((issue) => issue.entry), ["broken-local"]);
 
     const checks = await doctorEnvironment(root, "tools");
-    for (const platform of targets) {
-      assert.equal(checks.find((check) => check.label === `environment-skill:${platform}-installed`)?.status, "ok");
+    for (const skillName of externalSkillNames) {
+      assert.equal(checks.find((check) => check.label === `environment-skill:${skillName}`)?.status, "ok");
     }
     assert.equal(checks.find((check) => check.label === "environment-skill:broken-local")?.status, "warn");
-    assert.equal(checks.find((check) => check.label === "environment-skill:conflicting-local")?.status, "fail");
 
     for (const source of targets) {
       for (const target of targets) {
@@ -690,7 +690,7 @@ test("Pi uses a stable Agent home with only Skills managed by the Environment vi
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.deepEqual((await readdir(path.join(view, "pi"))).sort(), ["skills"]);
 
-    await installIntoEnvironment(root, "pi-tools", "builtin:woma-project-memory");
+    await installIntoEnvironment(root, "pi-tools", "builtin:woma-package-builder");
     assert.equal(await readFile(path.join(home, "settings.json"), "utf8"), '{"theme":"light"}\n');
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.equal((await doctorEnvironment(root, "pi-tools")).find((check) => check.label === "view")?.status, "ok");
@@ -771,7 +771,7 @@ spec:
     const metadata = JSON.parse(await readFile(path.join(view, "view.json"), "utf8"));
     assert.deepEqual(metadata.resources.qoderMcpServers, ["view-server"]);
 
-    await installIntoEnvironment(root, "qoder-tools", "builtin:woma-project-memory");
+    await installIntoEnvironment(root, "qoder-tools", "builtin:woma-package-builder");
     const updated = JSON.parse(await readFile(settingsLink, "utf8"));
     assert.deepEqual(updated.mcpServers["view-server"], { type: "stdio", command: "node", args: ["server.mjs"] });
     assert.deepEqual(updated.hooks.PostToolUse, [
@@ -844,7 +844,7 @@ test("shared credential links migrate into Environment views", { concurrency: fa
     await symlink(path.join(originalCodex, "auth.json"), codexCredential);
     await symlink(path.join(originalClaude, ".credentials.json"), claudeCredential);
 
-    await installIntoEnvironment(root, "tools", "builtin:woma-project-memory");
+    await installIntoEnvironment(root, "tools", "builtin:woma-package-builder");
 
     assert.equal(
       path.resolve(path.dirname(codexCredential), await readlink(codexCredential)),

@@ -65,8 +65,6 @@ test("CLI explicitly migrates existing Skills into the active Environment", asyn
       packages: Record<string, unknown>;
     };
     assert.deepEqual(Object.keys(lock.packages), [
-      "woma-project-memory",
-      "woma-package-builder",
       "legacy-review",
       "quick-notes",
     ]);
@@ -187,7 +185,7 @@ test("CLI immediately lists a Claude-installed Skill shared with Codex in the En
     const lock = JSON.parse(await readFile(path.join(home, "environments", "tools", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
-    assert.deepEqual(Object.keys(lock.packages), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(Object.keys(lock.packages), []);
     assert.equal((await lstat(path.join(skills, "installed-in-window"))).isDirectory(), true);
     assert.equal(await readFile(path.join(skills, ".system", ".codex-system-skills.marker"), "utf8"), "runtime\n");
   } finally {

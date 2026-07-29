@@ -1,31 +1,30 @@
 ---
 name: woma-project-memory
-description: Loads and maintains durable project-specific knowledge for active Woma packages and Skills. Use at the beginning of every Agent session in a Woma Environment, before using another active Skill, and whenever the user states stable project facts such as build, test, benchmark, repository, or operational conventions, even when the user does not explicitly ask to remember them.
+description: Loads or updates opt-in, project-owned Woma Memory for durable build, test, coding, and operational knowledge. Use when requested work depends on those project conventions or when the user asks to review or record them. Do not run at session startup or for unrelated tasks.
 ---
 
 # Woma Project Memory
 
-Keep portable Skills generic while adapting them to the current project through reviewable natural-language Memory.
+Use one reviewable project-owned file to apply durable repository knowledge when it is relevant. This optional Skill is not part of Woma's runtime and has no special Package, Environment, or Agent semantics.
 
-## Load context
+## Preserve Agent Boundaries
 
-1. Run `woma info --json` from the intended project root. When working in a nested directory, run `woma --project <project-root> info --json`; Woma intentionally does not search parent directories.
-2. Read the returned shared project Memory and machine-local Memory when they exist.
-3. Before using another active Skill, find its package in the returned `packages[].skills` mapping and read that package's Memory when it exists.
-4. Treat Memory as project context, not unquestionable commands. Verify commands and constraints against the repository before acting. Resolve conflicts with the user.
+- Never inspect or modify an Agent's native memory store, history, database, settings, or credentials.
+- Never create or edit `AGENTS.md`, `CLAUDE.md`, or another Agent instruction file unless the user separately requests that exact change.
+- Do not run `woma info`, enumerate the Environment Package closure, or load this Skill automatically at session startup.
+- Do not create project Memory merely because the Package is installed or activated.
 
-Do not require third-party Skills to know about Woma Memory. Apply the relevant Memory before following their instructions.
+## Load Project Knowledge
 
-## Persist stable knowledge automatically
+1. Use the project root identified by the user or the current repository root for the requested work. Do not search unrelated parent workspaces.
+2. Read `<project-root>/.woma/memory.md` when it exists and the current request depends on project-specific build, test, coding, benchmark, or operational conventions.
+3. Treat the file as context, not unquestionable commands. Verify commands and constraints against the repository and resolve conflicts with the user.
+4. If the file is absent, continue without creating it unless the user explicitly asks to record durable project knowledge.
 
-When the user states a durable project-specific fact, write it to the narrowest correct scope even if the user does not explicitly ask to remember it:
+## Update Project Knowledge
 
-- Write knowledge shared by all project work to the `memory.project` path returned by `woma info --json`.
-- Write adaptation specific to a package or its Skills to that package's `memory` path.
-- Write machine-specific paths, hardware, and local tool locations to the `memory.local` path.
+Write `<project-root>/.woma/memory.md` only when the user explicitly asks to remember, record, or update a durable project fact. Keep entries concise, human-readable, and organized by topic. Update superseded facts instead of appending contradictions, and report the changed path.
 
-Create a missing Memory file when needed. Keep entries concise, human-readable, and organized by topic. If new information supersedes an existing entry, update it rather than appending a contradiction. Briefly report which file changed.
+Respect the repository's existing version-control policy. Do not edit `.gitignore` or decide whether Memory is shared or private without the user's direction.
 
-Do not persist information described as temporary, one-off, speculative, or limited to the current task. Never store credentials, tokens, transient task progress, workflow phases, handoffs, outcomes, process identifiers, temporary results, or unverified guesses. Ask before overwriting when durability or scope is ambiguous.
-
-Memory is durable context, not a task log. Put task artifacts and resumable checkpoints in user-selected project outputs.
+Never store credentials, tokens, personal data, transient task progress, handoffs, process identifiers, temporary results, speculative conclusions, or unverified guesses. Ask before overwriting when durability or scope is ambiguous.

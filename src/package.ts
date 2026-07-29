@@ -35,7 +35,6 @@ export interface PackageInstallPlan {
 }
 
 const builtinNames = new Set([
-  "woma-project-memory",
   "reproducibility-core",
   "performance-engineering",
   "paper-search",
@@ -43,6 +42,7 @@ const builtinNames = new Set([
   "exp-design",
   "auto-research",
   "woma-package-builder",
+  "woma-project-memory",
 ]);
 
 function builtinPath(name: string): string {
@@ -226,16 +226,6 @@ async function copyImplicitSkill(sourceRoot: string, destinationRoot: string): P
 
 async function normalizeMaterializedSource(materialized: MaterializedSource): Promise<MaterializedSource> {
   if (await pathExists(path.join(materialized.root, "woma.yaml"))) return materialized;
-  const legacyManifest = path.join(materialized.root, "harness.yaml");
-  const hasLegacyManifest = await lstat(legacyManifest).then(
-    () => true,
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return false;
-      throw error;
-    },
-  );
-  if (hasLegacyManifest) throw new Error(`Legacy harness.yaml is not supported; use woma.yaml`);
-
   const sourceInfo = await lstat(materialized.root);
   if (sourceInfo.isSymbolicLink()) throw new Error(`Implicit Package source is an unsupported symlink: ${materialized.root}`);
   if (!sourceInfo.isDirectory()) throw new Error(`Package source is not a directory: ${materialized.root}`);
@@ -688,31 +678,6 @@ export async function importLockedPackage(lock: LockedPackage, sourceRoot: strin
     await verifyCache(cacheRoot, manifest, lock.integrity);
   });
   return { manifest, root: cacheRoot, lock };
-}
-
-export async function validateBuiltinPackageLock(lock: LockedPackage): Promise<void> {
-  const source = `builtin:${lock.name}`;
-  if (lock.source !== source) throw new Error(`Foundational Package ${lock.name} must resolve from ${source}`);
-  const root = builtinPath(lock.name);
-  const manifest = await loadManifest(root);
-  await validatePackage(root, manifest);
-  const integrity = await hashDirectory(root);
-  const expected = {
-    name: manifest.metadata.name,
-    version: manifest.metadata.version,
-    source,
-    integrity,
-    cacheKey: packageCacheKey(source, integrity, integrity),
-    dependencies: manifest.spec.dependencies.map((dependency) => dependency.name),
-  };
-  for (const key of ["name", "version", "source", "integrity", "cacheKey"] as const) {
-    if (lock[key] !== expected[key]) {
-      throw new Error(`Bundled foundational Package ${lock.name} does not match the installed ${source}`);
-    }
-  }
-  if (JSON.stringify(lock.dependencies) !== JSON.stringify(expected.dependencies)) {
-    throw new Error(`Bundled foundational Package ${lock.name} dependencies do not match the installed ${source}`);
-  }
 }
 
 function sourceAtCommit(source: string, commit?: string): string {

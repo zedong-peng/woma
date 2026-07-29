@@ -11,8 +11,6 @@ import { loadManifest } from "./schema.js";
 import { sourceAgentHome } from "./view.js";
 import type { CodexClaudePlatform, WomaManifest, SkillSpec } from "./types.js";
 
-const FOUNDATIONAL_SKILLS = new Set(["woma-project-memory", "woma-package-builder"]);
-
 export type SkillMigrationSource = CodexClaudePlatform | "both";
 
 interface ExistingSkill {
@@ -88,9 +86,6 @@ async function discoverSkills(platform: CodexClaudePlatform): Promise<ExistingSk
     const root = await realpath(candidate);
     if (!(await lstat(root)).isDirectory() || !(await pathExists(path.join(root, "SKILL.md")))) continue;
     const name = skillName(entry);
-    if (FOUNDATIONAL_SKILLS.has(name)) {
-      throw new Error(`Existing Agent Skill ${name} conflicts with a foundational Woma Skill`);
-    }
     const skillDocument = await readFile(path.join(root, "SKILL.md"), "utf8");
     skills.push({
       name,

@@ -131,23 +131,26 @@ test("the built-in Woma Package Builder is a valid general authoring Package", {
   }
 });
 
-test("the built-in Project Memory manager is a normal installable Skill package", { concurrency: false }, async () => {
+test("the built-in Project Memory Package is optional and has no core coupling", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-builtin-project-memory-"));
   process.env.WOMA_HOME = path.join(root, "home");
   try {
     const installation = await installPackageTree("builtin:woma-project-memory");
     assert.deepEqual(installation.packages.map((pkg) => pkg.lock.name), ["woma-project-memory"]);
     assert.deepEqual(installation.root.lock.dependencies, []);
-    assert.deepEqual(installation.root.manifest.spec.skills.map((skill) => skill.name), ["woma-project-memory"]);
-    const instructions = await readFile(
-      path.join(installation.root.root, "skills", "woma-project-memory", "SKILL.md"),
-      "utf8",
-    );
-    assert.match(instructions, /woma info --json/);
-    assert.match(instructions, /even if the user does not explicitly ask to remember it/);
-    assert.match(instructions, /before using another active Skill/);
-    assert.match(instructions, /--project <project-root> info --json/);
-    assert.doesNotMatch(instructions, /current project or a nested directory/);
+    assert.deepEqual(installation.root.manifest.spec.requirements, { env: [], commands: [] });
+    assert.deepEqual(installation.root.manifest.spec.entrypoints, [
+      {
+        name: "manage-project-memory",
+        skill: "woma-project-memory",
+        description: "Load relevant project knowledge or persist explicitly requested durable facts.",
+      },
+    ]);
+    const instructions = await readFile(path.join(installation.root.root, "skills", "woma-project-memory", "SKILL.md"), "utf8");
+    assert.match(instructions, /\.woma\/memory\.md/);
+    assert.match(instructions, /Do not run `woma info`/);
+    assert.match(instructions, /Do not run at session startup/);
+    assert.match(instructions, /Never inspect or modify an Agent's native memory store/);
   } finally {
     await removeTestTree(root);
   }

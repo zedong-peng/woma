@@ -377,7 +377,8 @@ test("CLI creates Pi and all-target Environments", { concurrency: false }, async
     assert.equal((await runCli(["env", "export", "--name", "all-agents", "--output", bundle], root, home)).code, 0);
     const imported = await runCli(["create", "--file", bundle, "--name", "all-agents-copy"], root, home);
     assert.equal(imported.code, 0, imported.stderr);
-    assert.match(await readFile(path.join(home, "environments", "all-agents-copy", "view", "pi", "skills", "woma-project-memory", "SKILL.md"), "utf8"), /Woma Project Memory/);
+    const metadata = JSON.parse(await readFile(path.join(home, "environments", "all-agents-copy", "view", "view.json"), "utf8"));
+    assert.deepEqual(metadata.packages, []);
   } finally {
     await removeTestTree(root);
   }
@@ -490,7 +491,7 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
-    assert.deepEqual(Object.keys(baseLock.packages), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(Object.keys(baseLock.packages), []);
 
     const install = await runCli(["install", pkg], project, home);
     assert.equal(install.code, 0, install.stderr);
@@ -498,8 +499,8 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     const activate = await runCli(["--project", project, "activate"], nested, home);
     assert.equal(activate.code, 0, activate.stderr);
     assert.match(activate.stdout, /Activated environment base/);
-    assert.match(await readFile(path.join(home, "environments", "base", "view", "codex", "skills", "woma-project-memory", "SKILL.md"), "utf8"), /Persist stable knowledge automatically/);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
+    assert.match(await readFile(path.join(home, "environments", "base", "view", "codex", "skills", "base-skill", "SKILL.md"), "utf8"), /base-skill/);
+    await assert.rejects(access(path.join(project, "AGENTS.md")), /ENOENT/);
 
     const current = await runCli(["--project", project, "info", "--json"], nested, home);
     assert.equal(current.code, 0, current.stderr);
@@ -509,13 +510,14 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
     const context = JSON.parse(structured.stdout) as {
       projectRoot: string;
       environment: { name: string };
-      packages: { name: string; skills: string[]; memory: string }[];
+      packages: { name: string; skills: string[] }[];
+      memory?: unknown;
     };
     assert.equal(context.projectRoot, project);
     assert.equal(context.environment.name, "base");
-    assert.deepEqual(context.packages.map((pkg) => pkg.name), ["woma-project-memory", "woma-package-builder", "base-skill"]);
-    assert.deepEqual(context.packages[0]?.skills, ["woma-project-memory"]);
-    assert.match(context.packages.find((pkg) => pkg.name === "base-skill")?.memory ?? "", /\.woma\/memory\/packages\/base-skill\.md$/);
+    assert.deepEqual(context.packages.map((pkg) => pkg.name), ["base-skill"]);
+    assert.deepEqual(context.packages[0]?.skills, ["base-skill"]);
+    assert.equal(context.memory, undefined);
 
     assert.equal((await runCli(["--project", project, "env", "create", "research", "--target", "codex"], nested, home)).code, 0);
     assert.equal((await runCli(["--project", project, "activate", "research"], nested, home)).code, 0);
@@ -531,7 +533,7 @@ test("CLI provides base from an explicit project when invoked in a subdirectory"
   }
 });
 
-test("CLI uses the exact working directory instead of a parent Project Memory", { concurrency: false }, async () => {
+test("CLI activation does not read or create Project Memory", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-project-boundary-"));
   const workspace = path.join(root, "workspace");
   const project = path.join(workspace, "project");
@@ -543,15 +545,14 @@ test("CLI uses the exact working directory instead of a parent Project Memory", 
     const activated = await runCli(["activate"], project, path.join(root, "home"));
 
     assert.equal(activated.code, 0, activated.stderr);
-    assert.match(await readFile(path.join(project, ".woma", "memory", "project.md"), "utf8"), /Project Memory/);
-    await assert.rejects(access(path.join(project, ".woma", "state.json")));
+    await assert.rejects(access(path.join(project, ".woma")), /ENOENT/);
     assert.equal(await readFile(parentMemory, "utf8"), "# Parent Memory\n");
   } finally {
     await removeTestTree(root);
   }
 });
 
-test("CLI always includes foundational packages and rejects the removed without-memory option", { concurrency: false }, async () => {
+test("CLI creates an empty Environment and exposes no Memory option", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-foundations-"));
   const project = path.join(root, "project");
   try {
@@ -568,22 +569,18 @@ test("CLI always includes foundational packages and rejects the removed without-
       path.join(root, "home"),
     );
     assert.equal(create.code, 0, create.stderr);
-    assert.match(create.stdout, /foundational woma-project-memory@0\.1\.0, woma-package-builder@1\.0\.0/);
+    assert.doesNotMatch(create.stdout, /foundational|memory/i);
     const activate = await runCli(["--project", project, "activate", "minimal"], root, path.join(root, "home"));
     assert.equal(activate.code, 0, activate.stderr);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
+    await assert.rejects(access(path.join(project, "AGENTS.md")), /ENOENT/);
+    await assert.rejects(access(path.join(project, "CLAUDE.md")), /ENOENT/);
+    await assert.rejects(access(path.join(project, ".woma")), /ENOENT/);
     const current = JSON.parse((await runCli(["--project", project, "info", "--json"], root, path.join(root, "home"))).stdout) as {
       packages: { name: string }[];
+      memory?: unknown;
     };
-    assert.deepEqual(current.packages.map((pkg) => pkg.name), ["woma-project-memory", "woma-package-builder"]);
-    assert.match(
-      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "woma-project-memory", "SKILL.md"), "utf8"),
-      /Persist stable knowledge automatically/,
-    );
-    assert.match(
-      await readFile(path.join(root, "home", "environments", "minimal", "view", "codex", "skills", "woma-package-builder", "SKILL.md"), "utf8"),
-      /Create one ordinary Woma Package/,
-    );
+    assert.deepEqual(current.packages, []);
+    assert.equal(current.memory, undefined);
   } finally {
     await removeTestTree(root);
   }
@@ -608,22 +605,19 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     };
     const activate = await runCli(["--project", project, "activate", "research"], root, home);
     assert.equal(activate.code, 0, activate.stderr);
-    assert.match(activate.stdout, /packages\s+woma-project-memory, woma-package-builder, paper-search, auto-research/);
-    assert.doesNotMatch(await readFile(path.join(project, ".gitignore"), "utf8"), /state\.json/);
-    assert.match(await readFile(path.join(project, ".gitignore"), "utf8"), /\/\.woma\/local\//);
-    assert.match(await readFile(path.join(project, ".woma", "memory", "project.md"), "utf8"), /Project Memory/);
-    await access(path.join(project, ".woma", "memory", "packages"));
+    assert.match(activate.stdout, /packages\s+paper-search, auto-research/);
+    await assert.rejects(access(path.join(project, ".gitignore")), /ENOENT/);
+    await assert.rejects(access(path.join(project, ".woma")), /ENOENT/);
     const researchSkills = path.join(home, "environments", "research", "view", "codex", "skills");
-    assert.match(await readFile(path.join(researchSkills, "woma-project-memory", "SKILL.md"), "utf8"), /woma info --json/);
     assert.match(await readFile(path.join(researchSkills, "paper-search", "SKILL.md"), "utf8"), /paper-search/);
     assert.match(await readFile(path.join(researchSkills, "auto-research", "SKILL.md"), "utf8"), /auto-research/);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
+    await assert.rejects(access(path.join(project, "AGENTS.md")), /ENOENT/);
     process.env.WOMA_ENV = "research";
 
     const current = await runCli(["--project", project, "info"], root, home);
     assert.equal(current.code, 0, current.stderr);
     assert.match(current.stdout, /Environment: research/);
-    assert.match(current.stdout, /roots\s+woma-project-memory, woma-package-builder, auto-research/);
+    assert.match(current.stdout, /roots\s+auto-research/);
     const environmentList = await runCli(["--project", project, "env", "list"], root, home);
     assert.equal(environmentList.code, 0, environmentList.stderr);
     assert.match(environmentList.stdout, /\* research/);
@@ -631,8 +625,6 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     assert.equal(list.code, 0, list.stderr);
     assert.match(list.stdout, /paper-search@1\.0\.0/);
     assert.match(list.stdout, /skills\n/);
-    assert.match(list.stdout, /woma-project-memory\s+woma-project-memory@0\.1\.0\s+codex/);
-    assert.match(list.stdout, /woma-package-builder\s+woma-package-builder@1\.0\.0\s+codex/);
     assert.match(list.stdout, /paper-search\s+paper-search@1\.0\.0\s+codex/);
     assert.match(list.stdout, /auto-research\s+auto-research@1\.0\.0\s+codex/);
     const activeList = await runCli(["--project", project, "list"], root, home);
@@ -663,7 +655,7 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     const doctor = await runCli(["--project", project, "doctor", "-n", "research"], root, home);
     assert.equal(doctor.code, 0, doctor.stderr || doctor.stdout);
     assert.match(doctor.stdout, /\[ok\] view:/);
-    assert.match(doctor.stdout, /\[ok\] memory-bootstrap/);
+    assert.match(doctor.stdout, /\[ok\] legacy-project-memory/);
 
     const deactivate = await runCli(["--project", project, "deactivate"], root, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);
@@ -672,10 +664,10 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     await assert.rejects(readFile(path.join(baseSkills, "paper-search", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(baseSkills, "auto-research", "SKILL.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(baseSkills, "idea-gen", "SKILL.md")), /ENOENT/);
-    assert.match(await readFile(path.join(baseSkills, "woma-project-memory", "SKILL.md"), "utf8"), /Project Memory/);
-    assert.match(await readFile(path.join(baseSkills, "woma-package-builder", "SKILL.md"), "utf8"), /Create one ordinary Woma Package/);
-    assert.match(await readFile(path.join(project, "AGENTS.md"), "utf8"), /installed `woma-project-memory` Skill/);
-    assert.match(await readFile(path.join(project, ".woma", "memory", "project.md"), "utf8"), /Project Memory/);
+    await assert.rejects(access(path.join(baseSkills, "woma-project-memory")), /ENOENT/);
+    await assert.rejects(access(path.join(baseSkills, "woma-package-builder")), /ENOENT/);
+    await assert.rejects(access(path.join(project, "AGENTS.md")), /ENOENT/);
+    await assert.rejects(access(path.join(project, ".woma")), /ENOENT/);
     const removeEnvironment = await runCli(["--project", project, "env", "remove", "research"], root, home);
     assert.equal(removeEnvironment.code, 0, removeEnvironment.stderr);
     await assert.rejects(readFile(path.join(home, "environments", "research", "environment.yaml")), /ENOENT/);
@@ -776,7 +768,7 @@ test("CLI uninstalls from active and explicitly named inactive Environments with
     const baseLock = JSON.parse(await readFile(path.join(home, "environments", "base", "lock.json"), "utf8")) as {
       packages: Record<string, unknown>;
     };
-    assert.deepEqual(Object.keys(baseLock.packages), ["woma-project-memory", "woma-package-builder"]);
+    assert.deepEqual(Object.keys(baseLock.packages), []);
   } finally {
     if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
     else process.env.WOMA_ENV = previousEnvironment;
