@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Breaking: removed Woma-owned Project Memory, startup injection, Memory paths in `info --json`, and the `woma-project-memory` built-in. Environment schema v2 starts empty and upgrades v1 by pruning the exact formerly implicit helper roots without touching user-owned Memory data.
+- Breaking: removed Woma-owned Project Memory, startup injection, and Memory paths in `info --json`. Environment schema v2 starts empty and upgrades v1 by pruning the exact formerly implicit helper roots without touching user-owned Memory data. `woma-project-memory` remains available as an explicit, removable ordinary built-in Package with no core or Agent-native Memory integration.
 - Breaking: renamed the project, npm package, CLI, environment variables, paths, manifests, bundle format, and built-in Packages to Woma. Existing installations and project metadata must be recreated with the Woma names.
 - Added opt-in Qoder CLI Agent targets with isolated `QODER_CONFIG_DIR` homes, atomic Skill views, Package MCP servers and Hooks merged into the managed `settings.json`, shell activation, and inclusion in `--target all`; Woma does not capture, migrate, or seed Qoder credentials or sessions.
 - Added Conda-style top-level `create`, `export`, `remove`, `run`, and `rename` commands; portable bundles are now restored with `create --file`, and the former `env import` command has been removed.

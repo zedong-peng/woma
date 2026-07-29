@@ -21,16 +21,6 @@ const managedBlocks: ManagedBlock[] = [
 At the beginning of the session, use the installed \`woma-project-memory\` Skill. Use that Skill before other Woma-installed Skills and whenever the user provides durable project-specific knowledge.
 <!-- <<< woma:project-memory -->`,
   },
-  {
-    markerStart: "<!-- >>> harness-conda:project-memory -->",
-    markerEnd: "<!-- <<< harness-conda:project-memory -->",
-    name: "Harness Project Memory",
-    content: `<!-- >>> harness-conda:project-memory -->
-## Harness Project Memory
-
-At the beginning of the session, use the installed \`harness-project-memory\` Skill. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.
-<!-- <<< harness-conda:project-memory -->`,
-  },
 ];
 
 interface PreparedFile {

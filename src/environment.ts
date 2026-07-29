@@ -627,7 +627,7 @@ export function normalizeLegacyEnvironmentSnapshot(
   const normalizedLock = reachableLock(lock, roots.map((root) => root.name));
   const retainedMemory = normalizedLock.packages["woma-project-memory"];
   if (retainedMemory?.source === "builtin:woma-project-memory") {
-    throw new Error("A retained Package depends on the removed built-in woma-project-memory; update that Package before migrating");
+    throw new Error("A retained Package depends on the legacy implicit woma-project-memory; update that Package before migrating");
   }
   return { environment: normalized, lock: normalizedLock, migrated: true };
 }

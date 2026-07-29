@@ -55,6 +55,14 @@ woma activate base
 codex
 ```
 
+Project Memory is an optional ordinary Package rather than a Woma runtime feature. Install it explicitly when a project needs durable build, test, coding, or operational context:
+
+```bash
+woma install builtin:woma-project-memory
+```
+
+The Skill reads project-owned `.woma/memory.md` only for relevant work and writes it only on an explicit request. Woma never installs or invokes it automatically and never uses it to modify Agent-native memory, `AGENTS.md`, or `CLAUDE.md`.
+
 Use `claude` instead of `codex` to start Claude Code. Pi and Qoder are opt-in because the existing `base` compatibility default targets Codex and Claude; create their Environments explicitly:
 
 ```bash
@@ -130,7 +138,7 @@ Every target Agent's `skills` path resolves to one stable Environment-level dire
 
 Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time; their Agent homes, credentials, provider configuration, sessions, and Codex system Skills remain isolated. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
 
-Woma manages capabilities and isolated Agent Environments, not Agent Memory or project context. It does not define context paths, inject discovery instructions, or read, write, package, or delete Memory data. The only compatibility exception is removal of exact legacy discovery blocks that earlier Woma versions added to `AGENTS.md` or `CLAUDE.md`. Agents and users choose how context is loaded and persisted.
+Woma core manages capabilities and isolated Agent Environments, not Agent Memory or project context. It does not inject discovery instructions or read, write, package, or delete Memory data. The only compatibility exception is removal of exact legacy discovery blocks that earlier Woma versions added to `AGENTS.md` or `CLAUDE.md`. The optional Project Memory Skill operates on its documented project-owned file only when selected; Agents and users otherwise choose how context is loaded and persisted.
 
 ## Export and Recreate
 
@@ -179,6 +187,7 @@ woma install builtin:woma-package-builder
 - [Command reference](docs/commands.md)
 - [Architecture and isolation model](docs/design.md)
 - [Package manifest](docs/manifest.md)
+- [Optional Project Memory](docs/project-memory.md)
 - [Security](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 

@@ -42,6 +42,7 @@ const builtinNames = new Set([
   "exp-design",
   "auto-research",
   "woma-package-builder",
+  "woma-project-memory",
 ]);
 
 function builtinPath(name: string): string {
@@ -225,16 +226,6 @@ async function copyImplicitSkill(sourceRoot: string, destinationRoot: string): P
 
 async function normalizeMaterializedSource(materialized: MaterializedSource): Promise<MaterializedSource> {
   if (await pathExists(path.join(materialized.root, "woma.yaml"))) return materialized;
-  const legacyManifest = path.join(materialized.root, "harness.yaml");
-  const hasLegacyManifest = await lstat(legacyManifest).then(
-    () => true,
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return false;
-      throw error;
-    },
-  );
-  if (hasLegacyManifest) throw new Error(`Legacy harness.yaml is not supported; use woma.yaml`);
-
   const sourceInfo = await lstat(materialized.root);
   if (sourceInfo.isSymbolicLink()) throw new Error(`Implicit Package source is an unsupported symlink: ${materialized.root}`);
   if (!sourceInfo.isDirectory()) throw new Error(`Package source is not a directory: ${materialized.root}`);

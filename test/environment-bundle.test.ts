@@ -51,7 +51,7 @@ spec:
   );
   await write(path.join(packageRoot, "skills", "local-performance", "data.bin"), Buffer.from([0, 255, 128, 1, 2, 0]));
   await write(path.join(packageRoot, "skills", "local-performance", "run.sh"), "#!/bin/sh\nexit 0\n", 0o755);
-  await write(path.join(packageRoot, ".harness", "local", "memory.md"), "legacy-private-memory\n");
+  await write(path.join(packageRoot, ".woma", "local", "private.md"), "private-package-state\n");
   return packageRoot;
 }
 
@@ -99,7 +99,7 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
     await assert.rejects(exportEnvironmentBundle(projectA, "performance", bundle), /Refusing to overwrite/);
     assert.deepEqual(await readFile(bundle), unchanged);
     const document = gunzipSync(await readFile(bundle)).toString("utf8");
-    assert.doesNotMatch(document, /must-not-export|private project memory|legacy-private-memory|auth\.json|private-runtime-skill/);
+    assert.doesNotMatch(document, /must-not-export|private project memory|private-package-state|auth\.json|private-runtime-skill/);
 
     await rm(source, { recursive: true, force: true });
     await removeTestTree(process.env.WOMA_HOME);
@@ -242,15 +242,15 @@ test("Environment bundle rejects unsafe paths and tampered Package bytes without
     await assert.rejects(importEnvironmentBundle(root, windowsTraversal, "windows-unsafe"), /unsafe Package path/);
     await assert.rejects(readFile(environmentPath(root, "windows-unsafe")), /ENOENT/);
 
-    const legacyState = path.join(root, "legacy-state.woma-env");
+    const privateState = path.join(root, "private-state.woma-env");
     await writeFile(
-      legacyState,
+      privateState,
       rewriteBundle(original, (document) => {
-        document.packages[0].files[0].path = ".harness/local/memory.md";
+        document.packages[0].files[0].path = ".woma/local/private.md";
       }),
     );
-    await assert.rejects(importEnvironmentBundle(root, legacyState, "legacy-state"), /excluded Package path/);
-    await assert.rejects(readFile(environmentPath(root, "legacy-state")), /ENOENT/);
+    await assert.rejects(importEnvironmentBundle(root, privateState, "private-state"), /excluded Package path/);
+    await assert.rejects(readFile(environmentPath(root, "private-state")), /ENOENT/);
 
     const corrupted = path.join(root, "corrupted.woma-env");
     await writeFile(

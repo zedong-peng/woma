@@ -1217,15 +1217,15 @@ test("an optional built-in installs without creating project startup pointers", 
     await createEnvironment(root, "minimal", ["codex"]);
     await activateEnvironment(root, "minimal");
 
-    await installIntoEnvironment(root, "minimal", "builtin:woma-package-builder");
+    await installIntoEnvironment(root, "minimal", "builtin:woma-project-memory");
 
     assert.deepEqual((await readEnvironment(root, "minimal")).spec.roots, [
-      { name: "woma-package-builder", source: "builtin:woma-package-builder" },
+      { name: "woma-project-memory", source: "builtin:woma-project-memory" },
     ]);
-    assert.equal((await readEnvironmentLock(root, "minimal")).packages["woma-package-builder"]?.source, "builtin:woma-package-builder");
+    assert.equal((await readEnvironmentLock(root, "minimal")).packages["woma-project-memory"]?.source, "builtin:woma-project-memory");
     assert.match(
-      await readFile(path.join(environmentViewPath("minimal"), "codex", "skills", "woma-package-builder", "SKILL.md"), "utf8"),
-      /Create one ordinary Woma Package/,
+      await readFile(path.join(environmentViewPath("minimal"), "codex", "skills", "woma-project-memory", "SKILL.md"), "utf8"),
+      /optional Skill is not part of Woma's runtime/,
     );
     await assert.rejects(access(path.join(root, "AGENTS.md")), /ENOENT/);
     await assert.rejects(access(path.join(root, ".woma")), /ENOENT/);
@@ -1362,7 +1362,7 @@ test("managed Agent home drift is rejected before project activation", { concurr
   }
 });
 
-test("the former Memory Package name has no special semantics", { concurrency: false }, async () => {
+test("the Project Memory Package name has no core semantics", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-former-memory-name-"));
   process.env.WOMA_HOME = path.join(root, "home");
   try {

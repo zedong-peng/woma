@@ -93,6 +93,8 @@ For an implicit Package, Woma parses each Skill's `name` and `description` from 
 
 Installation recursively resolves dependencies, validates Package and Skill identities and SemVer constraints, rejects cycles and source conflicts, and publishes one complete global Agent view generation atomically. Package Store entries are read-only after publication. Every project using that Environment observes the new view without reactivation; already-running Agent processes may need a restart to rediscover Skills.
 
+`woma-project-memory` is an optional ordinary built-in available through `woma install builtin:woma-project-memory`. It contributes a Skill that may read project-owned `.woma/memory.md` for relevant work and updates it only when explicitly requested. The Package is never installed or invoked automatically, has no core Memory API, and does not modify Agent-native memory, `AGENTS.md`, or `CLAUDE.md`.
+
 ## Package removal
 
 ```bash
@@ -114,7 +116,7 @@ woma deactivate
 
 `activate` defaults to `base`. With the recommended shell hook installed, it selects each supported Environment's stable Agent home in the parent shell and leaves unsupported Agents on their original configuration homes. Codex uses `CODEX_HOME`, Claude uses `CLAUDE_CONFIG_DIR`, Pi uses `PI_CODING_AGENT_DIR`, and Qoder uses `QODER_CONFIG_DIR`. Activation also upgrades legacy separate Agent Skill roots into the shared layout. Same-name legacy entries are deduplicated when their complete trees are equivalent; differing or unverifiable collisions fail before any entry moves. Environment selection belongs only to the shell and is never recorded in the project.
 
-When a schema-v1 Environment is encountered, Woma upgrades it to schema v2 and removes the exact implicit built-in Project Memory and Package Builder root entries. Activation removes exact legacy Woma or Harness Project Memory discovery blocks from `AGENTS.md` and `CLAUDE.md`; modified blocks fail closed for manual review. Woma does not read, write, or delete Memory data, and it never creates new discovery instructions.
+When a schema-v1 Environment is encountered, Woma upgrades it to schema v2 and removes the exact implicit built-in Project Memory and Package Builder root entries. Activation removes exact legacy Woma Project Memory discovery blocks from `AGENTS.md` and `CLAUDE.md`; modified blocks fail closed for manual review. Woma does not read, write, or delete Memory data, and it never creates new discovery instructions.
 
 Every target Agent's conventional `skills` path links to `$WOMA_HOME/environments/<environment>/home/skills`. An ordinary direct child with a valid `SKILL.md` installed through any target immediately becomes an Environment-local Skill visible through every other target path. Woma reports it with origin `external` and all effective targets because it does not infer which Agent or installer wrote the directory. Other Environments remain isolated. Hidden entries are preserved but excluded from Environment-local inventory; in particular, Codex owns `$CODEX_HOME/skills/.system`, including whether it is absent, a directory, or another Codex-managed representation.
 

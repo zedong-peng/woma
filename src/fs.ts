@@ -94,7 +94,6 @@ export function assertInside(root: string, candidate: string, label: string): vo
 
 export const EXCLUDED_PACKAGE_PATH_NAMES: ReadonlySet<string> = new Set([
   ".git",
-  ".harness",
   ".woma",
   "node_modules",
   ".DS_Store",

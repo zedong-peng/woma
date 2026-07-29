@@ -16,6 +16,7 @@
     "examples/exp-design",
     "examples/auto-research",
     "examples/woma-package-builder",
+    "examples/woma-project-memory",
     "scripts/benchmark-switch.mjs",
     "scripts/postinstall.mjs",
     "CHANGELOG.md",

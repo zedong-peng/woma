@@ -12,12 +12,6 @@ const womaBlock = `<!-- >>> woma:project-memory -->
 At the beginning of the session, use the installed \`woma-project-memory\` Skill. Use that Skill before other Woma-installed Skills and whenever the user provides durable project-specific knowledge.
 <!-- <<< woma:project-memory -->`;
 
-const harnessBlock = `<!-- >>> harness-conda:project-memory -->
-## Harness Project Memory
-
-At the beginning of the session, use the installed \`harness-project-memory\` Skill. Use that Skill before other Harness-installed Skills and whenever the user provides durable project-specific knowledge.
-<!-- <<< harness-conda:project-memory -->`;
-
 test("legacy Memory cleanup has a zero-write fast path", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-memory-cleanup-empty-"));
   try {
@@ -31,14 +25,14 @@ test("legacy Memory cleanup has a zero-write fast path", async () => {
   }
 });
 
-test("legacy Memory cleanup removes exact Woma and Harness blocks and rolls back", async () => {
+test("legacy Memory cleanup removes exact Woma blocks and rolls back", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-memory-cleanup-blocks-"));
   const agentsPath = path.join(root, "AGENTS.md");
   const claudePath = path.join(root, "CLAUDE.md");
   const instructions = "# User instructions\n\nKeep this content.\n";
   try {
     await writeFile(agentsPath, `${instructions}\n${womaBlock}\n`, "utf8");
-    await writeFile(claudePath, `${harnessBlock}\n`, { encoding: "utf8", mode: 0o600 });
+    await writeFile(claudePath, `${womaBlock}\n`, { encoding: "utf8", mode: 0o600 });
     const prepared = await prepareLegacyMemoryCleanup(root);
     assert.deepEqual(prepared.actions.map((action) => action.path), ["AGENTS.md", "CLAUDE.md"]);
     const rollback = await prepared.apply();
@@ -48,7 +42,7 @@ test("legacy Memory cleanup removes exact Woma and Harness blocks and rolls back
 
     await rollback();
     assert.equal(await readFile(agentsPath, "utf8"), `${instructions}\n${womaBlock}\n`);
-    assert.equal(await readFile(claudePath, "utf8"), `${harnessBlock}\n`);
+    assert.equal(await readFile(claudePath, "utf8"), `${womaBlock}\n`);
     assert.equal((await stat(claudePath)).mode & 0o777, 0o600);
   } finally {
     await removeTestTree(root);
@@ -74,7 +68,7 @@ test("legacy Memory cleanup preserves instruction symlinks and target modes", as
   const instructions = "# Shared instructions\n";
   try {
     await writeFile(target, `${instructions}\n${womaBlock}\n`, { encoding: "utf8", mode: 0o640 });
-    await writeFile(claudeTarget, `${harnessBlock}\n`, { encoding: "utf8", mode: 0o600 });
+    await writeFile(claudeTarget, `${womaBlock}\n`, { encoding: "utf8", mode: 0o600 });
     await symlink(target, agentsPath);
     await symlink(claudeTarget, claudePath);
 

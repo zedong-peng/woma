@@ -109,4 +109,4 @@ Codex owns the hidden `home/skills/.system` entry as mutable per-Environment sta
 
 `commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values.
 
-Repository-specific build, test, benchmark, and operational knowledge does not belong in a portable package manifest. Keep it in repository-owned documentation or the Agent/user context system chosen for that project. Woma does not define, discover, inject, or persist project context.
+Repository-specific build, test, benchmark, and operational knowledge does not belong in a portable package manifest. Keep it in repository-owned documentation or the Agent/user context system chosen for that project. Woma core does not define, discover, inject, or persist project context; the optional `woma-project-memory` Skill can operate on project-owned `.woma/memory.md` only when selected.
