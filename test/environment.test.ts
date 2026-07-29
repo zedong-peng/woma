@@ -805,10 +805,7 @@ test("existing base initialization upgrades a legacy view containing Agent state
     await ensureBaseEnvironment(root);
 
     await assert.rejects(access(path.join(environmentViewPath("base"), "codex", "goals_1.sqlite")), /ENOENT/);
-    assert.equal(
-      await readFile(path.join(environmentAgentHomePath("base", "codex"), "auth.json"), "utf8"),
-      '{"api_key":"latest"}\n',
-    );
+    await assert.rejects(access(path.join(environmentAgentHomePath("base", "codex"), "auth.json")), /ENOENT/);
   } finally {
     if (previousCodexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
     else process.env.WOMA_ORIGINAL_CODEX_HOME = previousCodexHome;

@@ -82,7 +82,7 @@ qodercli
 
 If Woma detects a running Agent process for the current user, it lists the process and requires an interactive `yes` confirmation. Non-interactive migration stops with an error.
 
-If the first implicit `base` creation detects known existing Codex or Claude Skill/session locations, Woma prints a one-time notice to stderr. The check reads filesystem metadata only: it does not enumerate names, read contents, or import anything. Original Agent homes remain unchanged, while supported credentials and provider configuration continue to seed separately.
+If the first implicit `base` creation detects known existing Codex or Claude Skill/session locations, Woma prints a one-time notice to stderr. The check reads filesystem metadata only: it does not enumerate names, read contents, or import anything. Original Agent homes remain unchanged, while supported provider configuration and Claude credentials continue to seed separately. Woma never reads or copies the original Codex `auth.json` into a new Environment.
 
 This follows Conda's conservative model: discovering compatible existing state does not adopt it. Just as Conda does not silently turn an arbitrary Python or `venv` installation into a Conda Environment, Woma does not turn an existing Agent home into a Woma Environment.
 
@@ -131,7 +131,7 @@ woma remove downloaded-skill
 
 Every target Agent's `skills` path resolves to one stable Environment-level directory. An ordinary Skill installed through Codex, Claude Code, Pi, or Qoder CLI is therefore immediately visible to every other target in the same Environment without `woma sync`. It remains isolated from other Environments and appears in `woma list` as `external`.
 
-- **Codex:** edit `$CODEX_HOME/auth.json` and `$CODEX_HOME/config.toml`. Codex owns the hidden `$CODEX_HOME/skills/.system` entry; Woma preserves it as opaque Environment state and never adopts it as an ordinary Skill.
+- **Codex:** log in separately after creating an Environment, and edit `$CODEX_HOME/config.toml` for its provider configuration. Codex owns the ordinary `$CODEX_HOME/auth.json`; Woma does not seed it from the original home or include it in managed views. Codex also owns the hidden `$CODEX_HOME/skills/.system` entry, which Woma preserves as opaque Environment state and never adopts as an ordinary Skill.
 - **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
 - **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Woma links `$PI_CODING_AGENT_DIR/skills` to the shared Environment Skill directory; Pi owns every other file in that Environment home.
 - **Qoder CLI:** log in through `qodercli` in the activated Environment. Woma manages `$QODER_CONFIG_DIR/settings.json` (Package MCP servers and Hooks) and links `$QODER_CONFIG_DIR/skills` to the shared Environment Skill directory; Qoder owns every other file in that Environment home. A new Qoder Environment does not copy the original `~/.qoder` state.

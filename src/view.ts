@@ -4,24 +4,24 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
 import { womaHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
-import type { CodexClaudePlatform, ConfigurablePlatform, WomaEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
+import type { ConfigurablePlatform, WomaEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
 
 const MANAGED_HOME_LINKS: Record<Platform, string[]> = {
-  codex: ["auth.json", "config.toml", "hooks.json"],
+  codex: ["config.toml", "hooks.json"],
   claude: [".credentials.json", "settings.json"],
   pi: [],
   qoder: ["settings.json"],
 };
 
 const MANAGED_VIEW_ENTRIES: Record<Platform, string[]> = {
-  codex: ["auth.json", "config.toml", "hooks.json", "skills"],
+  codex: ["config.toml", "hooks.json", "skills"],
   claude: [".credentials.json", "settings.json", "skills"],
   pi: ["skills"],
   qoder: ["settings.json", "skills"],
 };
 
 const CREDENTIAL_FILES: Record<Platform, string[]> = {
-  codex: ["auth.json"],
+  codex: [],
   claude: [".credentials.json"],
   pi: [],
   qoder: [],
@@ -288,10 +288,11 @@ async function linkSkills(
   return links;
 }
 
-async function copyAgentCredential(environmentName: string, platform: CodexClaudePlatform, root: string, name: string): Promise<void> {
-  const homeCredential = path.join(environmentAgentHomePath(environmentName, platform), name);
-  const currentCredential = path.join(environmentViewPath(environmentName), platform, name);
-  const originalCredential = path.join(sourceAgentHome(platform), name);
+async function copyClaudeCredential(environmentName: string, root: string): Promise<void> {
+  const name = ".credentials.json";
+  const homeCredential = path.join(environmentAgentHomePath(environmentName, "claude"), name);
+  const currentCredential = path.join(environmentViewPath(environmentName), "claude", name);
+  const originalCredential = path.join(sourceAgentHome("claude"), name);
   const source = (await pathExists(homeCredential))
     ? homeCredential
     : (await pathExists(currentCredential))
@@ -370,8 +371,6 @@ async function buildCodexView(environmentName: string, root: string, packages: I
   await writeTextAtomic(configDestination, renderCodexConfig(await readOptional(sourceConfig), sourceConfig, packages));
   await chmod(configDestination, 0o600);
 
-  await copyAgentCredential(environmentName, "codex", root, "auth.json");
-
   const sourceHooks = path.join(sourceHome, "hooks.json");
   const hooksRoot = parseJsonObject(await readOptional(sourceHooks), sourceHooks);
   await mergeHooks(sourceHooks, hooksRoot, collectHooks(packages, "codex"));
@@ -395,7 +394,7 @@ async function buildClaudeView(
   await mkdir(root, { recursive: true, mode: 0o700 });
   const sourceHome = sourceAgentHome("claude");
   const links = await linkSkills(root, packages);
-  await copyAgentCredential(environmentName, "claude", root, ".credentials.json");
+  await copyClaudeCredential(environmentName, root);
 
   const currentSettings = path.join(environmentViewPath(environmentName), "claude", "settings.json");
   const sourceSettings = await pathExists(currentSettings) ? currentSettings : path.join(sourceHome, "settings.json");
@@ -468,7 +467,13 @@ async function previousViewMetadata(root: string): Promise<ViewMetadata> {
 }
 
 export async function environmentViewNeedsUpgrade(name: string): Promise<boolean> {
-  return (await previousViewMetadata(environmentViewPath(name))).viewVersion === 1;
+  const root = environmentViewPath(name);
+  if ((await previousViewMetadata(root)).viewVersion === 1) return true;
+  const legacyCodexAuth = await lstat(path.join(root, "codex", "auth.json")).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  return legacyCodexAuth !== undefined;
 }
 
 function stringArray(value: unknown): string[] {
@@ -977,6 +982,29 @@ async function prepareStableHomeTransition(
   previousPackages: InstalledPackage[],
 ): Promise<StableHomeTransition> {
   const sharedSkills = await prepareSharedSkillsTransition(environment, packages, previousMetadata, previousPackages);
+  const legacyCodexAuth = environment.spec.targets.includes("codex")
+    ? await (async () => {
+        const destination = path.join(environmentAgentHomePath(environment.metadata.name, "codex"), "auth.json");
+        const source = path.join(environmentViewPath(environment.metadata.name), "codex", "auth.json");
+        const sourceInfo = await lstat(source).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (!sourceInfo) return undefined;
+        if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink()) {
+          throw new Error(`Legacy Codex credential projection must be a regular file: ${source}`);
+        }
+        const info = await lstat(destination).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (!info) return { destination, source };
+        if (!info.isSymbolicLink()) return undefined;
+        const target = await readlink(destination);
+        const actual = path.resolve(path.dirname(destination), target);
+        return actual === source ? { destination, source, target } : undefined;
+      })()
+    : undefined;
   const links: {
     destination: string;
     source: string;
@@ -1062,6 +1090,25 @@ async function prepareStableHomeTransition(
       const rollbacks: (() => Promise<void>)[] = [];
       try {
         rollbacks.push(await sharedSkills.apply());
+        if (legacyCodexAuth) {
+          const current = await lstat(legacyCodexAuth.destination).catch(() => undefined);
+          const currentTarget = current?.isSymbolicLink() ? await readlink(legacyCodexAuth.destination) : undefined;
+          if (legacyCodexAuth.target === undefined ? current !== undefined : currentTarget !== legacyCodexAuth.target) {
+            throw new Error(`Codex credential path changed while upgrading: ${legacyCodexAuth.destination}`);
+          }
+          const content = await readFile(legacyCodexAuth.source);
+          const mode = (await stat(legacyCodexAuth.source)).mode;
+          const temporary = `${legacyCodexAuth.destination}.file-${process.pid}-${randomUUID()}`;
+          try {
+            await writeBufferPreservingFile(temporary, content, mode);
+            await rename(temporary, legacyCodexAuth.destination);
+          } finally {
+            await rm(temporary, { force: true }).catch(() => undefined);
+          }
+          rollbacks.push(() => legacyCodexAuth.target === undefined
+            ? rm(legacyCodexAuth.destination, { force: true })
+            : replaceSymlink(legacyCodexAuth.target, legacyCodexAuth.destination, false));
+        }
         for (const link of links.filter((item) => item.action === "create")) {
           await mkdir(path.dirname(link.destination), { recursive: true, mode: 0o700 });
           await createSymlink(link.source, link.destination, link.directory);

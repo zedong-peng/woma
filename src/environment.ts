@@ -490,6 +490,10 @@ export async function renameEnvironment(projectRoot: string, source: string, des
     const legacyLock = await readEnvironmentLockFile(projectRoot, source);
     const loaded = await upgradeLegacyEnvironmentUnlocked(projectRoot, source, legacyEnvironment, legacyLock);
     const environment = loaded.environment;
+    const packages = loaded.names.map((name) => loaded.packages.get(name)!);
+    if (await environmentViewNeedsUpgrade(source)) {
+      await materializeEnvironmentView(environment, packages, { previousPackages: packages });
+    }
     if (await pathExists(destinationRoot)) throw new Error(`Environment already exists: ${destination}`);
     const renamed: WomaEnvironment = { ...environment, metadata: { name: destination } };
     let moved = false;
@@ -502,7 +506,7 @@ export async function renameEnvironment(projectRoot: string, source: string, des
       const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
       metadata.environment = destination;
       await writeJsonAtomic(metadataPath, metadata);
-      await validateEnvironmentView(renamed, loaded.names.map((name) => loaded.packages.get(name)!));
+      await validateEnvironmentView(renamed, packages);
       return renamed;
     } catch (error) {
       if (moved) {
