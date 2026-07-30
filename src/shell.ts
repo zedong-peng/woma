@@ -70,8 +70,9 @@ const environmentSelection = [
   "  local active home",
   '  active="${1:-base}"',
   '  case "$active" in',
-  '    *[!a-z0-9._-]*|"") return 1 ;;',
+  '    ""|[!a-z0-9]*|*[!a-z0-9._-]*) return 1 ;;',
   "  esac",
+  '  [[ ${#active} -le 80 ]] || return 1',
   '  home="${WOMA_HOME:-$HOME/.woma}"',
   '  [[ -f "$home/environments/$active/environment.yaml" && -f "$home/environments/$active/view/view.json" ]] || return 1',
   '  export WOMA_ENV="$active"',
@@ -101,8 +102,14 @@ const environmentSelection = [
 ];
 
 const initialEnvironmentSelection = [
-  'if ! __woma_apply_env "${WOMA_ENV:-base}"; then',
-  '  __woma_unavailable_env="${WOMA_ENV:-base}"',
+  '__woma_initial_env="${WOMA_ENV:-}"',
+  'if [[ -z "$__woma_initial_env" ]]; then',
+  '  __woma_default_file="${WOMA_HOME:-$HOME/.woma}/default-environment"',
+  '  if [[ -f "$__woma_default_file" ]]; then IFS= read -r __woma_initial_env < "$__woma_default_file"; fi',
+  '  __woma_initial_env="${__woma_initial_env:-base}"',
+  "fi",
+  'if ! __woma_apply_env "$__woma_initial_env"; then',
+  '  __woma_unavailable_env="$__woma_initial_env"',
   '  if [[ "$__woma_unavailable_env" != "base" ]] && __woma_apply_env base; then',
   '    printf \'woma: Environment %s is unavailable; using base\\n\' "$__woma_unavailable_env" >&2',
   "  else",
@@ -111,6 +118,7 @@ const initialEnvironmentSelection = [
   "  fi",
   "  unset __woma_unavailable_env",
   "fi",
+  "unset __woma_default_file __woma_initial_env",
 ];
 
 function zshHook(): string {

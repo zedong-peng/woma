@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { hostname } from "node:os";
 import { mkdir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +9,7 @@ const LOCK_TIMEOUT_MS = 60_000;
 const STALE_LOCK_MS = 5 * 60_000;
 const REMOTE_STALE_LOCK_MS = 24 * 60 * 60_000;
 const RETRY_MS = 25;
+const heldEnvironmentLocks = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>();
 
 interface LockOwner {
   token: string;
@@ -106,10 +108,15 @@ async function acquire(directory: string, label: string): Promise<() => Promise<
 }
 
 export async function withEnvironmentLock<T>(name: string, operation: () => Promise<T>): Promise<T> {
-  const release = await acquire(environmentLockPath(name), `Environment ${name}`);
+  const lockPath = environmentLockPath(name);
+  const held = heldEnvironmentLocks.getStore();
+  if (held?.get(lockPath)?.active) return operation();
+  const release = await acquire(lockPath, `Environment ${name}`);
+  const lease = { active: true };
   try {
-    return await operation();
+    return await heldEnvironmentLocks.run(new Map([...(held ?? []), [lockPath, lease]]), operation);
   } finally {
+    lease.active = false;
     await release();
   }
 }

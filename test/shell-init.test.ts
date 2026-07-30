@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, lstat, mkdtemp, readFile, readlink, stat, symlink, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readFile, readlink, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -94,17 +94,96 @@ test("CLI init installs shell integration and supports reverse", { concurrency: 
   const stateHome = path.join(root, "state");
   const profilePath = path.join(root, process.platform === "darwin" ? ".bash_profile" : ".bashrc");
   const cli = path.resolve("dist/src/cli.js");
-  const environment = { ...process.env, HOME: root, WOMA_HOME: stateHome, SHELL: "/bin/bash" };
+  const environment = {
+    ...process.env,
+    HOME: root,
+    WOMA_HOME: stateHome,
+    WOMA_ORIGINAL_CODEX_HOME: path.join(root, "original-codex"),
+    WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "original-claude"),
+    SHELL: "/bin/bash",
+  };
   try {
     const initialized = await run(process.execPath, [cli, "init", "bash"], { cwd: root, env: environment });
     assert.match(initialized.stdout, /Initialized bash shell integration/);
+    assert.match(initialized.stdout, /Default Environment: base/);
     assert.match(await readFile(profilePath, "utf8"), /# >>> woma initialize >>>/);
     await access(path.join(stateHome, "shell", "woma.bash"));
+    await access(path.join(stateHome, "environments", "base", "environment.yaml"));
+    assert.equal(await readFile(path.join(stateHome, "default-environment"), "utf8"), "base\n");
 
     const reversed = await run(process.execPath, [cli, "init", "bash", "--reverse"], { cwd: root, env: environment });
     assert.match(reversed.stdout, /Reversed bash shell initialization/);
     assert.equal(await readFile(profilePath, "utf8"), "");
     await assert.rejects(access(path.join(stateHome, "shell", "woma.bash")), { code: "ENOENT" });
+    await access(path.join(stateHome, "environments", "base", "environment.yaml"));
+    assert.equal(await readFile(path.join(stateHome, "default-environment"), "utf8"), "base\n");
+    assert.equal(
+      (JSON.parse(await readFile(path.join(stateHome, "initialization.json"), "utf8")) as { status: string }).status,
+      "complete",
+    );
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("CLI init automatically imports supported existing Codex state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-init-codex-"));
+  const stateHome = path.join(root, "state");
+  const originalCodex = path.join(root, "original-codex");
+  const skillDocument = path.join(originalCodex, "skills", "existing-review", "SKILL.md");
+  const cli = path.resolve("dist/src/cli.js");
+  try {
+    await mkdir(path.dirname(skillDocument), { recursive: true });
+    await writeFile(path.join(originalCodex, "config.toml"), 'model = "existing"\n', "utf8");
+    await writeFile(skillDocument, "---\nname: existing-review\ndescription: Existing review.\n---\n", "utf8");
+    const initialized = await run(process.execPath, [cli, "init", "bash"], {
+      cwd: root,
+      env: {
+        ...process.env,
+        HOME: root,
+        WOMA_HOME: stateHome,
+        WOMA_ORIGINAL_CODEX_HOME: originalCodex,
+        WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "original-claude"),
+        SHELL: "/bin/bash",
+      },
+    });
+    assert.match(initialized.stdout, /Default Environment: codex/);
+    assert.match(initialized.stdout, /Imported 1 existing Codex Skill/);
+    assert.equal(await readFile(path.join(stateHome, "default-environment"), "utf8"), "codex\n");
+    assert.match(
+      await readFile(path.join(stateHome, "environments", "codex", "view", "codex", "config.toml"), "utf8"),
+      /existing/,
+    );
+    assert.equal(
+      await readFile(path.join(stateHome, "environments", "codex", "view", "codex", "skills", "existing-review", "SKILL.md"), "utf8"),
+      await readFile(skillDocument, "utf8"),
+    );
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("CLI init validates the shell profile before bootstrapping Environments", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-init-preflight-"));
+  const stateHome = path.join(root, "state");
+  const profilePath = path.join(root, process.platform === "darwin" ? ".bash_profile" : ".bashrc");
+  const cli = path.resolve("dist/src/cli.js");
+  try {
+    await writeFile(profilePath, "# >>> woma initialize >>>\nmodified\n", "utf8");
+    await assert.rejects(
+      run(process.execPath, [cli, "init", "bash"], {
+        cwd: root,
+        env: {
+          ...process.env,
+          HOME: root,
+          WOMA_HOME: stateHome,
+          WOMA_ORIGINAL_CODEX_HOME: path.join(root, "original-codex"),
+          WOMA_ORIGINAL_CLAUDE_CONFIG_DIR: path.join(root, "original-claude"),
+        },
+      }),
+      /invalid Woma initialization block/,
+    );
+    await assert.rejects(access(stateHome), { code: "ENOENT" });
   } finally {
     await removeTestTree(root);
   }

@@ -348,6 +348,50 @@ test("shell hook falls back from a phantom inherited Environment", async () => {
   }
 });
 
+test("shell hook uses the initialization default when WOMA_ENV is unset", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-default-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const home = path.join(root, "home");
+    await fakeEnvironment(home, "base", ["codex", "claude"]);
+    await fakeEnvironment(home, "codex", ["codex"]);
+    await writeFile(path.join(home, "default-environment"), "codex\n", "utf8");
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const { stdout } = await run(
+      "bash",
+      ["--noprofile", "--norc", "-c", 'source "$1"\nprintf \'%s|%s\' "$WOMA_ENV" "$CODEX_HOME"', "bash", hookPath],
+      { env: { ...process.env, WOMA_HOME: home, WOMA_ENV: "" } },
+    );
+    assert.equal(stdout, `codex|${path.join(home, "environments", "codex", "home", "codex")}`);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("shell hook rejects an invalid initialized default before resolving paths", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-invalid-default-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const home = path.join(root, "home");
+    await fakeEnvironment(home, "base", ["codex", "claude"]);
+    await mkdir(path.join(home, "view"), { recursive: true });
+    await writeFile(path.join(home, "environment.yaml"), "metadata:\n  name: outside\n", "utf8");
+    await writeFile(path.join(home, "view", "view.json"), "{}\n", "utf8");
+    await writeFile(path.join(home, "default-environment"), "..\n", "utf8");
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+
+    const { stdout, stderr } = await run(
+      "bash",
+      ["--noprofile", "--norc", "-c", 'source "$1"\nprintf \'%s\' "$WOMA_ENV"', "bash", hookPath],
+      { env: { ...process.env, WOMA_HOME: home, WOMA_ENV: "" } },
+    );
+    assert.equal(stdout, "base");
+    assert.match(stderr, /Environment \.\. is unavailable; using base/);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("shell hook restores original Agent homes when no Environment is available", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-no-environment-"));
   try {

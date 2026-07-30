@@ -65,13 +65,20 @@ The Package Store and other global state live outside Environment prefixes:
 
 ```text
 $WOMA_HOME/
+├── initialization.json                    # one-time pending/complete bootstrap state
+├── default-environment                    # shell default selected by init
 ├── packages/<package>/<cache-key>/        # immutable Package generations
-├── migrations/skills/<name>/<hash>/       # explicit Skill migration snapshots
+├── migrations/skills/<name>/<hash>/       # automatic or explicit Skill migration snapshots
 ├── locks/environments/<environment>.lock  # mutation serialization
 ├── locks/packages/<name>/<cache-key>.lock
 ├── locks/projects/<canonical-path-hash>.lock
 └── shell/                                  # static scripts written by woma init
 ```
+
+An automatically imported `codex` Environment also carries `.woma-import.json` with the initialization ID that owns it.
+Woma builds this marker in a sibling reservation and atomically renames the reservation into place before creating the
+Environment recipe. Init requires the marker to resume or roll back a pending import; an unrelated same-name Environment
+is never adopted.
 
 Package removal detaches resources from an Environment but does not delete immutable Package Store entries.
 
@@ -268,9 +275,9 @@ implementation details and are omitted. Commands that implicitly select `base`, 
 
 | Operation | Reads | Creates or changes | Explicitly does not change |
 | --- | --- | --- | --- |
-| `woma init` | selected shell profile | `$WOMA_HOME/shell/*` and one marker-delimited profile block | Environments, Packages, projects, Agent homes |
-| shell startup | static Woma hook and existing Environment metadata | shell variables only | Woma state and project files |
-| `woma create --name <environment>` | target defaults and supported seed configuration | Environment directory, `environment.yaml`, empty `lock.json`, stable homes, initial view | original Agent state; no implicit Packages |
+| `woma init` | selected shell profile; supported original Codex config, Hooks, and ordinary Skills on first run | clean `base`; optional imported `codex`; Skill snapshots and Packages; initialization/default files; static hook and profile block | original Agent home, authentication, system Skills, Plugins, sessions, caches, projects, Agent Runtime |
+| shell startup | static Woma hook, initialized default, and existing Environment metadata | shell variables only | Woma state and project files |
+| `woma create --name <environment>` | target defaults and supported seed configuration | Environment directory, `environment.yaml`, empty `lock.json`, stable homes, initial view | original Agent state; no implicit Packages; `base` is clean |
 | `woma activate <environment>` | current-format recipe, lock, Package closure, and view | shell variables only | Environment files, Agent configuration, project content, and Agent Memory |
 | `woma deactivate` | saved original Agent roots | shell variables only | Environment contents |
 | `woma run -n <environment> ...` | Environment snapshot | child-process environment only; Agent may then mutate its selected home | parent shell variables |
@@ -284,16 +291,17 @@ implementation details and are omitted. Commands that implicitly select `base`, 
 | `woma doctor` | recipe, lock, Package Store, managed views, requirements, external Skill frontmatter | nothing | damaged state; it reports rather than repairs |
 | `woma export` | recipe, lock, complete immutable Package closure | requested `.woma-env` file | Agent homes, external Skills, credentials, sessions, projects |
 | `woma create --file <bundle>` | bundle contents | Package Store entries and a new Environment recipe, lock, homes, and view | existing Environment names and Agent opaque state |
-| `woma rename` | complete source Environment | moves the complete Environment directory and updates its name metadata | Package Store; active `base` and active source are refused |
-| `woma env remove` | target Environment identity | removes the complete inactive Environment directory | Package Store and other Environments; `base` is refused |
+| `woma rename` | complete source Environment | moves the complete Environment directory, updates its name metadata, and follows an initialized default reference | Package Store; active `base` and active source are refused |
+| `woma env remove` | target Environment identity | removes the complete inactive Environment directory and resets its initialized default reference to `base` | Package Store and other Environments; `base` is refused |
 
 Install, remove, import, migration publication, and view repair run under Environment and Package locks. For ordinary
 failures, Woma restores the previous recipe, lock, managed stable-home state, and view pointer. External Skills and opaque
 Agent writes are outside those transactions except for explicit migration commands.
 
-`--dry-run` is a command-specific contract, not a general CLI flag. `woma init --dry-run`, `woma remove --dry-run`, and
-`woma migrate skills --dry-run` do not publish their planned changes; a Skill migration dry run also does not initialize an
-absent `base`. `woma migrate sessions --dry-run` does not publish session files, but the CLI resolves and, when necessary,
+`--dry-run` is a command-specific contract, not a general CLI flag. `woma init --dry-run` validates both the shell edit and
+any temporary Codex Skill snapshots without creating `$WOMA_HOME`; `woma remove --dry-run` and `woma migrate skills
+--dry-run` likewise do not publish their planned changes, and a Skill migration dry run does not initialize an absent
+`base`. `woma migrate sessions --dry-run` does not publish session files, but the CLI resolves and, when necessary,
 initializes its destination Environment first. Consult [commands.md](commands.md) before adding another dry-run path.
 
 `woma env remove` deletes the complete inactive Environment prefix, including opaque credentials, sessions, databases,

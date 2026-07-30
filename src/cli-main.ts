@@ -3,6 +3,11 @@ import path from "node:path";
 import { Command } from "commander";
 import { requireAgentMigrationConfirmation } from "./agent-processes.js";
 import { detectAgentClis } from "./agent-cli.js";
+import {
+  initializeBootstrap,
+  removeInitializedEnvironment,
+  renameInitializedEnvironment,
+} from "./bootstrap.js";
 import { captureWoma } from "./capture.js";
 import { exportEnvironmentBundle, importEnvironmentBundle } from "./environment-bundle.js";
 import {
@@ -18,8 +23,6 @@ import {
   installIntoEnvironment,
   listEnvironments,
   readEnvironmentLock,
-  removeEnvironment,
-  renameEnvironment,
   uninstallFromEnvironment,
   type BaseEnvironmentInitializationOptions,
   type EnvironmentCheck,
@@ -34,22 +37,16 @@ import { migrateExistingSessions } from "./migrate-sessions.js";
 import { runInEnvironment } from "./run.js";
 import type { Action, LockedPackage, Platform } from "./types.js";
 
-const EXISTING_AGENT_STATE_NOTICE = `Woma created an isolated base Environment.
+const EXISTING_AGENT_STATE_NOTICE = `Woma created a clean, isolated base Environment.
 
 Existing Codex or Claude data remains unchanged in the original Agent homes.
-Supported provider configuration and Claude credentials are seeded separately.
-Codex auth.json is not seeded; log in separately inside the Environment.
-Existing Agent Skills, sessions, and history were detected but were not imported.
+Nothing was imported into base.
 
-Preview migration:
-  woma migrate skills --dry-run
-  woma migrate sessions --dry-run
+Run woma init to automatically create a codex Environment from supported existing
+Codex configuration, Hooks, and ordinary Skills. Authentication, system Skills,
+Plugins, sessions, history, caches, and Claude state are not imported automatically.
 
-Import Skills into base:
-  woma migrate skills
-
-After stopping all Codex and Claude processes, import sessions:
-  woma migrate sessions
+Use woma migrate for any later or manual imports.
 `;
 
 const baseInitializationOptions: BaseEnvironmentInitializationOptions = {
@@ -135,10 +132,14 @@ program
   .description("initialize Woma for shell interaction")
   .option("--dry-run", "print the initialization plan without changing files", false)
   .option("--reverse", "undo shell initialization", false)
-  .action(async (shell: string | undefined, options: { dryRun: boolean; reverse: boolean }) => {
+  .action(async (shell: string | undefined, options: { dryRun: boolean; reverse: boolean }, command: Command) => {
     const resolved = resolveShell(shell);
+    if (!options.reverse && !options.dryRun) await initializeShell(resolved, { ...options, dryRun: true });
+    const bootstrap = options.reverse
+      ? undefined
+      : await initializeBootstrap(projectRoot(command), options.dryRun);
     const result = await initializeShell(resolved, options);
-    printActions(result.actions);
+    printActions([...(bootstrap?.actions ?? []), ...result.actions]);
     if (options.dryRun) {
       console.log("No changes made.");
       return;
@@ -146,6 +147,13 @@ program
     if (options.reverse) console.log(`Reversed ${resolved} shell initialization`);
     else {
       console.log(`Initialized ${resolved} shell integration`);
+      if (bootstrap) {
+        console.log(`Default Environment: ${bootstrap.defaultEnvironment}`);
+        if (bootstrap.importedSkills.length > 0) {
+          const suffix = bootstrap.importedSkills.length === 1 ? "" : "s";
+          console.log(`Imported ${bootstrap.importedSkills.length} existing Codex Skill${suffix}`);
+        }
+      }
       console.log(`Restart your shell or reload ${result.profilePath}`);
     }
   });
@@ -383,7 +391,7 @@ envCommand
   .command("remove <name>")
   .description("remove an inactive environment recipe and lock")
   .action(async (name: string, _options: unknown, command: Command) => {
-    await removeEnvironment(projectRoot(command), name);
+    await removeInitializedEnvironment(projectRoot(command), name);
     console.log(`Removed environment ${name}`);
   });
 
@@ -464,7 +472,7 @@ program
   .description("rename an existing Agent environment")
   .requiredOption("-n, --name <environment>", "environment to rename")
   .action(async (destination: string, options: { name: string }, command: Command) => {
-    await renameEnvironment(projectRoot(command), options.name, destination);
+    await renameInitializedEnvironment(projectRoot(command), options.name, destination);
     console.log(`Renamed environment ${options.name} to ${destination}`);
   });
 

@@ -40,20 +40,24 @@ After installation, initialize Woma for your current shell:
 woma init
 ```
 
-Like `conda init`, this installs a managed block in `~/.bashrc`, `~/.bash_profile`, or `~/.zshrc`. The block sources a static hook from `$WOMA_HOME/shell`, so ordinary shell startup does not launch Node. It does not create, validate, synchronize, or repair `base`, and it does not acquire Woma locks. Use `woma init --reverse` to remove the integration.
+Like `conda init`, this installs a managed block in `~/.bashrc`, `~/.bash_profile`, or `~/.zshrc`. It also bootstraps a clean `base` Environment. When Woma finds supported existing Codex state, it creates a separate `codex` Environment, copies `config.toml` and `hooks.json` once, snapshots ordinary Skills as Woma Packages, and makes `codex` the default for new shells. Otherwise, `base` is the default. The original Codex home is never changed.
+
+The static hook under `$WOMA_HOME/shell` does not launch Node during ordinary shell startup. Use `woma init --dry-run` to validate and preview the complete bootstrap, or `woma init --reverse` to remove only the shell integration. Reversal preserves Environments and the one-time initialization decision.
 
 Open a new shell or reload the startup file.
 
 ## Quick Start
 
-The `base` Environment is created automatically:
+Open a new shell, then inspect the Environment selected by initialization:
 
 ```bash
 woma env list
+woma list
 woma install builtin:auto-research
-woma activate base
 codex
 ```
+
+For a new user with supported existing Codex state, this is the imported `codex` Environment. Otherwise, it is the clean `base` Environment. Use `woma activate base` whenever you explicitly want the clean baseline.
 
 Project Memory is an optional ordinary Package rather than a Woma runtime feature. Install it explicitly when a project needs durable build, test, coding, or operational context:
 
@@ -75,18 +79,20 @@ woma activate qoder-work
 qodercli
 ```
 
-### Migrate Existing State
+### Existing State
 
 > [!IMPORTANT]
-> **Stop all Codex and Claude processes before every migration, including dry runs.**
+> **Stop all Codex and Claude processes before every explicit `woma migrate` command, including dry runs.**
 
 If Woma detects a running Agent process for the current user, it lists the process and requires an interactive `yes` confirmation. Non-interactive migration stops with an error.
 
-If the first implicit `base` creation detects known existing Codex or Claude Skill/session locations, Woma prints a one-time notice to stderr. The check reads filesystem metadata only: it does not enumerate names, read contents, or import anything. Original Agent homes remain unchanged, while supported provider configuration and Claude credentials continue to seed separately. Woma never reads or copies the original Codex `auth.json` into a new Environment.
+The first `woma init` automatically imports the supported part of the original Codex harness into a separate `codex` Environment. Ordinary Skills become immutable, content-addressed Woma Packages. `config.toml` and `hooks.json` are copied once and then evolve independently inside the Environment. A later change in the original Codex home is not synchronized.
 
-This follows Conda's conservative model: discovering compatible existing state does not adopt it. Just as Conda does not silently turn an arbitrary Python or `venv` installation into a Conda Environment, Woma does not turn an existing Agent home into a Woma Environment.
+Woma does not copy `auth.json`, hidden system Skills such as `.system`, Plugins, sessions, history, caches, databases, telemetry, native memory, or unknown files. It does not register the original Codex home as an Environment, change it, or manage the Codex executable. Log in separately inside the imported Environment.
 
-**Run a dry run first, then repeat without `--dry-run`:**
+This is an intentional extension of Conda's shell-initialization model: redirecting `CODEX_HOME` without carrying forward supported capabilities would make a new user's existing setup appear to disappear. The import is therefore automatic but narrow, copied rather than linked, and recorded as a one-time decision.
+
+Use explicit migration for Claude state, sessions, a later re-import, or another destination. Run a dry run first, then repeat without `--dry-run`:
 
 ```bash
 woma migrate skills --from both --name base --dry-run
@@ -96,7 +102,7 @@ woma migrate sessions --from both --name base --dry-run
 woma migrate sessions --from both --name base
 ```
 
-Use `--from codex` or `--from claude` to migrate one Agent only. Use `--name <environment>` to select another destination.
+Use `--from codex` or `--from claude` to migrate one Agent only. Use `--name <environment>` to select another destination. Explicit migration never changes the original Agent homes.
 
 ## Manage Environments
 
@@ -131,7 +137,7 @@ woma remove downloaded-skill
 
 Every target Agent's `skills` path resolves to one stable Environment-level directory. An ordinary Skill installed through Codex, Claude Code, Pi, or Qoder CLI is therefore immediately visible to every other target in the same Environment without `woma sync`. It remains isolated from other Environments and appears in `woma list` as `external`.
 
-- **Codex:** log in separately after creating an Environment, and edit `$CODEX_HOME/config.toml` for its provider configuration. Codex owns the ordinary `$CODEX_HOME/auth.json`; Woma does not seed it from the original home or include it in managed views. Codex also owns the hidden `$CODEX_HOME/skills/.system` entry, which Woma preserves as opaque Environment state and never adopts as an ordinary Skill.
+- **Codex:** the automatic `codex` Environment begins with a one-time copy of supported provider configuration and Hooks; `base` begins clean. Log in separately and edit `$CODEX_HOME/config.toml` for later changes. Codex owns the ordinary `$CODEX_HOME/auth.json`; Woma does not seed it from the original home or include it in managed views. Codex also owns the hidden `$CODEX_HOME/skills/.system` entry, which Woma preserves as opaque Environment state and never adopts as an ordinary Skill.
 - **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
 - **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Woma links `$PI_CODING_AGENT_DIR/skills` to the shared Environment Skill directory; Pi owns every other file in that Environment home.
 - **Qoder CLI:** log in through `qodercli` in the activated Environment. Woma manages `$QODER_CONFIG_DIR/settings.json` (Package MCP servers and Hooks) and links `$QODER_CONFIG_DIR/skills` to the shared Environment Skill directory; Qoder owns every other file in that Environment home. A new Qoder Environment does not copy the original `~/.qoder` state.

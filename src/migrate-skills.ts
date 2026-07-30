@@ -98,7 +98,7 @@ async function discoverSkills(platform: CodexClaudePlatform): Promise<ExistingSk
   return skills;
 }
 
-async function existingSkills(source: SkillMigrationSource): Promise<ExistingSkill[]> {
+async function collectExistingSkills(source: SkillMigrationSource): Promise<ExistingSkill[]> {
   const platforms: CodexClaudePlatform[] = source === "both" ? ["codex", "claude"] : [source];
   const byName = new Map<string, ExistingSkill>();
   for (const platform of platforms) {
@@ -121,8 +121,17 @@ async function existingSkills(source: SkillMigrationSource): Promise<ExistingSki
     }
   }
   const result = [...byName.values()].sort((left, right) => left.name.localeCompare(right.name));
+  return result;
+}
+
+async function existingSkills(source: SkillMigrationSource): Promise<ExistingSkill[]> {
+  const result = await collectExistingSkills(source);
   if (result.length === 0) throw new Error(`No existing Agent Skills found for --from ${source}`);
   return result;
+}
+
+export async function existingSkillNames(source: SkillMigrationSource): Promise<string[]> {
+  return (await collectExistingSkills(source)).map((skill) => skill.name);
 }
 
 function snapshotId(skill: ExistingSkill): string {
@@ -210,9 +219,10 @@ async function assertNoEnvironmentConflicts(
   environmentName: string,
   skills: ExistingSkill[],
   packages: { name: string; version: string; source: string }[],
+  allowMissingEnvironment: boolean,
 ): Promise<boolean[]> {
   if (!(await pathExists(environmentPath(projectRoot, environmentName)))) {
-    if (environmentName === DEFAULT_ENVIRONMENT) return packages.map(() => false);
+    if (environmentName === DEFAULT_ENVIRONMENT || allowMissingEnvironment) return packages.map(() => false);
     await environmentSnapshot(projectRoot, environmentName);
   }
   const { lock } = await environmentSnapshot(projectRoot, environmentName);
@@ -241,6 +251,7 @@ export async function migrateExistingSkills(options: {
   environment: string;
   from: SkillMigrationSource;
   dryRun?: boolean;
+  allowMissingEnvironment?: boolean;
 }): Promise<SkillMigrationResult> {
   const skills = await existingSkills(options.from);
   const packages = skills.map((skill) => {
@@ -249,7 +260,13 @@ export async function migrateExistingSkills(options: {
     const destination = path.join(womaHome(), "migrations", "skills", skill.name, id);
     return { name: skill.name, version, destination, source: `file:${destination}`, sources: [...skill.sources] };
   });
-  const unchangedPackages = await assertNoEnvironmentConflicts(options.projectRoot, options.environment, skills, packages);
+  const unchangedPackages = await assertNoEnvironmentConflicts(
+    options.projectRoot,
+    options.environment,
+    skills,
+    packages,
+    options.allowMissingEnvironment === true,
+  );
   const unchanged = unchangedPackages.every(Boolean);
   const result: SkillMigrationResult = {
     environment: options.environment,
