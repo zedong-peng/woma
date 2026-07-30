@@ -8,7 +8,6 @@ import { z } from "zod";
 import {
   environmentSnapshot,
   importEnvironmentSnapshot,
-  normalizeLegacyEnvironmentSnapshot,
   parseEnvironment,
   parseEnvironmentLock,
   type EnvironmentSnapshot,
@@ -292,9 +291,8 @@ export async function importEnvironmentBundle(
   if (!inputInfo.isFile()) throw new Error(`Environment bundle is not a file: ${source}`);
   if (inputInfo.size > MAX_COMPRESSED_BYTES) throw new Error(`Environment bundle exceeds ${MAX_COMPRESSED_BYTES} compressed bytes`);
   const bundle = parseBundle(await readFile(source), source);
-  const normalized = normalizeLegacyEnvironmentSnapshot(bundle.environment, bundle.lock);
-  const environment = normalized.environment;
-  const lock = normalized.lock;
+  const environment = bundle.environment;
+  const lock = bundle.lock;
   const packages = bundle.packages.filter((pkg) => lock.packages[pkg.name] !== undefined);
   const name = requestedName ?? environment.metadata.name;
   const temporary = await mkdtemp(path.join(os.tmpdir(), "woma-environment-import-"));
