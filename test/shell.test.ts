@@ -78,6 +78,9 @@ test("zsh hook installs an idempotent precmd prompt prefix", () => {
   assert.match(hook, /PI_CODING_AGENT_DIR=.*environments.*home\/pi/);
   assert.match(hook, /WOMA_ORIGINAL_QODER_CONFIG_DIR/);
   assert.match(hook, /QODER_CONFIG_DIR=.*environments.*home\/qoder/);
+  assert.match(hook, /WOMA_ORIGINAL_OPENCODE_CONFIG_DIR/);
+  assert.match(hook, /OPENCODE_CONFIG=.*environments.*home\/opencode\/opencode\.json/);
+  assert.match(hook, /OPENCODE_CONFIG_DIR=.*environments.*home\/opencode/);
   assert.equal((hook.match(/^woma\(\) \{/gm) ?? []).length, 1);
   assert.doesNotMatch(hook, /\bwoma-conda\b/);
 });
@@ -292,6 +295,72 @@ test("shell hook selects Qoder home and restores unsupported Agent homes", async
       },
     });
     assert.equal(stdout, `${originalCodex}|${originalClaude}|${path.join(home, "environments", "qoder-only", "home", "qoder")}`);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("shell hook selects the OpenCode config overlay and restores original variables", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-opencode-target-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const home = path.join(root, "home");
+    const originalConfig = path.join(root, "original-opencode.json");
+    const originalDirectory = path.join(root, "original-opencode");
+    await fakeEnvironment(home, "opencode-only", ["opencode"]);
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const script = [
+      'source "$1"',
+      'printf \'%s|%s\\n\' "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_DIR"',
+      "__woma_restore_original_env",
+      'printf \'%s|%s\' "$OPENCODE_CONFIG" "$OPENCODE_CONFIG_DIR"',
+    ].join("\n");
+    const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", script, "bash", hookPath], {
+      env: {
+        ...process.env,
+        WOMA_HOME: home,
+        WOMA_ENV: "opencode-only",
+        WOMA_ORIGINAL_OPENCODE_CONFIG: originalConfig,
+        WOMA_ORIGINAL_OPENCODE_CONFIG_DIR: originalDirectory,
+      },
+    });
+    assert.equal(
+      stdout,
+      `${path.join(home, "environments", "opencode-only", "home", "opencode", "opencode.json")}|${path.join(home, "environments", "opencode-only", "home", "opencode")}\n${originalConfig}|${originalDirectory}`,
+    );
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("nested shell preserves originally unset OpenCode variables", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-shell-opencode-nested-"));
+  try {
+    const hookPath = path.join(root, "hook.bash");
+    const home = path.join(root, "home");
+    await fakeEnvironment(home, "opencode-only", ["opencode"]);
+    await writeFile(hookPath, renderShellHook("bash"), "utf8");
+    const child = [
+      'source "$1"',
+      "__woma_restore_original_env",
+      'printf \'%s|%s\' "${OPENCODE_CONFIG+set}" "${OPENCODE_CONFIG_DIR+set}"',
+    ].join("\n");
+    const outer = [
+      'source "$1"',
+      'bash --noprofile --norc -c "$2" bash "$1"',
+    ].join("\n");
+    const { stdout } = await run("bash", ["--noprofile", "--norc", "-c", outer, "bash", hookPath, child], {
+      env: {
+        ...process.env,
+        WOMA_HOME: home,
+        WOMA_ENV: "opencode-only",
+        WOMA_ORIGINAL_OPENCODE_CONFIG: "",
+        WOMA_ORIGINAL_OPENCODE_CONFIG_DIR: "",
+        OPENCODE_CONFIG: undefined,
+        OPENCODE_CONFIG_DIR: undefined,
+      },
+    });
+    assert.equal(stdout, "|");
   } finally {
     await removeTestTree(root);
   }

@@ -6,7 +6,7 @@ metadata:
   description: Compose evidence search, idea generation, and experiment design into a reusable research loop.
   tags: [research, method]
 spec:
-  platforms: [codex, claude, pi, qoder]
+  platforms: [codex, claude, pi, qoder, opencode]
   dependencies:
     - name: paper-search
       version: ^1.0.0

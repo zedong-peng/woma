@@ -6,10 +6,13 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { satisfies } from "semver";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { capabilitySupportIssues } from "./agents/adapter.js";
+import { manifestCapabilities } from "./agents/canonical.js";
+import { agentAdapter } from "./agents/registry.js";
 import { assertInside, EXCLUDED_PACKAGE_PATH_NAMES, womaHome, hashDirectory, pathExists } from "./fs.js";
 import { withPackageLock } from "./environment-lock.js";
 import { loadManifest } from "./schema.js";
-import type { WomaManifest, InstalledPackage, LockedPackage, PackageDependency, Platform } from "./types.js";
+import type { WomaManifest, InstalledPackage, LockedPackage, PackageDependency } from "./types.js";
 
 interface MaterializedSource {
   root: string;
@@ -338,7 +341,7 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
         tags: [],
       },
       spec: {
-        platforms: ["codex", "claude", "pi", "qoder"],
+        platforms: ["codex", "claude", "pi", "qoder", "opencode"],
         requirements: { env: [], commands: [] },
         dependencies: [],
         entrypoints: [],
@@ -370,10 +373,6 @@ async function materializePackageSource(source: string, cwd: string, options: Pa
     await materialized.cleanup?.();
     throw error;
   }
-}
-
-function selectedPlatforms(manifest: WomaManifest, itemPlatforms?: Platform[]): Set<Platform> {
-  return new Set(itemPlatforms ?? manifest.spec.platforms);
 }
 
 export async function validatePackage(root: string, manifest: WomaManifest): Promise<void> {
@@ -442,24 +441,22 @@ export async function validatePackage(root: string, manifest: WomaManifest): Pro
         throw new Error(`MCP server ${server.name} targets ${platform}, which is not listed in spec.platforms`);
       }
     }
-    const platforms = selectedPlatforms(manifest, server.platforms);
-    if (platforms.has("pi")) {
-      throw new Error(`MCP server ${server.name} targets pi, but the Pi adapter currently supports Skills only`);
-    }
-    if ((server.transport === "sse" || server.transport === "ws") && platforms.has("codex")) {
-      throw new Error(`MCP transport ${server.transport} for ${server.name} is Claude-only; set platforms: [claude]`);
-    }
   }
 
   for (const hook of manifest.spec.hooks) {
-    const platforms = selectedPlatforms(manifest, hook.platforms);
-    for (const platform of platforms) {
+    for (const platform of hook.platforms ?? manifest.spec.platforms) {
       if (!manifest.spec.platforms.includes(platform)) {
         throw new Error(`Hook ${hook.event} targets ${platform}, which is not listed in spec.platforms`);
       }
     }
-    if (platforms.has("pi")) {
-      throw new Error(`Hook ${hook.event} targets pi, but the Pi adapter currently supports Skills only`);
+  }
+
+  for (const platform of manifest.spec.platforms) {
+    const adapter = agentAdapter(platform);
+    const errors = capabilitySupportIssues(adapter, manifestCapabilities(manifest, root, platform))
+      .filter((issue) => issue.severity === "error");
+    if (errors.length > 0) {
+      throw new Error(errors.map((issue) => issue.message).join("\n"));
     }
   }
 }

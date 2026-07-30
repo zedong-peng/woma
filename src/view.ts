@@ -2,30 +2,21 @@ import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm,
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { parse as parseToml } from "smol-toml";
-import { womaHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
-import type { ConfigurablePlatform, WomaEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
-
-const MANAGED_HOME_LINKS: Record<Platform, string[]> = {
-  codex: ["config.toml", "hooks.json"],
-  claude: [".credentials.json", "settings.json"],
-  pi: [],
-  qoder: ["settings.json"],
-};
-
-const MANAGED_VIEW_ENTRIES: Record<Platform, string[]> = {
-  codex: ["config.toml", "hooks.json", "skills"],
-  claude: [".credentials.json", "settings.json", "skills"],
-  pi: ["skills"],
-  qoder: ["settings.json", "skills"],
-};
-
-const CREDENTIAL_FILES: Record<Platform, string[]> = {
-  codex: [],
-  claude: [".credentials.json"],
-  pi: [],
-  qoder: [],
-};
+import { canonicalCapabilities } from "./agents/canonical.js";
+import { renderCodexConfig } from "./agents/codex.js";
+import { agentAdapter, resourceMetadataPlatforms } from "./agents/registry.js";
+import type {
+  AgentAdapter,
+  AgentProjectionInput,
+  ArtifactSnapshot,
+  Diagnostic,
+  DiscoveryResult,
+  NativeArtifactContract,
+  ProjectionPlan,
+} from "./agents/adapter.js";
+import { assertArtifactContracts } from "./agents/adapter.js";
+import { womaHome, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
+import type { WomaEnvironment, InstalledPackage, Platform } from "./types.js";
 
 interface ViewInstallHooks {
   beforeSwap?: () => Promise<(() => Promise<void>) | void>;
@@ -75,158 +66,22 @@ function parseJsonObject(content: string | null, filePath: string): Record<strin
   }
 }
 
-function objectAt(root: Record<string, unknown>, key: string, filePath: string): Record<string, unknown> {
-  const value = root[key];
-  if (value === undefined) {
-    const created: Record<string, unknown> = {};
-    root[key] = created;
-    return created;
+function nativeDefaultAgentHome(platform: Platform): string {
+  const descriptor = agentAdapter(platform).descriptor.sourceHome;
+  if (descriptor.defaultRootEnvironmentVariable) {
+    const root = process.env[descriptor.defaultRootEnvironmentVariable]
+      || path.join(os.homedir(), ...(descriptor.defaultRootPath ?? []));
+    return path.resolve(root, ...descriptor.defaultPath);
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Cannot merge ${filePath}: ${key} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function arrayAt(root: Record<string, unknown>, key: string, filePath: string): unknown[] {
-  const value = root[key];
-  if (value === undefined) {
-    const created: unknown[] = [];
-    root[key] = created;
-    return created;
-  }
-  if (!Array.isArray(value)) throw new Error(`Cannot merge ${filePath}: ${key} must be an array`);
-  return value;
-}
-
-function appliesTo(platform: Platform, platforms?: Platform[]): boolean {
-  return !platforms || platforms.includes(platform);
-}
-
-function codexValue(server: McpServer): Record<string, unknown> {
-  if (server.transport === "stdio") {
-    return {
-      command: server.command,
-      args: server.args,
-      ...(server.env.length > 0 ? { env_vars: server.env } : {}),
-    };
-  }
-  if (server.transport !== "http") throw new Error(`${server.transport} MCP transport is not supported by Codex`);
-  return {
-    url: server.url,
-    ...(Object.keys(server.headers).length > 0 ? { env_http_headers: server.headers } : {}),
-  };
-}
-
-function claudeValue(server: McpServer): Record<string, unknown> {
-  if (server.transport === "stdio") {
-    return {
-      type: "stdio",
-      command: server.command,
-      args: server.args,
-      ...(server.env.length > 0 ? { env: Object.fromEntries(server.env.map((name) => [name, `\${${name}}`])) } : {}),
-    };
-  }
-  return {
-    type: server.transport,
-    url: server.url,
-    ...(Object.keys(server.headers).length > 0
-      ? { headers: Object.fromEntries(Object.entries(server.headers).map(([header, env]) => [header, `\${${env}}`])) }
-      : {}),
-  };
-}
-
-function hookValue(hook: HookSpec): Record<string, unknown> {
-  const handler: Record<string, unknown> = { type: "command", command: hook.command };
-  if (hook.timeout !== undefined) handler.timeout = hook.timeout;
-  return { ...(hook.matcher ? { matcher: hook.matcher } : {}), hooks: [handler] };
-}
-
-function tomlString(value: string): string {
-  return JSON.stringify(value);
-}
-
-function tomlArray(values: string[]): string {
-  return `[${values.map(tomlString).join(", ")}]`;
-}
-
-function tomlInlineTable(values: Record<string, string>): string {
-  return `{ ${Object.entries(values).map(([key, value]) => `${tomlString(key)} = ${tomlString(value)}`).join(", ")} }`;
-}
-
-function codexBlock(packageName: string, server: McpServer): string {
-  const marker = `${packageName}:mcp:${server.name}`;
-  const lines = [`# >>> woma:${marker}`, `[mcp_servers.${tomlString(server.name)}]`];
-  if (server.transport === "stdio") {
-    lines.push(`command = ${tomlString(server.command)}`);
-    if (server.args.length > 0) lines.push(`args = ${tomlArray(server.args)}`);
-    if (server.env.length > 0) lines.push(`env_vars = ${tomlArray(server.env)}`);
-  } else {
-    lines.push(`url = ${tomlString(server.url)}`);
-    if (Object.keys(server.headers).length > 0) lines.push(`env_http_headers = ${tomlInlineTable(server.headers)}`);
-  }
-  lines.push(`# <<< woma:${marker}`);
-  return lines.join("\n");
-}
-
-function withoutWomaCodexBlocks(content: string, filePath: string): string {
-  const lines = content.split(/\r?\n/);
-  const kept: string[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = /^# >>> woma:(.+:mcp:.+)$/.exec(lines[index]!);
-    if (!match) {
-      kept.push(lines[index]!);
-      continue;
-    }
-    const end = `# <<< woma:${match[1]}`;
-    while (index < lines.length && lines[index] !== end) index += 1;
-    if (index === lines.length) throw new Error(`Cannot merge ${filePath}: unterminated Woma-managed Codex block`);
-  }
-  return kept.join("\n").trimEnd();
-}
-
-function renderCodexConfig(input: string | null, filePath: string, packages: InstalledPackage[]): string {
-  const baseline = withoutWomaCodexBlocks(input ?? "", filePath);
-  let parsed: Record<string, unknown> = {};
-  try {
-    parsed = (baseline ? parseToml(baseline) : {}) as Record<string, unknown>;
-  } catch (error) {
-    throw new Error(`Cannot merge ${filePath}: ${(error as Error).message}`);
-  }
-  const existingServers = parsed.mcp_servers ?? {};
-  if (!existingServers || typeof existingServers !== "object" || Array.isArray(existingServers)) {
-    throw new Error(`Cannot merge ${filePath}: mcp_servers must be a table`);
-  }
-  const blocks: string[] = [];
-  for (const { packageName, server } of collectServers(packages, "codex")) {
-    const existing = (existingServers as Record<string, unknown>)[server.name];
-    const desired = codexValue(server);
-    if (existing !== undefined && !equal(existing, desired)) {
-      throw new Error(`Refusing to overwrite Codex MCP server ${server.name} from ${filePath}`);
-    }
-    if (existing === undefined) blocks.push(codexBlock(packageName, server));
-  }
-  const prefix = baseline ? `${baseline}\n\n` : "";
-  const suffix = blocks.length > 0 ? `${blocks.join("\n\n")}\n` : "";
-  return `${prefix}${suffix}`;
+  return path.resolve(os.homedir(), ...descriptor.defaultPath);
 }
 
 function defaultAgentHome(platform: Platform): string {
-  if (platform === "codex") {
-    return path.resolve(process.env.WOMA_ORIGINAL_CODEX_HOME ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"));
-  }
-  if (platform === "claude") {
-    return path.resolve(
-      process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"),
-    );
-  }
-  if (platform === "qoder") {
-    return path.resolve(
-      process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR ?? process.env.QODER_CONFIG_DIR ?? path.join(os.homedir(), ".qoder"),
-    );
-  }
+  const descriptor = agentAdapter(platform).descriptor.sourceHome;
   return path.resolve(
-    process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent"),
+    process.env[descriptor.originalEnvironmentVariable]
+      || process.env[descriptor.environmentVariable]
+      || nativeDefaultAgentHome(platform),
   );
 }
 
@@ -235,10 +90,7 @@ export function sourceAgentHome(platform: Platform): string {
   const environmentRoot = path.join(womaHome(), "environments");
   const relative = path.relative(environmentRoot, candidate);
   if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
-    if (platform === "codex") return path.join(os.homedir(), ".codex");
-    if (platform === "claude") return path.join(os.homedir(), ".claude");
-    if (platform === "qoder") return path.join(os.homedir(), ".qoder");
-    return path.join(os.homedir(), ".pi", "agent");
+    return nativeDefaultAgentHome(platform);
   }
   return candidate;
 }
@@ -247,7 +99,13 @@ export async function validateCodexSourceConfiguration(): Promise<void> {
   const sourceHome = sourceAgentHome("codex");
   const configPath = path.join(sourceHome, "config.toml");
   if (await regularFileExists(configPath)) {
-    renderCodexConfig(await readOptional(configPath), configPath, []);
+    const capabilities = canonicalCapabilities([], "codex");
+    renderCodexConfig(await readOptional(configPath), configPath, {
+      capabilities,
+      previousCapabilities: capabilities,
+      artifacts: {},
+      previousManagedMcpServers: [],
+    });
   }
   const hooksPath = path.join(sourceHome, "hooks.json");
   if (await regularFileExists(hooksPath)) {
@@ -263,11 +121,6 @@ export function environmentAgentHomePath(environmentName: string, platform: Plat
 export function environmentSkillsPath(environmentName: string): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(environmentName)) throw new Error(`Invalid Environment name: ${environmentName}`);
   return path.join(womaHome(), "environments", environmentName, "home", "skills");
-}
-
-function originalClaudeStatePath(sourceHome: string): string {
-  const sibling = path.join(path.dirname(sourceHome), ".claude.json");
-  return path.basename(sourceHome) === ".claude" ? sibling : path.join(sourceHome, ".claude.json");
 }
 
 async function createSymlink(source: string, destination: string, directory: boolean): Promise<void> {
@@ -311,203 +164,121 @@ async function linkSkills(
   return links;
 }
 
-async function copyClaudeCredential(environmentName: string, root: string, seedFromOriginal: boolean): Promise<void> {
-  const name = ".credentials.json";
-  const homeCredential = path.join(environmentAgentHomePath(environmentName, "claude"), name);
-  const currentCredential = path.join(environmentViewPath(environmentName), "claude", name);
-  const originalCredential = path.join(sourceAgentHome("claude"), name);
-  const source = (await pathExists(homeCredential))
-    ? homeCredential
-    : (await pathExists(currentCredential))
-      ? currentCredential
-      : seedFromOriginal
-        ? originalCredential
-        : undefined;
-  if (!source) return;
-  const content = await readFile(source).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (!content) return;
-  const mode = await stat(source).then((info) => info.mode);
-  await writeBufferPreservingFile(path.join(root, name), content, mode);
+interface BuiltAgentProjection {
+  adapter: AgentAdapter;
+  artifacts: NativeArtifactContract[];
+  input: AgentProjectionInput;
+  plan: ProjectionPlan;
+  skillLinks: Record<string, string>;
 }
 
-function collectServers(packages: InstalledPackage[], platform: ConfigurablePlatform): { packageName: string; server: McpServer }[] {
-  const result: { packageName: string; server: McpServer }[] = [];
-  const owners = new Map<string, { packageName: string; value: unknown }>();
-  for (const pkg of packages) {
-    for (const server of pkg.manifest.spec.mcpServers.filter((item) => appliesTo(platform, item.platforms))) {
-      const value = platform === "codex" ? codexValue(server) : claudeValue(server);
-      const existing = owners.get(server.name);
-      if (existing && !equal(existing.value, value)) {
-        throw new Error(`MCP server ${server.name} conflicts between ${existing.packageName} and ${pkg.lock.name}`);
-      }
-      if (!existing) {
-        owners.set(server.name, { packageName: pkg.lock.name, value });
-        result.push({ packageName: pkg.lock.name, server });
-      }
-    }
+async function readArtifactSnapshot(contract: NativeArtifactContract): Promise<ArtifactSnapshot> {
+  for (const source of contract.sources) {
+    const content = await readFile(source).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (content === undefined) continue;
+    const info = await stat(source);
+    return {
+      contract,
+      sourcePath: source,
+      text: contract.content === "text" ? content.toString("utf8") : null,
+      bytes: contract.content === "opaque" ? content : null,
+      mode: info.mode,
+    };
   }
-  return result;
+  return { contract, sourcePath: null, text: null, bytes: null, mode: undefined };
 }
 
-function collectHooks(packages: InstalledPackage[], platform: ConfigurablePlatform): HookSpec[] {
-  const result: HookSpec[] = [];
-  for (const pkg of packages) {
-    for (const hook of pkg.manifest.spec.hooks.filter((item) => appliesTo(platform, item.platforms))) {
-      if (!result.some((existing) => equal(hookValue(existing), hookValue(hook)) && existing.event === hook.event)) result.push(hook);
-    }
-  }
-  return result;
+function resourceMetadataKey(platform: Platform): string {
+  return `${platform}McpServers`;
 }
 
-async function mergeHooks(filePath: string, root: Record<string, unknown>, additions: HookSpec[]): Promise<void> {
-  if (additions.length === 0) return;
-  const hooks = objectAt(root, "hooks", filePath);
-  for (const hook of additions) {
-    const eventHooks = arrayAt(hooks, hook.event, filePath);
-    const value = hookValue(hook);
-    if (!eventHooks.some((existing) => equal(existing, value))) eventHooks.push(value);
-  }
-}
-
-function removeHooks(filePath: string, root: Record<string, unknown>, removals: HookSpec[]): void {
-  if (removals.length === 0 || root.hooks === undefined) return;
-  const hooks = objectAt(root, "hooks", filePath);
-  for (const hook of removals) {
-    const existing = hooks[hook.event];
-    if (existing === undefined) continue;
-    if (!Array.isArray(existing)) throw new Error(`Cannot merge ${filePath}: hooks.${hook.event} must be an array`);
-    const retained = existing.filter((value) => !equal(value, hookValue(hook)));
-    if (retained.length > 0) hooks[hook.event] = retained;
-    else delete hooks[hook.event];
-  }
-  if (Object.keys(hooks).length === 0) delete root.hooks;
-}
-
-async function buildCodexView(
+async function buildAgentProjection(
   environmentName: string,
+  platform: Platform,
   root: string,
   packages: InstalledPackage[],
   previousPackages: InstalledPackage[],
   seedFromOriginal: boolean,
-): Promise<Record<string, string>> {
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const sourceHome = sourceAgentHome("codex");
-  const links = await linkSkills(root, packages);
-
-  const currentConfig = path.join(environmentViewPath(environmentName), "codex", "config.toml");
-  const originalConfig = path.join(sourceHome, "config.toml");
-  const sourceConfig = (await pathExists(currentConfig))
-    ? currentConfig
-    : seedFromOriginal && (await regularFileExists(originalConfig))
-      ? originalConfig
-      : undefined;
-  const configDestination = path.join(root, "config.toml");
-  await writeTextAtomic(
-    configDestination,
-    renderCodexConfig(sourceConfig ? await readOptional(sourceConfig) : null, sourceConfig ?? configDestination, packages),
-  );
-  await chmod(configDestination, 0o600);
-
-  const currentHooks = path.join(environmentViewPath(environmentName), "codex", "hooks.json");
-  const originalHooks = path.join(sourceHome, "hooks.json");
-  const sourceHooks = (await pathExists(currentHooks))
-    ? currentHooks
-    : seedFromOriginal && (await regularFileExists(originalHooks))
-      ? originalHooks
-      : undefined;
-  const hooksPath = sourceHooks ?? path.join(root, "hooks.json");
-  const hooksRoot = parseJsonObject(sourceHooks ? await readOptional(sourceHooks) : null, hooksPath);
-  removeHooks(hooksPath, hooksRoot, collectHooks(previousPackages, "codex"));
-  await mergeHooks(hooksPath, hooksRoot, collectHooks(packages, "codex"));
-  const hooksDestination = path.join(root, "hooks.json");
-  await writeJsonAtomic(hooksDestination, hooksRoot);
-  await chmod(hooksDestination, 0o600);
-  return links;
-}
-
-async function buildPiView(root: string, packages: InstalledPackage[]): Promise<Record<string, string>> {
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  return linkSkills(root, packages);
-}
-
-async function buildClaudeView(
-  environmentName: string,
-  root: string,
-  packages: InstalledPackage[],
-  previousPackages: InstalledPackage[],
-  seedFromOriginal: boolean,
-): Promise<Record<string, string>> {
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  const sourceHome = sourceAgentHome("claude");
-  const links = await linkSkills(root, packages);
-  await copyClaudeCredential(environmentName, root, seedFromOriginal);
-
-  const currentSettings = path.join(environmentViewPath(environmentName), "claude", "settings.json");
-  const sourceSettings = (await pathExists(currentSettings))
-    ? currentSettings
-    : seedFromOriginal
-      ? path.join(sourceHome, "settings.json")
-      : undefined;
-  const settingsPath = sourceSettings ?? path.join(root, "settings.json");
-  const settings = parseJsonObject(sourceSettings ? await readOptional(sourceSettings) : null, settingsPath);
-  removeHooks(settingsPath, settings, collectHooks(previousPackages, "claude"));
-  await mergeHooks(settingsPath, settings, collectHooks(packages, "claude"));
-  const settingsDestination = path.join(root, "settings.json");
-  await writeJsonAtomic(settingsDestination, settings);
-  await chmod(settingsDestination, 0o600);
-  return links;
-}
-
-function removeServers(root: Record<string, unknown>, filePath: string, removals: { server: McpServer }[]): void {
-  if (removals.length === 0 || root.mcpServers === undefined) return;
-  const servers = objectAt(root, "mcpServers", filePath);
-  for (const { server } of removals) delete servers[server.name];
-  if (Object.keys(servers).length === 0) delete root.mcpServers;
-}
-
-function mergeServers(root: Record<string, unknown>, filePath: string, additions: { server: McpServer }[]): void {
-  if (additions.length === 0) return;
-  const servers = objectAt(root, "mcpServers", filePath);
-  for (const { server } of additions) {
-    const desired = claudeValue(server);
-    const existing = servers[server.name];
-    if (existing !== undefined && !equal(existing, desired)) {
-      throw new Error(`Refusing to overwrite Qoder MCP server ${server.name} in ${filePath}`);
-    }
-    servers[server.name] = desired;
+  previousMetadata: ViewMetadata,
+): Promise<BuiltAgentProjection> {
+  const adapter = agentAdapter(platform);
+  if (adapter.descriptor.capabilities.skills !== "symlink") {
+    throw new Error(
+      `${adapter.descriptor.displayName} Adapter uses unsupported Skill strategy ${adapter.descriptor.capabilities.skills}`,
+    );
   }
-}
+  const context = {
+    environmentName,
+    sourceHome: sourceAgentHome(platform),
+    defaultSourceHome: nativeDefaultAgentHome(platform),
+    environmentHome: environmentAgentHomePath(environmentName, platform),
+    currentView: path.join(environmentViewPath(environmentName), platform),
+    seedFromOriginal,
+    originalRuntimeVariables: Object.fromEntries(
+      adapter.descriptor.runtimeVariables.map((variable) => [
+        variable.name,
+        process.env[variable.originalName] ?? process.env[variable.name],
+      ]),
+    ),
+  };
+  const artifacts = adapter.artifacts(context);
+  assertArtifactContracts(adapter, artifacts);
+  const snapshots = await Promise.all(artifacts.map(readArtifactSnapshot));
+  const input: AgentProjectionInput = {
+    capabilities: canonicalCapabilities(packages, platform),
+    previousCapabilities: canonicalCapabilities(previousPackages, platform),
+    artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
+    previousManagedMcpServers: stringArray(previousMetadata.resources?.[resourceMetadataKey(platform)]),
+  };
+  const errors = adapter.validate(input).filter((issue) => issue.severity === "error");
+  if (errors.length > 0) {
+    throw new Error(`${adapter.descriptor.displayName} Adapter cannot project the Environment:\n${errors.map((issue) => `- ${issue.message}`).join("\n")}`);
+  }
+  const plan = adapter.plan(input);
+  const contracts = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
+  const planned = new Set<string>();
+  for (const file of plan.files) {
+    if (planned.has(file.artifactId)) throw new Error(`${adapter.descriptor.displayName} Adapter planned artifact ${file.artifactId} twice`);
+    planned.add(file.artifactId);
+    const contract = contracts.get(file.artifactId);
+    if (!contract) throw new Error(`${adapter.descriptor.displayName} Adapter planned undeclared artifact ${file.artifactId}`);
+    if (contract.target === "input") {
+      throw new Error(`${adapter.descriptor.displayName} Adapter cannot write input artifact ${file.artifactId}`);
+    }
+    if (contract.content !== "text") throw new Error(`${adapter.descriptor.displayName} Adapter cannot render opaque artifact ${file.artifactId}`);
+  }
+  for (const contract of artifacts) {
+    if (contract.target !== "input" && contract.content === "text" && !planned.has(contract.id)) {
+      throw new Error(`${adapter.descriptor.displayName} Adapter did not plan text artifact ${contract.id}`);
+    }
+  }
+  const plannedMcpServers = [...plan.resources.mcpServers].sort();
+  const expectedMcpServers = input.capabilities.mcpServers.map(({ server }) => server.name).sort();
+  if (new Set(plannedMcpServers).size !== plannedMcpServers.length || !equal(plannedMcpServers, expectedMcpServers)) {
+    throw new Error(`${adapter.descriptor.displayName} Adapter plan does not account for the complete MCP closure`);
+  }
 
-async function buildQoderView(
-  environmentName: string,
-  root: string,
-  packages: InstalledPackage[],
-  previousPackages: InstalledPackage[],
-  seedFromOriginal: boolean,
-): Promise<Record<string, string>> {
   await mkdir(root, { recursive: true, mode: 0o700 });
-  const sourceHome = sourceAgentHome("qoder");
-  const links = await linkSkills(root, packages);
-
-  const currentSettings = path.join(environmentViewPath(environmentName), "qoder", "settings.json");
-  const sourceSettings = (await pathExists(currentSettings))
-    ? currentSettings
-    : seedFromOriginal
-      ? path.join(sourceHome, "settings.json")
-      : undefined;
-  const settingsPath = sourceSettings ?? path.join(root, "settings.json");
-  const settings = parseJsonObject(sourceSettings ? await readOptional(sourceSettings) : null, settingsPath);
-  removeHooks(settingsPath, settings, collectHooks(previousPackages, "qoder"));
-  await mergeHooks(settingsPath, settings, collectHooks(packages, "qoder"));
-  removeServers(settings, settingsPath, collectServers(previousPackages, "qoder"));
-  mergeServers(settings, settingsPath, collectServers(packages, "qoder"));
-  const settingsDestination = path.join(root, "settings.json");
-  await writeJsonAtomic(settingsDestination, settings);
-  await chmod(settingsDestination, 0o600);
-  return links;
+  const skillLinks = await linkSkills(root, packages);
+  for (const snapshot of snapshots) {
+    if (snapshot.contract.target !== "view" || snapshot.contract.content !== "opaque" || snapshot.bytes === null) continue;
+    await writeBufferPreservingFile(
+      path.join(root, snapshot.contract.relativePath),
+      Buffer.from(snapshot.bytes),
+      snapshot.mode ?? snapshot.contract.mode,
+    );
+  }
+  for (const file of plan.files) {
+    const contract = contracts.get(file.artifactId)!;
+    if (contract.target !== "view") continue;
+    const destination = path.join(root, contract.relativePath);
+    await writeTextAtomic(destination, file.content);
+    await chmod(destination, contract.mode);
+  }
+  return { adapter, artifacts, input, plan, skillLinks };
 }
 
 export function environmentViewPath(name: string): string {
@@ -518,7 +289,7 @@ export function environmentViewPath(name: string): string {
 interface ViewMetadata {
   targets?: unknown;
   skills?: unknown;
-  resources?: { codexMcpServers?: unknown; claudeMcpServers?: unknown; qoderMcpServers?: unknown } | undefined;
+  resources?: Record<string, unknown> | undefined;
 }
 
 async function previousViewMetadata(root: string): Promise<ViewMetadata> {
@@ -712,7 +483,7 @@ async function prepareStableHomeTransition(
   packages: InstalledPackage[],
   previousMetadata: ViewMetadata,
   previousPackages: InstalledPackage[],
-  seedFromOriginal: boolean,
+  builds: ReadonlyMap<Platform, BuiltAgentProjection>,
 ): Promise<StableHomeTransition> {
   const sharedSkills = await prepareSharedSkillsTransition(environment, packages, previousMetadata, previousPackages);
   const links: {
@@ -724,7 +495,10 @@ async function prepareStableHomeTransition(
   }[] = [];
   for (const platform of environment.spec.targets) {
     const home = environmentAgentHomePath(environment.metadata.name, platform);
-    for (const name of MANAGED_HOME_LINKS[platform]) {
+    const build = builds.get(platform);
+    if (!build) throw new Error(`Missing ${platform} Adapter projection`);
+    for (const artifact of build.artifacts.filter((item) => item.target === "view")) {
+      const name = artifact.relativePath;
       const destination = path.join(home, name);
       const source = path.join(environmentViewPath(environment.metadata.name), platform, name);
       const info = await lstat(destination).catch((error: NodeJS.ErrnoException) => {
@@ -742,13 +516,13 @@ async function prepareStableHomeTransition(
           links.push({ destination, source, directory: name === "skills", action: "keep" });
           continue;
         }
-        if (CREDENTIAL_FILES[platform].includes(name) && actual === path.join(sourceAgentHome(platform), name)) {
+        if (artifact.credential && actual === path.join(sourceAgentHome(platform), name)) {
           links.push({ destination, source, directory: false, action: "replace", previous: { target } });
           continue;
         }
         throw new Error(`Managed Agent home link has an unexpected target: ${destination}`);
       }
-      if (CREDENTIAL_FILES[platform].includes(name) && info.isFile()) {
+      if (artifact.credential && info.isFile()) {
         links.push({
           destination,
           source,
@@ -762,37 +536,23 @@ async function prepareStableHomeTransition(
     }
   }
 
-  let claudeState:
-    | { path: string; input: string | null; mode: number | undefined; output: string; changed: boolean }
-    | undefined;
-  if (environment.spec.targets.includes("claude")) {
-    const statePath = path.join(environmentAgentHomePath(environment.metadata.name, "claude"), ".claude.json");
-    const input = await readOptional(statePath);
-    const sourcePath = originalClaudeStatePath(sourceAgentHome("claude"));
-    const state = input === null
-      ? parseJsonObject(seedFromOriginal ? await readOptional(sourcePath) : null, sourcePath)
-      : parseJsonObject(input, statePath);
-    const currentServers = state.mcpServers;
-    if (currentServers !== undefined && (!currentServers || typeof currentServers !== "object" || Array.isArray(currentServers))) {
-      throw new Error(`Cannot merge ${statePath}: mcpServers must be an object`);
+  const homeWrites: {
+    path: string;
+    input: string | null;
+    mode: number | undefined;
+    output: string;
+    outputMode: number;
+  }[] = [];
+  for (const [platform, build] of builds) {
+    const contracts = new Map(build.artifacts.map((artifact) => [artifact.id, artifact]));
+    for (const file of build.plan.files) {
+      const contract = contracts.get(file.artifactId)!;
+      if (contract.target !== "home") continue;
+      const destination = path.join(environmentAgentHomePath(environment.metadata.name, platform), contract.relativePath);
+      const input = await readOptional(destination);
+      const info = await lstat(destination).catch(() => undefined);
+      homeWrites.push({ path: destination, input, mode: info?.mode, output: file.content, outputMode: contract.mode });
     }
-    const servers = { ...((currentServers as Record<string, unknown> | undefined) ?? {}) };
-    const previousManagedServers = new Set(stringArray(previousMetadata.resources?.claudeMcpServers));
-    for (const { server } of collectServers(previousPackages, "claude")) previousManagedServers.add(server.name);
-    for (const name of previousManagedServers) delete servers[name];
-    for (const { server } of collectServers(packages, "claude")) {
-      const desired = claudeValue(server);
-      const existing = servers[server.name];
-      if (existing !== undefined && !equal(existing, desired)) {
-        throw new Error(`Refusing to overwrite Claude MCP server ${server.name} in ${statePath}`);
-      }
-      servers[server.name] = desired;
-    }
-    if (Object.keys(servers).length > 0) state.mcpServers = servers;
-    else delete state.mcpServers;
-    const output = `${JSON.stringify(state, null, 2)}\n`;
-    const info = await lstat(statePath).catch(() => undefined);
-    claudeState = { path: statePath, input, mode: info?.mode, output, changed: input !== output };
   }
 
   return {
@@ -816,14 +576,15 @@ async function prepareStableHomeTransition(
             }
           });
         }
-        if (claudeState?.changed) {
-          await writeTextAtomic(claudeState.path, claudeState.output);
-          await chmod(claudeState.path, 0o600);
+        for (const write of homeWrites.filter((item) => item.input !== item.output)) {
+          await mkdir(path.dirname(write.path), { recursive: true, mode: 0o700 });
+          await writeTextAtomic(write.path, write.output);
+          await chmod(write.path, write.outputMode);
           rollbacks.push(async () => {
-            if (claudeState!.input === null) await rm(claudeState!.path, { force: true });
+            if (write.input === null) await rm(write.path, { force: true });
             else {
-              await writeTextAtomic(claudeState!.path, claudeState!.input);
-              if (claudeState!.mode !== undefined) await chmod(claudeState!.path, claudeState!.mode);
+              await writeTextAtomic(write.path, write.input);
+              if (write.mode !== undefined) await chmod(write.path, write.mode);
             }
           });
         }
@@ -911,51 +672,30 @@ export async function materializeEnvironmentView(
     validateViewMetadataShape(previousMetadata, path.join(destination, "view.json"));
     await linkSkills(temporary, packages);
     const skillLinks: Partial<Record<Platform, Record<string, string>>> = {};
-    if (environment.spec.targets.includes("codex")) {
-      skillLinks.codex = await buildCodexView(
+    const builds = new Map<Platform, BuiltAgentProjection>();
+    for (const platform of environment.spec.targets) {
+      const build = await buildAgentProjection(
         name,
-        path.join(temporary, "codex"),
+        platform,
+        path.join(temporary, platform),
         packages,
         hooks.previousPackages ?? [],
         seedFromOriginal,
+        previousMetadata,
       );
+      builds.set(platform, build);
+      skillLinks[platform] = build.skillLinks;
     }
-    if (environment.spec.targets.includes("claude")) {
-      skillLinks.claude = await buildClaudeView(
-        name,
-        path.join(temporary, "claude"),
-        packages,
-        hooks.previousPackages ?? [],
-        seedFromOriginal,
-      );
+    const resources: Record<string, string[]> = {};
+    for (const platform of resourceMetadataPlatforms(environment.spec.targets)) {
+      resources[resourceMetadataKey(platform)] = builds.get(platform)?.plan.resources.mcpServers ?? [];
     }
-    if (environment.spec.targets.includes("pi")) {
-      skillLinks.pi = await buildPiView(path.join(temporary, "pi"), packages);
-    }
-    if (environment.spec.targets.includes("qoder")) {
-      skillLinks.qoder = await buildQoderView(
-        name,
-        path.join(temporary, "qoder"),
-        packages,
-        hooks.previousPackages ?? [],
-        seedFromOriginal,
-      );
-    }
-    const codexMcpServers = environment.spec.targets.includes("codex")
-      ? collectServers(packages, "codex").map(({ server }) => server.name)
-      : [];
-    const claudeMcpServers = environment.spec.targets.includes("claude")
-      ? collectServers(packages, "claude").map(({ server }) => server.name)
-      : [];
-    const qoderMcpServers = environment.spec.targets.includes("qoder")
-      ? collectServers(packages, "qoder").map(({ server }) => server.name)
-      : undefined;
     await writeJsonAtomic(path.join(temporary, "view.json"), {
       environment: name,
       targets: environment.spec.targets,
       packages: packages.map((pkg) => ({ name: pkg.lock.name, version: pkg.lock.version, integrity: pkg.lock.integrity })),
       skills: skillLinks,
-      resources: { codexMcpServers, claudeMcpServers, ...(qoderMcpServers ? { qoderMcpServers } : {}) },
+      resources,
     });
     await hooks.beforePublish?.();
     const homeTransition = await prepareStableHomeTransition(
@@ -963,7 +703,7 @@ export async function materializeEnvironmentView(
       packages,
       previousMetadata,
       hooks.previousPackages ?? [],
-      seedFromOriginal,
+      builds,
     );
     await publishViewGeneration(temporary, destination, {
       ...hooks,
@@ -1006,17 +746,12 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
   const metadata = parseJsonObject(await readOptional(metadataPath), metadataPath);
   validateViewMetadataShape(metadata, metadataPath);
   const expected = packages.map((pkg) => ({ name: pkg.lock.name, version: pkg.lock.version, integrity: pkg.lock.integrity }));
-  const expectedResources = {
-    codexMcpServers: environment.spec.targets.includes("codex")
-      ? collectServers(packages, "codex").map(({ server }) => server.name)
-      : [],
-    claudeMcpServers: environment.spec.targets.includes("claude")
-      ? collectServers(packages, "claude").map(({ server }) => server.name)
-      : [],
-    ...(environment.spec.targets.includes("qoder")
-      ? { qoderMcpServers: collectServers(packages, "qoder").map(({ server }) => server.name) }
-      : {}),
-  };
+  const expectedResources: Record<string, string[]> = {};
+  for (const platform of resourceMetadataPlatforms(environment.spec.targets)) {
+    expectedResources[resourceMetadataKey(platform)] = environment.spec.targets.includes(platform)
+      ? canonicalCapabilities(packages, platform).mcpServers.map(({ server }) => server.name)
+      : [];
+  }
   if (
     metadata.environment !== environment.metadata.name ||
     !equal(metadata.targets, environment.spec.targets) ||
@@ -1061,11 +796,29 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
   }
   for (const target of environment.spec.targets) {
     const home = environmentAgentHomePath(environment.metadata.name, target);
+    const adapter = agentAdapter(target);
+    const artifactContext = {
+      environmentName: environment.metadata.name,
+      sourceHome: sourceAgentHome(target),
+      defaultSourceHome: nativeDefaultAgentHome(target),
+      environmentHome: home,
+      currentView: path.join(root, target),
+      seedFromOriginal: false,
+      originalRuntimeVariables: Object.fromEntries(
+        adapter.descriptor.runtimeVariables.map((variable) => [
+          variable.name,
+          process.env[variable.originalName] ?? process.env[variable.name],
+        ]),
+      ),
+    };
+    const artifacts = adapter.artifacts(artifactContext);
+    assertArtifactContracts(adapter, artifacts);
     const homeInfo = await lstat(home).catch(() => undefined);
     if (!homeInfo?.isDirectory() || homeInfo.isSymbolicLink()) {
       throw new Error(`Stable Agent home is missing or invalid: ${home}`);
     }
-    for (const name of MANAGED_HOME_LINKS[target]) {
+    for (const artifact of artifacts.filter((item) => item.target === "view")) {
+      const name = artifact.relativePath;
       const link = path.join(home, name);
       const info = await lstat(link).catch(() => undefined);
       if (!info?.isSymbolicLink()) throw new Error(`Managed Agent home link is missing: ${link}`);
@@ -1078,9 +831,8 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
     if (!homeSkillsInfo?.isSymbolicLink() || !(await managedLinkMatches(homeSkills, sharedSkillsRoot))) {
       throw new Error(`Agent Skills link does not use the shared Environment root: ${homeSkills}`);
     }
-    const unexpectedViewEntries = (await readdir(path.join(root, target))).filter(
-      (name) => !MANAGED_VIEW_ENTRIES[target].includes(name),
-    );
+    const managedViewEntries = new Set(["skills", ...artifacts.filter((item) => item.target === "view").map((item) => item.relativePath)]);
+    const unexpectedViewEntries = (await readdir(path.join(root, target))).filter((name) => !managedViewEntries.has(name));
     if (unexpectedViewEntries.length > 0) {
       throw new Error(`Environment view contains unmanaged Agent state: ${unexpectedViewEntries.join(", ")}`);
     }
@@ -1093,44 +845,75 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
     if (!equal((metadataSkills as Record<string, unknown>)[target], expectedSkills)) {
       throw new Error(`Environment Skill ownership metadata is stale for ${target} in ${metadataPath}`);
     }
-    if (target === "codex") {
-      const configPath = path.join(root, "codex", "config.toml");
-      const configInput = await readOptional(configPath);
-      if (configInput !== renderCodexConfig(configInput, configPath, packages)) {
-        throw new Error(`Codex MCP configuration differs from the Environment closure in ${configPath}`);
-      }
-      const hooksPath = path.join(root, "codex", "hooks.json");
-      const hooksRoot = parseJsonObject(await readOptional(hooksPath), hooksPath);
-      const expectedHooks = parseJsonObject(await readOptional(hooksPath), hooksPath);
-      removeHooks(hooksPath, expectedHooks, collectHooks(packages, "codex"));
-      await mergeHooks(hooksPath, expectedHooks, collectHooks(packages, "codex"));
-      if (!equal(hooksRoot, expectedHooks)) throw new Error(`Codex Hooks differ from the Environment closure in ${hooksPath}`);
-    } else if (target === "claude") {
-      const statePath = path.join(home, ".claude.json");
-      const state = parseJsonObject(await readOptional(statePath), statePath);
-      for (const { server } of collectServers(packages, "claude")) {
-        const actual = (state.mcpServers as Record<string, unknown> | undefined)?.[server.name];
-        if (!equal(actual, claudeValue(server))) {
-          throw new Error(`Claude MCP configuration differs from the Environment closure in ${statePath}`);
-        }
-      }
-      const settingsPath = path.join(root, "claude", "settings.json");
-      const settings = parseJsonObject(await readOptional(settingsPath), settingsPath);
-      const expectedSettings = parseJsonObject(await readOptional(settingsPath), settingsPath);
-      removeHooks(settingsPath, expectedSettings, collectHooks(packages, "claude"));
-      await mergeHooks(settingsPath, expectedSettings, collectHooks(packages, "claude"));
-      if (!equal(settings, expectedSettings)) throw new Error(`Claude Hooks differ from the Environment closure in ${settingsPath}`);
-    } else if (target === "qoder") {
-      const settingsPath = path.join(root, "qoder", "settings.json");
-      const settings = parseJsonObject(await readOptional(settingsPath), settingsPath);
-      const expectedSettings = parseJsonObject(await readOptional(settingsPath), settingsPath);
-      removeHooks(settingsPath, expectedSettings, collectHooks(packages, "qoder"));
-      await mergeHooks(settingsPath, expectedSettings, collectHooks(packages, "qoder"));
-      removeServers(expectedSettings, settingsPath, collectServers(packages, "qoder"));
-      mergeServers(expectedSettings, settingsPath, collectServers(packages, "qoder"));
-      if (!equal(settings, expectedSettings)) {
-        throw new Error(`Qoder configuration differs from the Environment closure in ${settingsPath}`);
+    const snapshots = await Promise.all(artifacts.map(readArtifactSnapshot));
+    const capabilities = canonicalCapabilities(packages, target);
+    const projectionInput: AgentProjectionInput = {
+      capabilities,
+      previousCapabilities: capabilities,
+      artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
+      previousManagedMcpServers: stringArray(
+        (metadata.resources as Record<string, unknown> | undefined)?.[resourceMetadataKey(target)],
+      ),
+    };
+    const issues = adapter.diagnose(projectionInput).filter((issue) => issue.severity === "error");
+    if (issues.length > 0) throw new Error(`${adapter.descriptor.displayName} Adapter diagnostics failed: ${issues.map((issue) => issue.message).join("; ")}`);
+    const plan = adapter.plan(projectionInput);
+    const contracts = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
+    for (const file of plan.files) {
+      const contract = contracts.get(file.artifactId);
+      if (!contract) throw new Error(`${adapter.descriptor.displayName} Adapter planned undeclared artifact ${file.artifactId}`);
+      const actualPath = contract.target === "view"
+        ? path.join(root, target, contract.relativePath)
+        : path.join(home, contract.relativePath);
+      if (await readOptional(actualPath) !== file.content) {
+        throw new Error(`${adapter.descriptor.displayName} projection differs from the Environment closure in ${actualPath}`);
       }
     }
   }
+}
+
+export interface AgentCapabilityDiscovery {
+  platform: Platform;
+  result: DiscoveryResult;
+  diagnostics: Diagnostic[];
+}
+
+export async function discoverEnvironmentAgentCapabilities(
+  environment: WomaEnvironment,
+  packages: InstalledPackage[],
+): Promise<AgentCapabilityDiscovery[]> {
+  const root = environmentViewPath(environment.metadata.name);
+  const metadataPath = path.join(root, "view.json");
+  const metadata = parseJsonObject(await readOptional(metadataPath), metadataPath) as ViewMetadata;
+  const discoveries: AgentCapabilityDiscovery[] = [];
+  for (const platform of environment.spec.targets) {
+    const adapter = agentAdapter(platform);
+    const environmentHome = environmentAgentHomePath(environment.metadata.name, platform);
+    const context = {
+      environmentName: environment.metadata.name,
+      sourceHome: sourceAgentHome(platform),
+      defaultSourceHome: nativeDefaultAgentHome(platform),
+      environmentHome,
+      currentView: path.join(root, platform),
+      seedFromOriginal: false,
+      originalRuntimeVariables: Object.fromEntries(
+        adapter.descriptor.runtimeVariables.map((variable) => [
+          variable.name,
+          process.env[variable.originalName] ?? process.env[variable.name],
+        ]),
+      ),
+    };
+    const artifacts = adapter.artifacts(context);
+    assertArtifactContracts(adapter, artifacts);
+    const snapshots = await Promise.all(artifacts.map(readArtifactSnapshot));
+    const capabilities = canonicalCapabilities(packages, platform);
+    const input: AgentProjectionInput = {
+      capabilities,
+      previousCapabilities: capabilities,
+      artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
+      previousManagedMcpServers: stringArray(metadata.resources?.[resourceMetadataKey(platform)]),
+    };
+    discoveries.push({ platform, result: adapter.discover(input), diagnostics: adapter.diagnose(input) });
+  }
+  return discoveries;
 }

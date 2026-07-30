@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import path from "node:path";
+import { agentAdapter, SUPPORTED_AGENTS } from "./agents/registry.js";
 import type { Platform } from "./types.js";
 
 export interface AgentCliStatus {
@@ -10,13 +11,12 @@ export interface AgentCliStatus {
 }
 
 export const AGENT_CLI_COMMANDS: Readonly<Record<Platform, string>> = {
-  codex: "codex",
-  claude: "claude",
-  pi: "pi",
-  qoder: "qodercli",
+  codex: agentAdapter("codex").descriptor.cliCommand,
+  claude: agentAdapter("claude").descriptor.cliCommand,
+  pi: agentAdapter("pi").descriptor.cliCommand,
+  qoder: agentAdapter("qoder").descriptor.cliCommand,
+  opencode: agentAdapter("opencode").descriptor.cliCommand,
 };
-
-const PLATFORMS: readonly Platform[] = ["codex", "claude", "pi", "qoder"];
 
 async function executable(filePath: string): Promise<boolean> {
   return access(filePath, constants.X_OK).then(
@@ -45,7 +45,7 @@ export async function detectAgentCli(platform: Platform): Promise<AgentCliStatus
 
 export async function detectAgentClis(): Promise<Record<Platform, AgentCliStatus>> {
   const entries = await Promise.all(
-    PLATFORMS.map(async (platform) => [platform, await detectAgentCli(platform)] as const),
+    SUPPORTED_AGENTS.map(async (platform) => [platform, await detectAgentCli(platform)] as const),
   );
   return Object.fromEntries(entries) as Record<Platform, AgentCliStatus>;
 }

@@ -282,6 +282,7 @@ test("a Skill installed by any Agent is immediately visible to every target in o
     claudeHome: process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR,
     piHome: process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR,
     qoderHome: process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR,
+    opencodeHome: process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR,
   };
   process.env.WOMA_HOME = path.join(root, "home");
   process.env.WOMA_ENV = "tools";
@@ -289,8 +290,9 @@ test("a Skill installed by any Agent is immediately visible to every target in o
   process.env.WOMA_ORIGINAL_CLAUDE_CONFIG_DIR = path.join(root, "original-claude");
   process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR = path.join(root, "original-pi");
   process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR = path.join(root, "original-qoder");
+  process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR = path.join(root, "original-opencode");
   try {
-    const targets = ["codex", "claude", "pi", "qoder"] as const;
+    const targets = ["codex", "claude", "pi", "qoder", "opencode"] as const;
     await createEnvironment(root, "tools", [...targets]);
     await createEnvironment(root, "isolated", [...targets]);
     for (const platform of targets) {
@@ -364,6 +366,8 @@ test("a Skill installed by any Agent is immediately visible to every target in o
     else process.env.WOMA_ORIGINAL_PI_CODING_AGENT_DIR = previous.piHome;
     if (previous.qoderHome === undefined) delete process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR;
     else process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR = previous.qoderHome;
+    if (previous.opencodeHome === undefined) delete process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR = previous.opencodeHome;
     await removeTestTree(root);
   }
 });
@@ -495,6 +499,136 @@ spec:
     else process.env.WOMA_HOME = previous.womaHome;
     if (previous.qoderHome === undefined) delete process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR;
     else process.env.WOMA_ORIGINAL_QODER_CONFIG_DIR = previous.qoderHome;
+    await removeTestTree(root);
+  }
+});
+
+test("OpenCode projects shared Skills and MCP into a Woma-owned config overlay", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-opencode-view-"));
+  const previous = {
+    womaHome: process.env.WOMA_HOME,
+    womaEnvironment: process.env.WOMA_ENV,
+    opencodeHome: process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR,
+  };
+  process.env.WOMA_HOME = path.join(root, "home");
+  process.env.WOMA_ENV = "opencode-tools";
+  const originalOpenCode = path.join(root, "original-opencode");
+  process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR = originalOpenCode;
+  try {
+    const externalConfig = `{
+  // OpenCode-owned native configuration remains outside the Woma overlay.
+  "model": "user/model",
+  "mcp": {
+    "external-tools": { "type": "local", "command": ["node", "external.mjs"] },
+  },
+}
+`;
+    const externalConfigPath = path.join(originalOpenCode, "opencode.jsonc");
+    await write(externalConfigPath, externalConfig);
+    await createEnvironment(root, "opencode-tools", ["opencode"]);
+    const home = environmentAgentHomePath("opencode-tools", "opencode");
+    const view = environmentViewPath("opencode-tools");
+    const configLink = path.join(home, "opencode.json");
+    const skills = path.join(home, "skills");
+    assert.equal((await lstat(configLink)).isSymbolicLink(), true);
+    assert.equal(path.resolve(path.dirname(configLink), await readlink(configLink)), path.join(view, "opencode", "opencode.json"));
+    assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), environmentSkillsPath("opencode-tools"));
+
+    const packageRoot = path.join(root, "opencode-package");
+    await write(
+      path.join(packageRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
+metadata:
+  name: opencode-package
+  version: 1.0.0
+  description: OpenCode adapter fixture.
+spec:
+  platforms: [opencode]
+  requirements:
+    env:
+      - name: API_TOKEN
+  skills:
+    - name: opencode-skill
+      path: ./skills/opencode-skill
+  mcpServers:
+    - name: local-tools
+      transport: stdio
+      command: node
+      args: [server.mjs]
+      env: [API_TOKEN]
+    - name: remote-tools
+      transport: http
+      url: https://example.invalid/mcp
+      headers:
+        Authorization: API_TOKEN
+`,
+    );
+    await write(
+      path.join(packageRoot, "skills", "opencode-skill", "SKILL.md"),
+      "---\nname: opencode-skill\ndescription: OpenCode fixture.\n---\n\nUse the fixture.\n",
+    );
+    await write(path.join(home, "storage", "session.db"), Buffer.from([0, 7, 30, 255]));
+    await installIntoEnvironment(root, "opencode-tools", packageRoot);
+
+    assert.match(await readFile(path.join(skills, "opencode-skill", "SKILL.md"), "utf8"), /OpenCode fixture/);
+    const config = JSON.parse(await readFile(configLink, "utf8"));
+    assert.equal(config.$schema, "https://opencode.ai/config.json");
+    assert.equal(config.model, undefined);
+    assert.deepEqual(config.mcp["local-tools"], {
+      type: "local",
+      command: ["node", "server.mjs"],
+      enabled: true,
+      environment: { API_TOKEN: "{env:API_TOKEN}" },
+    });
+    assert.deepEqual(config.mcp["remote-tools"], {
+      type: "remote",
+      url: "https://example.invalid/mcp",
+      enabled: true,
+      headers: { Authorization: "{env:API_TOKEN}" },
+    });
+    assert.equal(config.mcp["external-tools"], undefined);
+    assert.equal(await readFile(externalConfigPath, "utf8"), externalConfig);
+    assert.deepEqual((await environmentInfo(root)).environmentMcpServers, [
+      { name: "external-tools", origin: "external", platforms: ["opencode"] },
+    ]);
+    assert.deepEqual(await readFile(path.join(home, "storage", "session.db")), Buffer.from([0, 7, 30, 255]));
+    const metadata = JSON.parse(await readFile(path.join(view, "view.json"), "utf8"));
+    assert.deepEqual(metadata.resources.opencodeMcpServers, ["local-tools", "remote-tools"]);
+
+    const conflictingRoot = path.join(root, "opencode-conflict");
+    await write(
+      path.join(conflictingRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
+metadata:
+  name: opencode-conflict
+  version: 1.0.0
+  description: OpenCode external ownership conflict fixture.
+spec:
+  platforms: [opencode]
+  mcpServers:
+    - name: external-tools
+      transport: stdio
+      command: node
+      args: [managed.mjs]
+`,
+    );
+    const beforeConfig = await readFile(configLink);
+    await assert.rejects(
+      installIntoEnvironment(root, "opencode-tools", conflictingRoot),
+      /OpenCode MCP server external-tools conflicts with an external native configuration/,
+    );
+    assert.deepEqual(await readFile(configLink), beforeConfig);
+    assert.equal(await readFile(externalConfigPath, "utf8"), externalConfig);
+    assert.equal((await doctorEnvironment(root, "opencode-tools")).find((check) => check.label === "view")?.status, "ok");
+  } finally {
+    if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
+    else process.env.WOMA_HOME = previous.womaHome;
+    if (previous.womaEnvironment === undefined) delete process.env.WOMA_ENV;
+    else process.env.WOMA_ENV = previous.womaEnvironment;
+    if (previous.opencodeHome === undefined) delete process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR = previous.opencodeHome;
     await removeTestTree(root);
   }
 });

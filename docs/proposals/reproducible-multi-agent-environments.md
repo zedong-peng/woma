@@ -1,5 +1,11 @@
 # Reproducible multi-Agent environments
 
+> [!NOTE]
+> The formal [Agent Adapter contract](../agent-adapters.md), canonical projection boundary, shared publisher, and built-in
+> OpenCode Adapter are implemented. Runtime locking, neutral manifest migration, per-Agent native capability directories,
+> `installMethod`, and capture remain proposal work. The current v1 manifest therefore still accepts legacy platform
+> selectors, interpreted only by the canonical compatibility layer.
+
 Status: proposed
 
 Related discussions: [#65](https://github.com/zedong-peng/woma/issues/65),
@@ -43,7 +49,7 @@ or select Woma Environments in the same way that research scripts use Conda Envi
 
 The current Environment recipe records target Agent names while the corresponding executables are discovered from the
 ambient `PATH`. Package locks and Environment bundles therefore reproduce the capability closure but not the Agent runtimes
-that interpret it. A machine with different Codex, Claude Code, Pi, or Qoder CLI versions can materialize the same lock and
+that interpret it. A machine with different Codex, Claude Code, Pi, Qoder CLI, or OpenCode versions can materialize the same lock and
 observe different behavior.
 
 The current multi-target implementation also links every selected Agent to one writable Environment Skill directory. That
@@ -444,8 +450,9 @@ and explicit recreation over compatibility branches that manufacture trusted run
 
 Implementation should be split into independently reviewable changes:
 
-1. Extract canonical capability closure construction, digesting, and per-Agent Adapter interfaces from view publication;
-   remove Agent and platform fields from capability Package manifests.
+1. Extract canonical capability closure construction and per-Agent Adapter interfaces from view publication, with one shared
+   publisher. This boundary and the first new Adapter (OpenCode) are implemented; canonical digesting and removal of Agent and
+   platform fields from capability Package manifests remain a separate schema migration.
 2. Introduce the multi-runtime recipe and lock, Runtime Provider trust contract, immutable Runtime Store, and Environment
    executable directory.
 3. Replace the shared writable Skill root with per-Agent native directories and immutable Package projections.

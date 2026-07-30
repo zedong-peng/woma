@@ -11,7 +11,7 @@ metadata:
   description: Search and analyze repositories with a repeatable evidence method.
   tags: [research]
 spec:
-  platforms: [codex, claude, pi, qoder]
+  platforms: [codex, claude, pi, qoder, opencode]
   dependencies:
     - name: paper-search
       version: ^1.0.0
@@ -38,7 +38,7 @@ spec:
       command: npx
       args: [-y, "@modelcontextprotocol/server-github"]
       env: [GITHUB_TOKEN]
-      platforms: [codex, claude]
+      platforms: [codex, claude, opencode]
   hooks:
     - event: PostToolUse
       matcher: Edit|Write
@@ -51,7 +51,7 @@ spec:
 
 Package authors use `woma.yaml`, but existing Skills do not need to add one before installation. When no root manifest exists, the Source Adapter accepts either one root `SKILL.md` or one conventional collection of direct `skills/*/SKILL.md` children. It generates the manifest only in temporary staging and then applies the same Package schema and validation shown in this document.
 
-Implicit Packages contain Skills only and support Codex, Claude, Pi, and Qoder. Woma does not infer dependencies, entrypoints, MCP servers, Hooks, requirements, or workflow semantics from Skill prose. The root manifest always takes precedence when present, including over raw Skill layouts. Nested discovery is forbidden, so a repository containing multiple Package directories must be installed one Package directory at a time.
+Implicit Packages contain Skills only and support Codex, Claude, Pi, Qoder, and OpenCode. Woma does not infer dependencies, entrypoints, MCP servers, Hooks, requirements, or workflow semantics from Skill prose. The root manifest always takes precedence when present, including over raw Skill layouts. Nested discovery is forbidden, so a repository containing multiple Package directories must be installed one Package directory at a time.
 
 The adapter derives a standalone Package name and description from Skill YAML frontmatter. For a multi-Skill source, it derives the Package name from the source directory or Git repository and includes every direct conventional Skill in deterministic directory-name order. Duplicate Skill names and malformed metadata are rejected. Local content or the resolved Git commit supplies an informational SemVer build version; the lock remains authoritative for source, exact resolution, normalized integrity, and cache identity.
 
@@ -93,13 +93,13 @@ mcpServers:
 
 ## Target mapping
 
-| Package resource | Codex Environment view | Claude Code Environment view | Pi Environment view | Qoder Environment view |
-| --- | --- | --- | --- | --- |
-| Skill | `home/codex/skills/<name>` | `home/claude/skills/<name>` | `home/pi/skills/<name>` | `home/qoder/skills/<name>` |
-| MCP server | managed block in `view/codex/config.toml` | entry in `home/claude/.claude.json` | unsupported | entry in `view/qoder/settings.json` |
-| Hook | entry in `view/codex/hooks.json` | entry in `view/claude/settings.json` | unsupported | entry in `view/qoder/settings.json` |
+| Package resource | Codex Environment view | Claude Code Environment view | Pi Environment view | Qoder Environment view | OpenCode Environment view |
+| --- | --- | --- | --- | --- | --- |
+| Skill | `home/codex/skills/<name>` | `home/claude/skills/<name>` | `home/pi/skills/<name>` | `home/qoder/skills/<name>` | `home/opencode/skills/<name>` |
+| MCP server | managed block in `view/codex/config.toml` | entry in `home/claude/.claude.json` | unsupported | entry in `view/qoder/settings.json` | entry in `view/opencode/opencode.json` |
+| Hook | entry in `view/codex/hooks.json` | entry in `view/claude/settings.json` | unsupported | entry in `view/qoder/settings.json` | unsupported |
 
-All four Agent Skill paths resolve to the Environment's real `home/skills` directory. Woma-managed entries there link through the atomic `view/skills/<name>` projection; ordinary entries written through any target path are immediately visible through the other target paths. Pi currently consumes Woma Skills through its Agent Skills support. A Package that includes Pi in `spec.platforms` must restrict every MCP server and Hook to supported platforms such as `platforms: [codex, claude]`; validation rejects resources that target Pi. Qoder supports Skills, MCP servers, and Hooks through its Claude-compatible `settings.json`; Woma does not capture, migrate, or seed Qoder credentials or sessions. Omitting `spec.platforms` retains the compatibility default `[codex, claude]`.
+All five Agent Skill paths resolve to the Environment's real `home/skills` directory. Woma-managed entries there link through the atomic `view/skills/<name>` projection; ordinary entries written through any target path are immediately visible through the other target paths. Pi consumes Woma Skills but does not support Package MCP servers or Hooks. OpenCode consumes Skills and MCP servers but has no canonical Hook mapping. Packages must use resource `platforms` selectors to exclude unsupported combinations; validation rejects them instead of silently dropping resources. Qoder supports Skills, MCP servers, and Hooks through its Claude-compatible `settings.json`; Woma does not capture, migrate, or seed Qoder credentials or sessions. Omitting `spec.platforms` retains the compatibility default `[codex, claude]`.
 
 Codex owns the hidden `home/skills/.system` entry as mutable per-Environment state. It is not a Package Skill and is excluded from Environment-local Skill inventory, Package Store entries, ownership metadata, locks, and bundles. A non-hidden ordinary Skill added beside `.system` through any target immediately belongs to that Environment with origin `external`; it becomes an immutable Package only when installed explicitly through `woma install`.
 

@@ -1,6 +1,6 @@
 # Woma
 
-Conda-style Environment and Package management for Codex, Claude Code, Pi, and Qoder CLI.
+Conda-style Environment and Package management for Codex, Claude Code, Pi, Qoder CLI, and OpenCode.
 
 > [!NOTE]
 > **This project is in early development and is not published to the npm Registry.**
@@ -10,7 +10,7 @@ Conda-style Environment and Package management for Codex, Claude Code, Pi, and Q
 
 ## Features
 
-- **Named Environments** for Codex, Claude Code, Pi, Qoder CLI, or any combination.
+- **Named Environments** for Codex, Claude Code, Pi, Qoder CLI, OpenCode, or any combination.
 - **Reusable Packages** containing Skills, MCP servers, hooks, and dependencies.
 - **Direct Skill installation** from standalone and conventional multi-Skill sources.
 - **Immediate cross-Agent Skill sharing** inside each Environment alongside explicit migration into reusable Packages.
@@ -20,7 +20,7 @@ Conda-style Environment and Package management for Codex, Claude Code, Pi, and Q
 ## Requirements
 
 - **Node.js 20 or newer**
-- Codex, Claude Code, Pi, and/or Qoder CLI
+- Codex, Claude Code, Pi, Qoder CLI, and/or OpenCode
 - Bash or Zsh for shell activation
 
 ## Installation
@@ -67,7 +67,7 @@ woma install builtin:woma-project-memory
 
 The Skill reads project-owned `.woma/memory.md` only for relevant work and writes it only on an explicit request. Woma never installs or invokes it automatically and never uses it to modify Agent-native memory, `AGENTS.md`, or `CLAUDE.md`.
 
-Use `claude` instead of `codex` to start Claude Code. Pi and Qoder are opt-in because the existing `base` compatibility default targets Codex and Claude; create their Environments explicitly:
+Use `claude` instead of `codex` to start Claude Code. Pi, Qoder, and OpenCode are opt-in because the existing `base` compatibility default targets Codex and Claude; create their Environments explicitly:
 
 ```bash
 woma create --name pi-work --target pi
@@ -77,6 +77,10 @@ pi
 woma create --name qoder-work --target qoder
 woma activate qoder-work
 qodercli
+
+woma create --name opencode-work --target opencode
+woma activate opencode-work
+opencode
 ```
 
 ### Existing State
@@ -120,7 +124,7 @@ woma rename --name performance performance-v2
 woma env remove performance-v2
 ```
 
-**Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex, Claude, Pi, or Qoder process after switching Environments or installing Packages.
+**Activate the intended Environment before starting or resuming an Agent session.** Start a new Codex, Claude, Pi, Qoder, or OpenCode process after switching Environments or installing Packages.
 
 ## Manage Packages
 
@@ -135,14 +139,15 @@ woma remove downloaded-skill
 
 ## Configure Agents
 
-Every target Agent's `skills` path resolves to one stable Environment-level directory. An ordinary Skill installed through Codex, Claude Code, Pi, or Qoder CLI is therefore immediately visible to every other target in the same Environment without `woma sync`. It remains isolated from other Environments and appears in `woma list` as `external`.
+Every target Agent's `skills` path resolves to one stable Environment-level directory. An ordinary Skill installed through Codex, Claude Code, Pi, Qoder CLI, or OpenCode is therefore immediately visible to every other target in the same Environment without `woma sync`. It remains isolated from other Environments and appears in `woma list` as `external`.
 
 - **Codex:** the automatic `codex` Environment begins with a one-time copy of supported provider configuration and Hooks; `base` begins clean. Log in separately and edit `$CODEX_HOME/config.toml` for later changes. Codex owns the ordinary `$CODEX_HOME/auth.json`; Woma does not seed it from the original home or include it in managed views. Codex also owns the hidden `$CODEX_HOME/skills/.system` entry, which Woma preserves as opaque Environment state and never adopts as an ordinary Skill.
 - **Claude Code:** edit `$CLAUDE_CONFIG_DIR/settings.json`; OAuth login may create `$CLAUDE_CONFIG_DIR/.credentials.json`.
 - **Pi:** use `/login`, `/model`, or files under `$PI_CODING_AGENT_DIR`. Woma links `$PI_CODING_AGENT_DIR/skills` to the shared Environment Skill directory; Pi owns every other file in that Environment home.
 - **Qoder CLI:** log in through `qodercli` in the activated Environment. Woma manages `$QODER_CONFIG_DIR/settings.json` (Package MCP servers and Hooks) and links `$QODER_CONFIG_DIR/skills` to the shared Environment Skill directory; Qoder owns every other file in that Environment home. A new Qoder Environment does not copy the original `~/.qoder` state.
+- **OpenCode:** Woma sets `OPENCODE_CONFIG` to the Environment's managed `opencode.json` MCP overlay and `OPENCODE_CONFIG_DIR` to its stable OpenCode home. The home `skills/` path uses the shared Environment Skill directory. Woma does not override global `XDG_*` roots, copy provider credentials or MCP OAuth tokens, or manage OpenCode Hooks and Plugins.
 
-Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time; their Agent homes, credentials, provider configuration, sessions, and Codex system Skills remain isolated. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
+Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time. Agent state under a dedicated selected home remains isolated; OpenCode is the explicit exception because it has no dedicated data-home override, so only its Woma-managed Skills and MCP overlay are Environment-isolated while native authentication, OAuth, sessions, and caches may remain shared in OpenCode's ambient locations. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
 
 Woma core manages capabilities and isolated Agent Environments, not Agent Memory or project context. It does not inject discovery instructions or read, write, package, or delete Memory data. The optional Project Memory Skill operates on its documented project-owned file only when selected; Agents and users otherwise choose how context is loaded and persisted.
 
@@ -169,7 +174,7 @@ woma inspect builtin:auto-research
 
 `woma env list` shows registered Environment names and marks the one selected by the current shell; it does not perform a health check. Use `woma doctor --name <environment>` to validate an Environment.
 
-`woma info` reports the native `codex`, `claude`, `pi`, and `qodercli` executables available on the current `PATH`. `woma doctor` checks only the selected Environment's targets and warns when a target CLI is unavailable without treating the portable Environment itself as corrupt.
+`woma info` reports the native `codex`, `claude`, `pi`, `qodercli`, and `opencode` executables available on the current `PATH`. `woma doctor` checks only the selected Environment's targets and warns when a target CLI is unavailable without treating the portable Environment itself as corrupt.
 
 `woma list` and `woma info --json` inspect ordinary Environment-local Skills directly from the shared Skill directory and report every target that can use them. They do not copy those external Skills into the Package Store, recipe, lock, or bundle. Install a Skill through `woma install` only when it should become a reusable, locked Woma Package. Hidden entries, including `.system`, remain opaque Agent-owned state, and Environment-local Skills never cross Environment boundaries.
 
@@ -194,6 +199,7 @@ woma install builtin:woma-package-builder
 - [Architecture and isolation model](docs/design.md)
 - [Proposed reproducible multi-Agent Environment model](docs/proposals/reproducible-multi-agent-environments.md)
 - [Agent Harness behavior reference](docs/agent-harness-behavior.md)
+- [Agent Adapter contract](docs/agent-adapters.md)
 - [Package manifest](docs/manifest.md)
 - [Optional Project Memory](docs/project-memory.md)
 - [Security](SECURITY.md)

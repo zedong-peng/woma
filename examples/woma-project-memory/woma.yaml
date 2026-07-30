@@ -6,7 +6,7 @@ metadata:
   description: Load and maintain opt-in, project-owned Woma context without modifying Agent-owned memory or configuration.
   tags: [memory, project-context]
 spec:
-  platforms: [codex, claude, pi, qoder]
+  platforms: [codex, claude, pi, qoder, opencode]
   entrypoints:
     - name: manage-project-memory
       skill: woma-project-memory

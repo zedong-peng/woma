@@ -1,5 +1,5 @@
-export type Platform = "codex" | "claude" | "pi" | "qoder";
-export type CodexClaudePlatform = Exclude<Platform, "pi" | "qoder">;
+export type Platform = "codex" | "claude" | "pi" | "qoder" | "opencode";
+export type CodexClaudePlatform = "codex" | "claude";
 export type ConfigurablePlatform = Exclude<Platform, "pi">;
 
 export interface EnvironmentRequirement {

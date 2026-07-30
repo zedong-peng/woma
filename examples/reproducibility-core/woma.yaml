@@ -6,7 +6,7 @@ metadata:
   description: Shared evidence, environment capture, and failure-recording discipline for technical work.
   tags: [reproducibility, evidence]
 spec:
-  platforms: [codex, claude, pi, qoder]
+  platforms: [codex, claude, pi, qoder, opencode]
   requirements:
     env: []
     commands: [git]
