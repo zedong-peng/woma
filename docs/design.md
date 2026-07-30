@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > This document describes the current implemented architecture. The proposed next Environment model is documented in
-> [Reproducible single-Agent environments](proposals/single-agent-environments.md).
+> [Reproducible multi-Agent environments](proposals/reproducible-multi-agent-environments.md).
 
 ## Ownership boundaries
 
