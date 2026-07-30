@@ -102,7 +102,6 @@ export interface EnvironmentRoot {
 }
 
 export interface WomaEnvironment {
-  apiVersion: "woma.dev/environment-v1" | "woma.dev/environment-v2";
   kind: "WomaEnvironment";
   metadata: {
     name: string;

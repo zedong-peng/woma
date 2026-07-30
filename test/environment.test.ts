@@ -394,7 +394,6 @@ test("environment recipes reject duplicate roots", () => {
   assert.throws(
     () =>
       parseEnvironment(`
-apiVersion: woma.dev/environment-v1
 kind: WomaEnvironment
 metadata:
   name: research
@@ -410,11 +409,26 @@ spec:
   );
 });
 
-test("environment recipes reject legacy command bindings", () => {
+test("environment recipes reject schema version fields", () => {
   assert.throws(
     () =>
       parseEnvironment(`
 apiVersion: woma.dev/environment-v1
+kind: WomaEnvironment
+metadata:
+  name: research
+spec:
+  targets: [codex]
+  roots: []
+`),
+    /Unrecognized key: "apiVersion"/,
+  );
+});
+
+test("environment recipes reject legacy command bindings", () => {
+  assert.throws(
+    () =>
+      parseEnvironment(`
 kind: WomaEnvironment
 metadata:
   name: research
@@ -576,7 +590,7 @@ test("activation leaves Agent instruction files stable across target changes", {
   }
 });
 
-test("failed discovery validation leaves project initialization unchanged", { concurrency: false }, async () => {
+test("activation ignores obsolete discovery blocks and leaves project files unchanged", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-project-rollback-"));
   const project = path.join(root, "project");
   process.env.WOMA_HOME = path.join(root, "home");
@@ -586,7 +600,7 @@ test("failed discovery validation leaves project initialization unchanged", { co
     const invalid = "<!-- >>> woma:project-memory -->\nmodified\n<!-- <<< woma:project-memory -->\n";
     await writeFile(path.join(project, "CLAUDE.md"), invalid, "utf8");
 
-    await assert.rejects(activateEnvironment(project, "base"), /discovery block was modified/);
+    await activateEnvironment(project, "base");
 
     assert.equal(await readFile(path.join(project, "CLAUDE.md"), "utf8"), invalid);
     await assert.rejects(access(path.join(project, ".woma")));
@@ -613,66 +627,6 @@ test("environment removal is guarded by the current shell only", { concurrency: 
   } finally {
     if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
     else process.env.WOMA_ENV = previousEnvironment;
-    await removeTestTree(root);
-  }
-});
-
-test("legacy Environments drop implicit helpers without deleting user Memory", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-v1-migration-"));
-  process.env.WOMA_HOME = path.join(root, "home");
-  try {
-    const memoryPackage = path.join(root, "memory-package");
-    await mkdir(path.join(memoryPackage, "skills", "woma-project-memory"), { recursive: true });
-    await writeFile(
-      path.join(memoryPackage, "woma.yaml"),
-      `apiVersion: woma.dev/v1
-kind: Woma
-metadata:
-  name: woma-project-memory
-  version: 0.1.0
-  description: Legacy migration fixture.
-spec:
-  platforms: [codex]
-  skills:
-    - name: woma-project-memory
-      path: ./skills/woma-project-memory
-`,
-      "utf8",
-    );
-    await writeFile(
-      path.join(memoryPackage, "skills", "woma-project-memory", "SKILL.md"),
-      "---\nname: woma-project-memory\ndescription: Legacy fixture.\n---\nLegacy.\n",
-      "utf8",
-    );
-    await createEnvironment(root, "tools", ["codex"]);
-    await installIntoEnvironment(root, "tools", "builtin:woma-package-builder");
-    await installIntoEnvironment(root, "tools", memoryPackage);
-    const recipePath = environmentPath(root, "tools");
-    const lockPath = environmentLockPath(root, "tools");
-    const recipe = (await readFile(recipePath, "utf8"))
-      .replace("woma.dev/environment-v2", "woma.dev/environment-v1")
-      .replace(`source: file:${memoryPackage}`, "source: builtin:woma-project-memory");
-    const lock = JSON.parse(await readFile(lockPath, "utf8"));
-    lock.packages["woma-project-memory"].source = "builtin:woma-project-memory";
-    const userMemory = path.join(root, ".woma", "memory", "project.md");
-    await mkdir(path.dirname(userMemory), { recursive: true });
-    await writeFile(userMemory, "# User-owned Memory\n", "utf8");
-    await writeFile(recipePath, recipe, "utf8");
-    await writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
-    await removeTestTree(path.join(process.env.WOMA_HOME, "packages", "woma-project-memory"));
-    await removeTestTree(path.join(process.env.WOMA_HOME, "packages", "woma-package-builder"));
-
-    const migrated = await environmentSnapshot(root, "tools");
-
-    assert.equal(migrated.environment.apiVersion, "woma.dev/environment-v2");
-    assert.deepEqual(migrated.environment.spec.roots, []);
-    assert.deepEqual(migrated.lock.packages, {});
-    assert.equal((await readEnvironment(root, "tools")).apiVersion, "woma.dev/environment-v2");
-    assert.deepEqual((await readEnvironmentLock(root, "tools")).packages, {});
-    assert.equal(await readFile(userMemory, "utf8"), "# User-owned Memory\n");
-    await assert.rejects(access(path.join(environmentViewPath("tools"), "codex", "skills", "woma-project-memory")), /ENOENT/);
-    await assert.rejects(access(path.join(environmentViewPath("tools"), "codex", "skills", "woma-package-builder")), /ENOENT/);
-  } finally {
     await removeTestTree(root);
   }
 });
@@ -790,8 +744,8 @@ test("existing base initialization rejects missing lock and view state", { concu
   }
 });
 
-test("existing base initialization upgrades a legacy view containing Agent state", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-legacy-view-"));
+test("existing base initialization rebuilds a damaged current view without adopting Agent state", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-base-damaged-view-"));
   process.env.WOMA_HOME = path.join(root, "home");
   const previousCodexHome = process.env.WOMA_ORIGINAL_CODEX_HOME;
   process.env.WOMA_ORIGINAL_CODEX_HOME = path.join(root, "original-codex");
@@ -799,12 +753,12 @@ test("existing base initialization upgrades a legacy view containing Agent state
     await mkdir(process.env.WOMA_ORIGINAL_CODEX_HOME, { recursive: true });
     await writeFile(path.join(process.env.WOMA_ORIGINAL_CODEX_HOME, "auth.json"), '{"api_key":"latest"}\n', "utf8");
     await ensureBaseEnvironment(root);
-    const legacyState = path.join(environmentViewPath("base"), "codex", "goals_1.sqlite");
-    await writeFile(legacyState, "legacy runtime state\n", "utf8");
+    const unmanagedState = path.join(environmentViewPath("base"), "codex", "goals_1.sqlite");
+    await writeFile(unmanagedState, "unmanaged runtime state\n", "utf8");
 
     await ensureBaseEnvironment(root);
 
-    await assert.rejects(access(path.join(environmentViewPath("base"), "codex", "goals_1.sqlite")), /ENOENT/);
+    await assert.rejects(access(unmanagedState), /ENOENT/);
     await assert.rejects(access(path.join(environmentAgentHomePath("base", "codex"), "auth.json")), /ENOENT/);
   } finally {
     if (previousCodexHome === undefined) delete process.env.WOMA_ORIGINAL_CODEX_HOME;
@@ -976,32 +930,6 @@ test("doctor checks native CLIs only for Environment targets", { concurrency: fa
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
-    await removeTestTree(root);
-  }
-});
-
-test("doctor reports modified legacy Memory discovery instructions", { concurrency: false }, async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "woma-environment-context-doctor-"));
-  const previousEnvironment = process.env.WOMA_ENV;
-  process.env.WOMA_HOME = path.join(root, "home");
-  try {
-    await createEnvironment(root, "research", ["codex"]);
-    await installIntoEnvironment(root, "research", "builtin:paper-search");
-    process.env.WOMA_ENV = "research";
-    const agentsPath = path.join(root, "AGENTS.md");
-    await writeFile(
-      agentsPath,
-      "<!-- >>> woma:project-memory -->\nmodified\n<!-- <<< woma:project-memory -->\n",
-      "utf8",
-    );
-
-    const checks = await doctorEnvironment(root, "research");
-
-    assert.equal(checks.find((check) => check.label === "legacy-project-memory")?.status, "fail");
-    await assert.rejects(activateEnvironment(root, "base"), /discovery block was modified/);
-  } finally {
-    if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
-    else process.env.WOMA_ENV = previousEnvironment;
     await removeTestTree(root);
   }
 });

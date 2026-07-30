@@ -1,7 +1,7 @@
 import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, rmdir, stat, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { parse as parseToml } from "smol-toml";
 import { womaHome, pathExists, writeBufferPreservingFile, writeJsonAtomic, writeTextAtomic } from "./fs.js";
 import type { ConfigurablePlatform, WomaEnvironment, HookSpec, InstalledPackage, McpServer, Platform } from "./types.js";
@@ -456,7 +456,6 @@ export function environmentViewPath(name: string): string {
 }
 
 interface ViewMetadata {
-  viewVersion?: unknown;
   targets?: unknown;
   skills?: unknown;
   resources?: { codexMcpServers?: unknown; claudeMcpServers?: unknown; qoderMcpServers?: unknown } | undefined;
@@ -466,14 +465,12 @@ async function previousViewMetadata(root: string): Promise<ViewMetadata> {
   return parseJsonObject(await readOptional(path.join(root, "view.json")), path.join(root, "view.json")) as ViewMetadata;
 }
 
-export async function environmentViewNeedsUpgrade(name: string): Promise<boolean> {
-  const root = environmentViewPath(name);
-  if ((await previousViewMetadata(root)).viewVersion === 1) return true;
-  const legacyCodexAuth = await lstat(path.join(root, "codex", "auth.json")).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  });
-  return legacyCodexAuth !== undefined;
+function validateViewMetadataShape(metadata: ViewMetadata, metadataPath: string): void {
+  const allowed = new Set(["environment", "targets", "packages", "skills", "resources"]);
+  const unexpected = Object.keys(metadata).filter((key) => !allowed.has(key));
+  if (unexpected.length > 0) {
+    throw new Error(`Environment view metadata contains unexpected fields at ${metadataPath}: ${unexpected.join(", ")}`);
+  }
 }
 
 function stringArray(value: unknown): string[] {
@@ -492,15 +489,6 @@ function metadataSkillNames(metadata: ViewMetadata, platform: Platform): string[
   return Object.keys(target as Record<string, unknown>);
 }
 
-function metadataSkillSources(metadata: ViewMetadata, platform: Platform): Record<string, string> {
-  if (!metadata.skills || typeof metadata.skills !== "object" || Array.isArray(metadata.skills)) return {};
-  const target = (metadata.skills as Record<string, unknown>)[platform];
-  if (!target || typeof target !== "object" || Array.isArray(target)) return {};
-  return Object.fromEntries(
-    Object.entries(target as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-  );
-}
-
 function packageSkillNames(packages: InstalledPackage[]): string[] {
   return packages.flatMap((pkg) => pkg.manifest.spec.skills.map((skill) => skill.name));
 }
@@ -514,143 +502,9 @@ async function managedLinkMatches(link: string, source: string): Promise<boolean
   return path.resolve(path.dirname(link), await readlink(link)) === source;
 }
 
-function normalizedRelative(filePath: string): string {
-  return filePath.split(path.sep).join("/");
-}
-
-function relativeInside(root: string, candidate: string): string | undefined {
-  const relative = path.relative(root, candidate);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
-  return normalizedRelative(relative || ".");
-}
-
-async function resolvedSymlinkTarget(link: string, target: string): Promise<string> {
-  return path.resolve(await realpath(path.dirname(link)), target);
-}
-
-async function skillEntryFingerprint(root: string): Promise<string> {
-  const hash = createHash("sha256");
-  const rootInfo = await lstat(root);
-  const absoluteRoot = rootInfo.isDirectory() ? await realpath(root) : path.resolve(root);
-  const update = (kind: string, relative: string, detail: unknown): void => {
-    hash.update(`${kind}:${JSON.stringify([normalizedRelative(relative || "."), detail])}\0`);
-  };
-  const visit = async (current: string, relative: string): Promise<void> => {
-    const info = await lstat(current);
-    if (info.isSymbolicLink()) {
-      const target = await readlink(current);
-      const resolved = await resolvedSymlinkTarget(current, target);
-      const internal = relativeInside(absoluteRoot, resolved);
-      update("link", relative, internal === undefined ? { external: resolved } : { internal });
-      return;
-    }
-    if (info.isDirectory()) {
-      update("directory", relative, null);
-      for (const name of (await readdir(current)).sort()) {
-        await visit(path.join(current, name), path.join(relative, name));
-      }
-      return;
-    }
-    if (info.isFile()) {
-      update("file", relative, { executable: info.mode & 0o111, size: info.size });
-      hash.update(await readFile(current));
-      hash.update("\0");
-      return;
-    }
-    throw new Error(`Skill entry contains an unsupported filesystem object: ${current}`);
-  };
-  await visit(root, "");
-  return hash.digest("hex");
-}
-
-async function equivalentSkillEntries(left: string, right: string): Promise<boolean> {
-  const [leftFingerprint, rightFingerprint] = await Promise.all([
-    skillEntryFingerprint(left),
-    skillEntryFingerprint(right),
-  ]);
-  return leftFingerprint === rightFingerprint;
-}
-
-type SkillLinkType = "dir" | "file" | "junction" | undefined;
-
-interface MovedSkillEntry {
-  source: string;
-  destination: string;
-  originalLinkTarget?: string;
-  destinationLinkTarget?: string;
-  linkType?: SkillLinkType;
-}
-
-async function moveSkillEntry(source: string, destination: string): Promise<MovedSkillEntry> {
-  const info = await lstat(source);
-  if (!info.isSymbolicLink()) {
-    await rename(source, destination);
-    return { source, destination };
-  }
-  const originalLinkTarget = await readlink(source);
-  const resolvedTarget = await resolvedSymlinkTarget(source, originalLinkTarget);
-  const targetInfo = process.platform === "win32" ? await stat(source).catch(() => undefined) : undefined;
-  const linkType: SkillLinkType = process.platform === "win32"
-    ? (targetInfo?.isDirectory() ? "junction" : "file")
-    : undefined;
-  const destinationLinkTarget = linkType === "junction"
-    ? resolvedTarget
-    : path.relative(path.dirname(destination), resolvedTarget) || ".";
-  await symlink(destinationLinkTarget, destination, linkType);
-  try {
-    await rm(source, { force: true });
-  } catch (error) {
-    await rm(destination, { force: true });
-    throw error;
-  }
-  return { source, destination, originalLinkTarget, destinationLinkTarget, linkType };
-}
-
-async function restoreMovedSkillEntry(entry: MovedSkillEntry): Promise<void> {
-  if (await lstat(entry.source).catch(() => undefined)) {
-    throw new Error(`Cannot restore Agent Skill because its original path is occupied: ${entry.source}`);
-  }
-  if (entry.originalLinkTarget === undefined) {
-    await rename(entry.destination, entry.source);
-    return;
-  }
-  const destinationInfo = await lstat(entry.destination).catch(() => undefined);
-  if (!destinationInfo?.isSymbolicLink() || await readlink(entry.destination) !== entry.destinationLinkTarget) {
-    throw new Error(`Refusing to restore a modified shared Skill path: ${entry.destination}`);
-  }
-  await symlink(entry.originalLinkTarget, entry.source, entry.linkType);
-  try {
-    await rm(entry.destination, { force: true });
-  } catch (error) {
-    await rm(entry.source, { force: true });
-    throw error;
-  }
-}
-
-async function makeDirectoriesWritable(root: string): Promise<void> {
-  const info = await lstat(root).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (!info || info.isSymbolicLink() || !info.isDirectory()) return;
-  await chmod(root, (info.mode & 0o777) | 0o700);
-  for (const name of await readdir(root)) await makeDirectoriesWritable(path.join(root, name));
-}
-
 interface AgentSkillsRootPlan {
   root: string;
-  kind: "shared" | "missing" | "legacy-link" | "legacy-directory";
-  linkTarget?: string;
-  managedLinks: { name: string; target: string }[];
-  externalEntries: { name: string; source: string }[];
-}
-
-interface DuplicateSkillEntry {
-  name: string;
-  source: string;
-  canonicalSource: string;
-  sourceRoot: string;
-  canonicalRoot: string;
+  exists: boolean;
 }
 
 async function prepareSharedSkillsTransition(
@@ -675,62 +529,31 @@ async function prepareSharedSkillsTransition(
     throw new Error(`Environment Skills root must be a real directory: ${skillsRoot}`);
   }
 
-  const externalOwners = new Map<string, { root: string; source: string }>();
-  const duplicateEntries: DuplicateSkillEntry[] = [];
-  if (skillsInfo) {
-    for (const name of await readdir(skillsRoot)) {
-      if (!previousNames.has(name)) externalOwners.set(name, { root: skillsRoot, source: path.join(skillsRoot, name) });
-    }
-  }
-
-  const registerExternalEntry = async (name: string, source: string, root: string): Promise<boolean> => {
-    const owner = externalOwners.get(name);
-    if (!owner) {
-      externalOwners.set(name, { root, source });
-      return true;
-    }
-    if (!(await equivalentSkillEntries(owner.source, source))) {
-      throw new Error(`Skill entry ${name} differs between Agent homes: ${owner.root}, ${root}`);
-    }
-    duplicateEntries.push({
-      name,
-      source,
-      canonicalSource: owner.source,
-      sourceRoot: root,
-      canonicalRoot: owner.root,
-    });
-    return false;
-  };
-
   const createNames: string[] = [];
   const removeNames: string[] = [];
-  if (skillsInfo) {
-    for (const name of desiredNames) {
-      const link = path.join(skillsRoot, name);
-      const existing = await lstat(link).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      });
-      if (!existing) createNames.push(name);
-      else if (!(await managedLinkMatches(link, path.join(viewSkillsRoot, name)))) {
-        throw new Error(`Refusing to replace an Environment-owned Skill with a Woma Skill: ${link}`);
-      }
+  for (const name of desiredNames) {
+    const link = path.join(skillsRoot, name);
+    const existing = await lstat(link).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!existing) createNames.push(name);
+    else if (!(await managedLinkMatches(link, path.join(viewSkillsRoot, name)))) {
+      throw new Error(`Refusing to replace an Environment-owned Skill with a Woma Skill: ${link}`);
     }
-    for (const name of previousNames) {
-      if (desiredNames.has(name)) continue;
-      const link = path.join(skillsRoot, name);
-      const existing = await lstat(link).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      });
-      if (!existing) continue;
-      if (!(await managedLinkMatches(link, path.join(viewSkillsRoot, name)))) {
-        throw new Error(`Refusing to remove a modified Woma-managed Skill path: ${link}`);
-      }
-      removeNames.push(name);
+  }
+  for (const name of previousNames) {
+    if (desiredNames.has(name)) continue;
+    const link = path.join(skillsRoot, name);
+    const existing = await lstat(link).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!existing) continue;
+    if (!(await managedLinkMatches(link, path.join(viewSkillsRoot, name)))) {
+      throw new Error(`Refusing to remove a modified Woma-managed Skill path: ${link}`);
     }
-  } else {
-    createNames.push(...desiredNames);
+    removeNames.push(name);
   }
 
   const roots: AgentSkillsRootPlan[] = [];
@@ -741,112 +564,27 @@ async function prepareSharedSkillsTransition(
       throw error;
     });
     if (!info) {
-      roots.push({ root, kind: "missing", managedLinks: [], externalEntries: [] });
+      roots.push({ root, exists: false });
       continue;
     }
-    if (info.isSymbolicLink()) {
-      const target = await readlink(root);
-      const actual = path.resolve(path.dirname(root), target);
-      if (actual === skillsRoot) {
-        roots.push({ root, kind: "shared", linkTarget: target, managedLinks: [], externalEntries: [] });
-        continue;
-      }
-      const legacyRoot = path.join(environmentViewPath(environmentName), platform, "skills");
-      if (actual !== legacyRoot) throw new Error(`Managed Agent home link has an unexpected target: ${root}`);
-      const plan: AgentSkillsRootPlan = {
-        root,
-        kind: "legacy-link",
-        linkTarget: target,
-        managedLinks: [],
-        externalEntries: [],
-      };
-      const metadataSources = metadataSkillSources(previousMetadata, platform);
-      const entries = await readdir(root).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return [];
-        throw error;
-      });
-      for (const name of entries) {
-        const entry = path.join(root, name);
-        if (previousNames.has(name)) {
-          const entryInfo = await lstat(entry).catch(() => undefined);
-          const expectedSource = metadataSources[name];
-          const actualSource = expectedSource ? await realpath(entry).catch(() => undefined) : undefined;
-          const expectedRealSource = expectedSource ? await realpath(expectedSource).catch(() => undefined) : undefined;
-          if (!entryInfo?.isSymbolicLink() || (expectedSource && (!actualSource || actualSource !== expectedRealSource))) {
-            throw new Error(`Woma-managed ${platform} Skill path is modified: ${entry}`);
-          }
-          continue;
-        }
-        if (desiredNames.has(name)) throw new Error(`Refusing to replace an Agent-installed Skill with a Woma Skill: ${entry}`);
-        if (await registerExternalEntry(name, entry, root)) plan.externalEntries.push({ name, source: entry });
-      }
-      roots.push(plan);
-      continue;
+    if (!info.isSymbolicLink() || !(await managedLinkMatches(root, skillsRoot))) {
+      throw new Error(`Agent Skills root must be the shared Environment link: ${root}`);
     }
-    if (!info.isDirectory()) throw new Error(`Agent Skills root must be a directory or managed link: ${root}`);
-    const plan: AgentSkillsRootPlan = {
-      root,
-      kind: "legacy-directory",
-      managedLinks: [],
-      externalEntries: [],
-    };
-    const legacyViewRoot = path.join(environmentViewPath(environmentName), platform, "skills");
-    for (const name of await readdir(root)) {
-      const entry = path.join(root, name);
-      if (previousNames.has(name)) {
-        if (!(await managedLinkMatches(entry, path.join(legacyViewRoot, name)))) {
-          throw new Error(`Woma-managed ${platform} Skill path is modified: ${entry}`);
-        }
-        plan.managedLinks.push({ name, target: await readlink(entry) });
-        continue;
-      }
-      if (desiredNames.has(name)) throw new Error(`Refusing to replace an Agent-installed Skill with a Woma Skill: ${entry}`);
-      if (await registerExternalEntry(name, entry, root)) plan.externalEntries.push({ name, source: entry });
-    }
-    roots.push(plan);
+    roots.push({ root, exists: true });
   }
 
-  let duplicateBackupRoot: string | undefined;
   return {
     apply: async () => {
       const rootCreated = !skillsInfo;
       const created: string[] = [];
       const removed: { name: string; target: string }[] = [];
-      const moved: MovedSkillEntry[] = [];
-      const stagedDuplicates: { source: string; backup: string }[] = [];
-      const changedRoots: AgentSkillsRootPlan[] = [];
-      const removedDirectoryLinks: { root: string; name: string; target: string }[] = [];
+      const createdRoots: string[] = [];
       const rollback = async (): Promise<void> => {
         const errors: unknown[] = [];
-        for (const plan of [...changedRoots].reverse()) {
+        for (const root of [...createdRoots].reverse()) {
           try {
-            const current = await lstat(plan.root).catch(() => undefined);
-            if (plan.kind === "missing") {
-              if (current && await managedLinkMatches(plan.root, skillsRoot)) await rm(plan.root, { force: true });
-              else if (current) throw new Error(`Refusing to remove a modified Agent Skills path: ${plan.root}`);
-            } else if (plan.kind === "legacy-link") {
-              if (!current) await symlink(plan.linkTarget!, plan.root, process.platform === "win32" ? "junction" : undefined);
-              else if (await managedLinkMatches(plan.root, skillsRoot)) await replaceSymlink(plan.linkTarget!, plan.root, true);
-              else if (!await managedLinkMatches(plan.root, path.resolve(path.dirname(plan.root), plan.linkTarget!))) {
-                throw new Error(`Refusing to overwrite a modified Agent Skills path: ${plan.root}`);
-              }
-            } else if (plan.kind === "legacy-directory") {
-              if (current?.isSymbolicLink() && await managedLinkMatches(plan.root, skillsRoot)) await rm(plan.root, { force: true });
-              else if (current && !current.isDirectory()) throw new Error(`Refusing to overwrite a modified Agent Skills path: ${plan.root}`);
-              await mkdir(plan.root, { recursive: true, mode: 0o700 });
-            }
-          } catch (error) {
-            errors.push(error);
-          }
-        }
-        for (const item of [...removedDirectoryLinks].reverse()) {
-          const link = path.join(item.root, item.name);
-          try {
-            if (!(await lstat(link).catch(() => undefined))) {
-              await symlink(item.target, link, process.platform === "win32" ? "junction" : "dir");
-            } else if (!(await managedLinkMatches(link, path.resolve(path.dirname(link), item.target)))) {
-              throw new Error(`Refusing to overwrite an Agent-owned Skill path during rollback: ${link}`);
-            }
+            if (await managedLinkMatches(root, skillsRoot)) await rm(root, { force: true });
+            else if (await lstat(root).catch(() => undefined)) throw new Error(`Refusing to remove a modified Agent Skills path: ${root}`);
           } catch (error) {
             errors.push(error);
           }
@@ -872,28 +610,6 @@ async function prepareSharedSkillsTransition(
             errors.push(error);
           }
         }
-        for (const item of [...moved].reverse()) {
-          try {
-            await restoreMovedSkillEntry(item);
-          } catch (error) {
-            errors.push(error);
-          }
-        }
-        for (const item of [...stagedDuplicates].reverse()) {
-          try {
-            if (await lstat(item.source).catch(() => undefined)) {
-              throw new Error(`Cannot restore duplicate Agent Skill because its original path is occupied: ${item.source}`);
-            }
-            await rename(item.backup, item.source);
-          } catch (error) {
-            errors.push(error);
-          }
-        }
-        if (duplicateBackupRoot) {
-          await rmdir(duplicateBackupRoot).catch((error: NodeJS.ErrnoException) => {
-            if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") errors.push(error);
-          });
-        }
         if (rootCreated) {
           await rmdir(skillsRoot).catch((error: NodeJS.ErrnoException) => {
             if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") errors.push(error);
@@ -902,59 +618,21 @@ async function prepareSharedSkillsTransition(
         if (errors.length > 0) throw new AggregateError(errors, "Could not roll back shared Environment Skills");
       };
       try {
-        for (const duplicate of duplicateEntries) {
-          if (!(await equivalentSkillEntries(duplicate.canonicalSource, duplicate.source))) {
-            throw new Error(
-              `Skill entry ${duplicate.name} changed while merging Agent homes: ${duplicate.canonicalRoot}, ${duplicate.sourceRoot}`,
-            );
-          }
-        }
         await mkdir(skillsRoot, { recursive: true, mode: 0o700 });
-        for (const plan of roots) {
-          for (const entry of plan.externalEntries) {
-            const destination = path.join(skillsRoot, entry.name);
-            moved.push(await moveSkillEntry(entry.source, destination));
-          }
-        }
-        if (duplicateEntries.length > 0) {
-          duplicateBackupRoot = path.join(path.dirname(skillsRoot), `.skills-merge-backup-${randomUUID()}`);
-          await mkdir(duplicateBackupRoot, { mode: 0o700 });
-          for (const [index, duplicate] of duplicateEntries.entries()) {
-            const backup = path.join(duplicateBackupRoot, String(index));
-            await rename(duplicate.source, backup);
-            stagedDuplicates.push({ source: duplicate.source, backup });
-          }
-        }
         for (const name of removeNames) {
           const link = path.join(skillsRoot, name);
           removed.push({ name, target: await readlink(link) });
           await rm(link, { force: true });
         }
         for (const name of createNames) {
-          await symlink(
-            path.join(viewSkillsRoot, name),
-            path.join(skillsRoot, name),
-            process.platform === "win32" ? "junction" : "dir",
-          );
+          await symlink(path.join(viewSkillsRoot, name), path.join(skillsRoot, name), process.platform === "win32" ? "junction" : "dir");
           created.push(name);
         }
         for (const plan of roots) {
-          if (plan.kind === "shared") continue;
-          changedRoots.push(plan);
+          if (plan.exists) continue;
           await mkdir(path.dirname(plan.root), { recursive: true, mode: 0o700 });
-          if (plan.kind === "legacy-link") {
-            await replaceSymlink(skillsRoot, plan.root, true);
-          } else if (plan.kind === "legacy-directory") {
-            for (const item of plan.managedLinks) {
-              const link = path.join(plan.root, item.name);
-              await rm(link, { force: true });
-              removedDirectoryLinks.push({ root: plan.root, name: item.name, target: item.target });
-            }
-            await rmdir(plan.root);
-            await symlink(skillsRoot, plan.root, process.platform === "win32" ? "junction" : undefined);
-          } else {
-            await symlink(skillsRoot, plan.root, process.platform === "win32" ? "junction" : undefined);
-          }
+          await symlink(skillsRoot, plan.root, process.platform === "win32" ? "junction" : undefined);
+          createdRoots.push(plan.root);
         }
         return rollback;
       } catch (error) {
@@ -966,15 +644,9 @@ async function prepareSharedSkillsTransition(
         throw error;
       }
     },
-    finalize: async () => {
-      if (!duplicateBackupRoot) return;
-      await makeDirectoriesWritable(duplicateBackupRoot);
-      await rm(duplicateBackupRoot, { recursive: true, force: true });
-      duplicateBackupRoot = undefined;
-    },
+    finalize: async () => undefined,
   };
 }
-
 async function prepareStableHomeTransition(
   environment: WomaEnvironment,
   packages: InstalledPackage[],
@@ -982,29 +654,6 @@ async function prepareStableHomeTransition(
   previousPackages: InstalledPackage[],
 ): Promise<StableHomeTransition> {
   const sharedSkills = await prepareSharedSkillsTransition(environment, packages, previousMetadata, previousPackages);
-  const legacyCodexAuth = environment.spec.targets.includes("codex")
-    ? await (async () => {
-        const destination = path.join(environmentAgentHomePath(environment.metadata.name, "codex"), "auth.json");
-        const source = path.join(environmentViewPath(environment.metadata.name), "codex", "auth.json");
-        const sourceInfo = await lstat(source).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return undefined;
-          throw error;
-        });
-        if (!sourceInfo) return undefined;
-        if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink()) {
-          throw new Error(`Legacy Codex credential projection must be a regular file: ${source}`);
-        }
-        const info = await lstat(destination).catch((error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return undefined;
-          throw error;
-        });
-        if (!info) return { destination, source };
-        if (!info.isSymbolicLink()) return undefined;
-        const target = await readlink(destination);
-        const actual = path.resolve(path.dirname(destination), target);
-        return actual === source ? { destination, source, target } : undefined;
-      })()
-    : undefined;
   const links: {
     destination: string;
     source: string;
@@ -1090,25 +739,6 @@ async function prepareStableHomeTransition(
       const rollbacks: (() => Promise<void>)[] = [];
       try {
         rollbacks.push(await sharedSkills.apply());
-        if (legacyCodexAuth) {
-          const current = await lstat(legacyCodexAuth.destination).catch(() => undefined);
-          const currentTarget = current?.isSymbolicLink() ? await readlink(legacyCodexAuth.destination) : undefined;
-          if (legacyCodexAuth.target === undefined ? current !== undefined : currentTarget !== legacyCodexAuth.target) {
-            throw new Error(`Codex credential path changed while upgrading: ${legacyCodexAuth.destination}`);
-          }
-          const content = await readFile(legacyCodexAuth.source);
-          const mode = (await stat(legacyCodexAuth.source)).mode;
-          const temporary = `${legacyCodexAuth.destination}.file-${process.pid}-${randomUUID()}`;
-          try {
-            await writeBufferPreservingFile(temporary, content, mode);
-            await rename(temporary, legacyCodexAuth.destination);
-          } finally {
-            await rm(temporary, { force: true }).catch(() => undefined);
-          }
-          rollbacks.push(() => legacyCodexAuth.target === undefined
-            ? rm(legacyCodexAuth.destination, { force: true })
-            : replaceSymlink(legacyCodexAuth.target, legacyCodexAuth.destination, false));
-        }
         for (const link of links.filter((item) => item.action === "create")) {
           await mkdir(path.dirname(link.destination), { recursive: true, mode: 0o700 });
           await createSymlink(link.source, link.destination, link.directory);
@@ -1216,6 +846,7 @@ export async function materializeEnvironmentView(
   let finalizeHome: (() => Promise<void>) | undefined;
   try {
     const previousMetadata = await previousViewMetadata(destination);
+    validateViewMetadataShape(previousMetadata, path.join(destination, "view.json"));
     await linkSkills(temporary, packages);
     const skillLinks: Partial<Record<Platform, Record<string, string>>> = {};
     if (environment.spec.targets.includes("codex")) {
@@ -1250,7 +881,6 @@ export async function materializeEnvironmentView(
       ? collectServers(packages, "qoder").map(({ server }) => server.name)
       : undefined;
     await writeJsonAtomic(path.join(temporary, "view.json"), {
-      viewVersion: 2,
       environment: name,
       targets: environment.spec.targets,
       packages: packages.map((pkg) => ({ name: pkg.lock.name, version: pkg.lock.version, integrity: pkg.lock.integrity })),
@@ -1298,6 +928,7 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
   const root = environmentViewPath(environment.metadata.name);
   const metadataPath = path.join(root, "view.json");
   const metadata = parseJsonObject(await readOptional(metadataPath), metadataPath);
+  validateViewMetadataShape(metadata, metadataPath);
   const expected = packages.map((pkg) => ({ name: pkg.lock.name, version: pkg.lock.version, integrity: pkg.lock.integrity }));
   const expectedResources = {
     codexMcpServers: environment.spec.targets.includes("codex")
@@ -1310,9 +941,7 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
       ? { qoderMcpServers: collectServers(packages, "qoder").map(({ server }) => server.name) }
       : {}),
   };
-  const viewVersion = metadata.viewVersion;
   if (
-    (viewVersion !== 1 && viewVersion !== 2) ||
     metadata.environment !== environment.metadata.name ||
     !equal(metadata.targets, environment.spec.targets) ||
     !equal(metadata.packages, expected) ||
@@ -1343,17 +972,15 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
   };
   const sharedSkillsRoot = environmentSkillsPath(environment.metadata.name);
   const sharedViewSkillsRoot = path.join(root, "skills");
-  if (viewVersion === 2) {
-    const sharedInfo = await lstat(sharedSkillsRoot).catch(() => undefined);
-    if (!sharedInfo?.isDirectory() || sharedInfo.isSymbolicLink()) {
-      throw new Error(`Shared Environment Skills root is missing or invalid: ${sharedSkillsRoot}`);
-    }
-    await validateSkillView(sharedViewSkillsRoot, true);
-    for (const name of Object.keys(expectedSkills)) {
-      const link = path.join(sharedSkillsRoot, name);
-      if (!(await managedLinkMatches(link, path.join(sharedViewSkillsRoot, name)))) {
-        throw new Error(`Woma-managed shared Skill link is missing or invalid: ${link}`);
-      }
+  const sharedInfo = await lstat(sharedSkillsRoot).catch(() => undefined);
+  if (!sharedInfo?.isDirectory() || sharedInfo.isSymbolicLink()) {
+    throw new Error(`Shared Environment Skills root is missing or invalid: ${sharedSkillsRoot}`);
+  }
+  await validateSkillView(sharedViewSkillsRoot, true);
+  for (const name of Object.keys(expectedSkills)) {
+    const link = path.join(sharedSkillsRoot, name);
+    if (!(await managedLinkMatches(link, path.join(sharedViewSkillsRoot, name)))) {
+      throw new Error(`Woma-managed shared Skill link is missing or invalid: ${link}`);
     }
   }
   for (const target of environment.spec.targets) {
@@ -1372,18 +999,8 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
     }
     const homeSkills = path.join(home, "skills");
     const homeSkillsInfo = await lstat(homeSkills).catch(() => undefined);
-    let projectedLegacySkills = false;
-    if (viewVersion === 2) {
-      if (!homeSkillsInfo?.isSymbolicLink() || !(await managedLinkMatches(homeSkills, sharedSkillsRoot))) {
-        throw new Error(`Agent Skills link does not use the shared Environment root: ${homeSkills}`);
-      }
-    } else if (homeSkillsInfo?.isSymbolicLink()) {
-      const actual = path.resolve(path.dirname(homeSkills), await readlink(homeSkills));
-      const expectedLegacyRoot = path.join(root, target, "skills");
-      if (actual !== expectedLegacyRoot) throw new Error(`Managed Agent home link has an unexpected target: ${homeSkills}`);
-      projectedLegacySkills = true;
-    } else if (target !== "codex" || !homeSkillsInfo?.isDirectory()) {
-      throw new Error(`Legacy Agent Skills root is missing or invalid: ${homeSkills}`);
+    if (!homeSkillsInfo?.isSymbolicLink() || !(await managedLinkMatches(homeSkills, sharedSkillsRoot))) {
+      throw new Error(`Agent Skills link does not use the shared Environment root: ${homeSkills}`);
     }
     const unexpectedViewEntries = (await readdir(path.join(root, target))).filter(
       (name) => !MANAGED_VIEW_ENTRIES[target].includes(name),
@@ -1392,15 +1009,7 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
       throw new Error(`Environment view contains unmanaged Agent state: ${unexpectedViewEntries.join(", ")}`);
     }
     const skillsRoot = path.join(root, target, "skills");
-    await validateSkillView(skillsRoot, !projectedLegacySkills);
-    if (viewVersion === 1 && target === "codex" && !projectedLegacySkills) {
-      for (const name of Object.keys(expectedSkills)) {
-        const homeLink = path.join(homeSkills, name);
-        if (!(await managedLinkMatches(homeLink, path.join(skillsRoot, name)))) {
-          throw new Error(`Woma-managed Codex Skill link is missing or invalid: ${homeLink}`);
-        }
-      }
-    }
+    await validateSkillView(skillsRoot, true);
     const metadataSkills = metadata.skills;
     if (!metadataSkills || typeof metadataSkills !== "object" || Array.isArray(metadataSkills)) {
       throw new Error(`Environment Skill ownership metadata is missing from ${metadataPath}`);

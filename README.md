@@ -138,7 +138,7 @@ Every target Agent's `skills` path resolves to one stable Environment-level dire
 
 Environment selection belongs to the current shell. Separate shells can select and run different Environments at the same time; their Agent homes, credentials, provider configuration, sessions, and Codex system Skills remain isolated. Secret values stay in Agent configuration or shell environment variables and are never written to Package manifests, locks, or Environment bundles.
 
-Woma core manages capabilities and isolated Agent Environments, not Agent Memory or project context. It does not inject discovery instructions or read, write, package, or delete Memory data. The only compatibility exception is removal of exact legacy discovery blocks that earlier Woma versions added to `AGENTS.md` or `CLAUDE.md`. The optional Project Memory Skill operates on its documented project-owned file only when selected; Agents and users otherwise choose how context is loaded and persisted.
+Woma core manages capabilities and isolated Agent Environments, not Agent Memory or project context. It does not inject discovery instructions or read, write, package, or delete Memory data. The optional Project Memory Skill operates on its documented project-owned file only when selected; Agents and users otherwise choose how context is loaded and persisted.
 
 ## Export and Recreate
 
@@ -186,6 +186,7 @@ woma install builtin:woma-package-builder
 
 - [Command reference](docs/commands.md)
 - [Architecture and isolation model](docs/design.md)
+- [Agent Harness behavior reference](docs/agent-harness-behavior.md)
 - [Package manifest](docs/manifest.md)
 - [Optional Project Memory](docs/project-memory.md)
 - [Security](SECURITY.md)

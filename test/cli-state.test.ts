@@ -451,10 +451,8 @@ test("CLI renames an inactive Environment without losing Agent-owned state", { c
   try {
     delete process.env.WOMA_ENV;
     assert.equal((await runCli(["--project", project, "create", "-n", "before", "--target", "codex"], root, home)).code, 0);
-    const legacyAuthView = path.join(home, "environments", "before", "view", "codex", "auth.json");
-    const legacyAuthHome = path.join(home, "environments", "before", "home", "codex", "auth.json");
-    await write(legacyAuthView, '{"token":"legacy"}\n');
-    await symlink(legacyAuthView, legacyAuthHome);
+    const authHome = path.join(home, "environments", "before", "home", "codex", "auth.json");
+    await write(authHome, '{"token":"current"}\n');
     const opaque = path.join(home, "environments", "before", "home", "codex", "session.sqlite");
     await write(opaque, "state\n");
     const futureLink = path.join(home, "environments", "before", "home", "codex", "future.json");
@@ -466,7 +464,7 @@ test("CLI renames an inactive Environment without losing Agent-owned state", { c
     await assert.rejects(access(path.join(home, "environments", "before")), /ENOENT/);
     const renamedAuth = path.join(home, "environments", "after", "home", "codex", "auth.json");
     assert.equal((await lstat(renamedAuth)).isSymbolicLink(), false);
-    assert.equal(await readFile(renamedAuth, "utf8"), '{"token":"legacy"}\n');
+    assert.equal(await readFile(renamedAuth, "utf8"), '{"token":"current"}\n');
     assert.equal(await readFile(path.join(home, "environments", "after", "home", "codex", "session.sqlite"), "utf8"), "state\n");
     assert.equal(
       await readlink(path.join(home, "environments", "after", "home", "codex", "future.json")),
@@ -662,7 +660,6 @@ test("CLI installs and activates a complete Package dependency closure", { concu
     const doctor = await runCli(["--project", project, "doctor", "-n", "research"], root, home);
     assert.equal(doctor.code, 0, doctor.stderr || doctor.stdout);
     assert.match(doctor.stdout, /\[ok\] view:/);
-    assert.match(doctor.stdout, /\[ok\] legacy-project-memory/);
 
     const deactivate = await runCli(["--project", project, "deactivate"], root, home);
     assert.equal(deactivate.code, 0, deactivate.stderr);

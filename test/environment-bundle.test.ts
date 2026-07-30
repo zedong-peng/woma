@@ -131,7 +131,7 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
   }
 });
 
-test("Environment bundle migration drops legacy implicit helpers before Store import", { concurrency: false }, async () => {
+test("Environment bundles reject unsupported Environment schemas before Store import", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-bundle-legacy-helpers-"));
   const previousHome = process.env.WOMA_HOME;
   try {
@@ -167,7 +167,7 @@ spec:
     await writeFile(
       legacyBundle,
       rewriteBundle(await readFile(bundle), (document) => {
-        document.environment.apiVersion = "woma.dev/environment-v1";
+        document.environment.apiVersion = "woma.dev/environment-v2";
         const memoryRoot = document.environment.spec.roots.find((item: any) => item.name === "woma-project-memory");
         memoryRoot.source = "builtin:woma-project-memory";
         document.lock.packages["woma-project-memory"].source = "builtin:woma-project-memory";
@@ -176,12 +176,7 @@ spec:
 
     const destinationHome = path.join(root, "destination-home");
     process.env.WOMA_HOME = destinationHome;
-    const imported = await importEnvironmentBundle(root, legacyBundle, "restored");
-
-    assert.equal(imported.packages, 1);
-    assert.equal(imported.snapshot.environment.apiVersion, "woma.dev/environment-v2");
-    assert.deepEqual(imported.snapshot.environment.spec.roots.map((item) => item.name), ["local-performance"]);
-    assert.deepEqual(Object.keys(imported.snapshot.lock.packages), ["local-performance"]);
+    await assert.rejects(importEnvironmentBundle(root, legacyBundle, "restored"), /invalid environment/);
     await assert.rejects(access(path.join(destinationHome, "packages", "woma-project-memory")), /ENOENT/);
     await assert.rejects(access(path.join(destinationHome, "packages", "woma-package-builder")), /ENOENT/);
   } finally {
