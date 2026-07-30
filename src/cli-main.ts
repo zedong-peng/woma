@@ -119,7 +119,7 @@ function printPackageProvenance(lock: LockedPackage, indent = "  "): void {
 program
   .name("woma")
   .description("Create, reproduce, and switch isolated Agent environments")
-  .version("0.6.0")
+  .version("0.6.1")
   .enablePositionalOptions()
   .configureHelp({
     sortSubcommands: true,

@@ -192,6 +192,7 @@ woma install builtin:woma-package-builder
 
 - [Command reference](docs/commands.md)
 - [Architecture and isolation model](docs/design.md)
+- [Proposed single-Agent Environment model](docs/proposals/single-agent-environments.md)
 - [Agent Harness behavior reference](docs/agent-harness-behavior.md)
 - [Package manifest](docs/manifest.md)
 - [Optional Project Memory](docs/project-memory.md)

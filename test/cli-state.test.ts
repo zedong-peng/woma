@@ -112,10 +112,17 @@ test("CLI help lists commands alphabetically", { concurrency: false }, async () 
   }
 });
 
-test("package metadata exposes only the woma executable", async () => {
-  const metadata = JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { name: string; bin: Record<string, string> };
+test("package metadata exposes only the woma executable and matches the CLI version", async () => {
+  const metadata = JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as {
+    name: string;
+    version: string;
+    bin: Record<string, string>;
+  };
   assert.equal(metadata.name, "woma");
   assert.deepEqual(metadata.bin, { woma: "dist/src/cli.js" });
+  const result = await runCliProcess(["--version"], process.cwd(), path.join(os.tmpdir(), "woma-cli-version-home"));
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout.trim(), metadata.version);
 });
 
 test("CLI deactivate does not initialize base or write project state", { concurrency: false }, async () => {

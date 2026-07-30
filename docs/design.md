@@ -1,5 +1,9 @@
 # Architecture and isolation model
 
+> [!NOTE]
+> This document describes the current implemented architecture. The proposed next Environment model is documented in
+> [Reproducible single-Agent environments](proposals/single-agent-environments.md).
+
 ## Ownership boundaries
 
 Woma manages reusable Agent capabilities and isolated Agent homes. Repository knowledge and Agent Memory remain outside its ownership boundary.
