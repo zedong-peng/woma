@@ -187,6 +187,34 @@ test("a Package collection root is rejected without changing Environment state",
   }
 });
 
+test("a Git Package collection lists direct candidates and suggests --subdir", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-git-collection-source-"));
+  process.env.WOMA_HOME = path.join(root, "home");
+  const repository = path.join(root, "research-studio.git");
+  try {
+    await write(path.join(repository, "ResearchStudio-Reel", "skills", "video", "SKILL.md"), skill("video"));
+    await write(path.join(repository, "ResearchStudio-Idea", "skills", "idea", "SKILL.md"), skill("idea"));
+    await write(path.join(repository, "examples", "nested", "SKILL.md"), skill("nested"));
+    await run("git", ["init", "-b", "main"], { cwd: repository });
+    await run("git", ["add", "."], { cwd: repository });
+    await run("git", ["-c", "user.name=Woma Test", "-c", "user.email=woma@example.invalid", "commit", "-m", "fixture"], {
+      cwd: repository,
+    });
+
+    await assert.rejects(installPackageSource(repository), (error: Error) => {
+      assert.match(error.message, /Detected multiple Package candidates:\n  ResearchStudio-Idea\n  ResearchStudio-Reel/);
+      assert.ok(
+        error.message.includes(`woma install ${repository} --subdir ResearchStudio-Idea`),
+        error.message,
+      );
+      assert.doesNotMatch(error.message, /nested/);
+      return true;
+    });
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
 test("implicit Packages reject invalid Skill frontmatter", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-invalid-skill-"));
   process.env.WOMA_HOME = path.join(root, "home");

@@ -224,6 +224,49 @@ async function copyImplicitSkill(sourceRoot: string, destinationRoot: string): P
   });
 }
 
+function shellArgument(input: string): string {
+  if (/^[A-Za-z0-9_./:@+-]+$/.test(input)) return input;
+  return `'${input.replaceAll("'", `'\\''`)}'`;
+}
+
+async function directPackageCandidates(materialized: MaterializedSource): Promise<string[]> {
+  if (!materialized.commit || materialized.subdirectory) return [];
+  const candidates: string[] = [];
+  for (const entry of (await readdir(materialized.root, { withFileTypes: true })).sort((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  )) {
+    if (!entry.isDirectory() || entry.name.startsWith("-") || /[\u0000-\u001f\u007f]/.test(entry.name)) continue;
+    const candidateRoot = path.join(materialized.root, entry.name);
+    if (await pathExists(path.join(candidateRoot, "woma.yaml")) || await pathExists(path.join(candidateRoot, "SKILL.md"))) {
+      candidates.push(entry.name);
+      continue;
+    }
+    const skillsRoot = path.join(candidateRoot, "skills");
+    const skillsInfo = await lstat(skillsRoot).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (!skillsInfo?.isDirectory()) continue;
+    for (const skill of await readdir(skillsRoot, { withFileTypes: true })) {
+      if (!(skill.isDirectory() || skill.isSymbolicLink())) continue;
+      if (!(await pathExists(path.join(skillsRoot, skill.name, "SKILL.md")))) continue;
+      candidates.push(entry.name);
+      break;
+    }
+  }
+  return candidates;
+}
+
+async function unsupportedPackageLayout(materialized: MaterializedSource): Promise<Error> {
+  const message = `Unsupported Package source layout at ${materialized.root}: expected woma.yaml, SKILL.md, or skills/*/SKILL.md`;
+  const candidates = await directPackageCandidates(materialized);
+  if (candidates.length < 2) return new Error(message);
+  return new Error(
+    `${message}\n\nDetected multiple Package candidates:\n${candidates.map((candidate) => `  ${candidate}`).join("\n")}`
+      + `\n\nInstall one explicitly with --subdir, for example:\n  woma install ${shellArgument(materialized.source)} --subdir ${shellArgument(candidates[0]!)}`,
+  );
+}
+
 async function normalizeMaterializedSource(materialized: MaterializedSource): Promise<MaterializedSource> {
   if (await pathExists(path.join(materialized.root, "woma.yaml"))) return materialized;
   const sourceInfo = await lstat(materialized.root);
@@ -246,9 +289,7 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
       throw error;
     });
     if (!skillsInfo) {
-      throw new Error(
-        `Unsupported Package source layout at ${materialized.root}: expected woma.yaml, SKILL.md, or skills/*/SKILL.md`,
-      );
+      throw await unsupportedPackageLayout(materialized);
     }
     if (skillsInfo.isSymbolicLink()) throw new Error(`Implicit Package skills directory is an unsupported symlink: ${skillsRoot}`);
     if (!skillsInfo.isDirectory()) {
@@ -271,9 +312,7 @@ async function normalizeMaterializedSource(materialized: MaterializedSource): Pr
       });
     }
     if (selected.length === 0) {
-      throw new Error(
-        `Unsupported Package source layout at ${materialized.root}: expected woma.yaml, SKILL.md, or skills/*/SKILL.md`,
-      );
+      throw await unsupportedPackageLayout(materialized);
     }
     packageName = implicitPackageName(sourceDirectoryName(materialized));
     description = `Implicit Woma Package containing ${selected.length} Skills from ${sourceDirectoryName(materialized)}.`.slice(0, 300);
