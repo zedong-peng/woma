@@ -119,36 +119,24 @@ Adapter code into the Woma process. A future Adapter plugin mechanism requires i
 
 ## Agent-independent capabilities
 
-Package manifests describe capability semantics, not Agent configuration files. They may contain canonical Skills, MCP
-servers, Hooks, requirements, and dependencies. They must not contain native destinations such as `config.toml`,
-`settings.json`, or an Agent home path.
+Package manifests describe capability semantics, not Agents or Agent configuration files. They may contain canonical
+Skills, MCP servers, Hooks, requirements, and dependencies. They must not contain Agent names, platform compatibility lists,
+native destinations such as `config.toml` or `settings.json`, or an Agent home path.
 
-Agent independence does not imply universal support. A Package states the semantic features its resources require, while an
-Agent Runtime Package and Adapter state the features they provide. For example:
-
-```yaml
-requires:
-  agentFeatures:
-    - skills.v1
-    - mcp.stdio
-    - hooks.after-tool-use
-```
-
-The feature vocabulary is versioned Woma domain semantics. Resolution or validation fails before publication when the
-selected Agent cannot represent a required feature exactly. Woma does not silently omit a resource or approximate a Hook
-whose lifecycle differs from the declared event.
+A Package does not separately declare which Agents support it. Each canonical resource already states the semantics that
+must be projected: an MCP transport, a Hook lifecycle event, or a Skill contract. After one Agent Runtime is selected for an
+Environment, its Adapter validates the complete closure. Publication fails when the Adapter cannot represent any resource
+exactly. Woma does not silently omit a resource, rely on a Package compatibility hint, or approximate a Hook whose lifecycle
+differs from the canonical event.
 
 Skills and MCP transports already have useful cross-Agent semantics. Hooks require particular care because similarly named
-Agent events may have different timing, matching, retry, input, and failure behavior. Until Woma defines an exact canonical
-Hook event, an Adapter-specific Hook is an explicit extension rather than a falsely portable declaration.
+Agent events may have different timing, matching, retry, input, and failure behavior. Woma must define canonical Hook events
+before treating them as portable capabilities. An Agent-specific Hook event does not enter the neutral Package schema as an
+escape hatch; it remains unsupported until Woma can give it an Agent-independent meaning.
 
-Agent names may remain in compatibility metadata where a real upstream constraint cannot be expressed as a semantic
-feature. They are constraints, not projection instructions.
-
-The singleton rule applies to an Environment, not to a reusable capability Package. Package `spec.platforms` and per-resource
-platform compatibility can remain lists so the same Package can be installed into separate Codex, Claude Code, Pi, or Qoder
-Environments. Semantic feature requirements may refine or eventually replace particular platform checks, but the
-Environment's scalar Agent must not force Package compatibility metadata to become scalar.
+The same Package bytes can therefore be resolved into separate Codex, Claude Code, Pi, or Qoder Environments without
+changing their manifest. Whether a particular Environment can materialize the closure is a property of the selected Agent
+Runtime and Adapter, not Package metadata.
 
 ## Projection architecture
 
@@ -250,7 +238,7 @@ and a portable artifact archive.
 - optional Environment metadata.
 
 It does not enumerate transitive dependencies or copy mutable Agent home state. The same capability inputs can be reused in
-recipes selecting another Agent, subject to feature compatibility.
+recipes selecting another Agent; that Agent's Adapter validates the unchanged closure.
 
 ### Environment lock
 
@@ -258,7 +246,7 @@ recipes selecting another Agent, subject to feature compatibility.
 
 - the exact Agent distribution, artifact integrity, platform, executable, and Adapter contract revision;
 - the exact recursive capability Package closure and provenance;
-- the canonical feature requirements and selected feature providers; and
+- the canonical capability closure and the Adapter contract used to validate and project it; and
 - enough ownership identity to deterministically rebuild the Woma-managed projection.
 
 For example, the Agent is a sibling of the capability closure rather than one entry inside it:
@@ -311,15 +299,15 @@ Creation is one transaction:
 
 1. Parse the direct Agent and capability requirements.
 2. Resolve exactly one Agent Runtime Package and the recursive capability closure.
-3. Validate platform compatibility and semantic feature requirements.
+3. Validate that the selected Agent Adapter can project every canonical capability exactly.
 4. Materialize and verify immutable artifacts in Woma-managed stores.
 5. Ask the selected Adapter for a complete projection plan.
 6. Stage and validate Woma-owned projection artifacts.
 7. Publish the recipe, lock, stable-home reconciliation, and immutable generation within the Environment transaction.
 
 Install, update, and remove repeat resolution against the same singleton Agent requirement. Removing the Agent without
-replacing it is invalid. Updating the Agent can change its feature set or Adapter contract and therefore revalidates the
-complete capability closure.
+replacing it is invalid. Updating the Agent can change its Adapter behavior and therefore revalidates the complete
+capability closure.
 
 Activation and `woma run` select only the locked Agent's executable and home. Other installed Agent CLIs keep their original
 homes.
@@ -353,8 +341,8 @@ Existing mutable Agent state remains outside automatic migration unless a dedica
 
 Implementation should be split into independently reviewable changes:
 
-1. Extract canonical capability closure construction and per-Agent Adapter interfaces from view materialization without
-   changing public behavior.
+1. Extract canonical capability closure construction and per-Agent Adapter interfaces from view materialization, then
+   remove Agent and platform compatibility fields from capability Package manifests.
 2. Introduce the singleton Agent requirement in Environment recipes and remove multi-target `both`, `all`, and target-list
    semantics, including implicit multi-Agent `base` creation and fallback.
 3. Add Agent distribution providers, immutable runtime storage, exact runtime locks, and Environment executable selection.
@@ -369,7 +357,8 @@ A step must not advertise version-pinned Agent reproducibility until step 3 is c
 - Every Environment contains exactly one locked Agent Runtime Package.
 - The lock records the Agent at its root and uses a new version; capability Packages retain their separate closure.
 - The executable launched after activation or by `woma run` resolves from that Environment, not an unrelated ambient path.
-- Package declarations remain free of native Agent paths and configuration field names.
+- Package declarations contain no Agent names, platform compatibility fields, native Agent paths, or native configuration
+  field names.
 - Unsupported capability semantics fail before Environment publication.
 - Each Agent Adapter produces plans per artifact and does not own transaction implementation.
 - Recipe recreation resolves declared constraints; exact-lock recreation never silently upgrades the Agent or a capability
