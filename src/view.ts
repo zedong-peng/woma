@@ -31,6 +31,7 @@ interface ViewInstallHooks {
   beforeSwap?: () => Promise<(() => Promise<void>) | void>;
   beforePublish?: () => Promise<void> | void;
   previousPackages?: InstalledPackage[];
+  seedFromOriginal?: boolean;
 }
 
 function stable(value: unknown): string {
@@ -51,6 +52,16 @@ function readOptional(filePath: string): Promise<string | null> {
     if (error.code === "ENOENT") return null;
     throw error;
   });
+}
+
+async function regularFileExists(filePath: string): Promise<boolean> {
+  return stat(filePath).then(
+    (info) => info.isFile(),
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    },
+  );
 }
 
 function parseJsonObject(content: string | null, filePath: string): Record<string, unknown> {
@@ -232,6 +243,18 @@ export function sourceAgentHome(platform: Platform): string {
   return candidate;
 }
 
+export async function validateCodexSourceConfiguration(): Promise<void> {
+  const sourceHome = sourceAgentHome("codex");
+  const configPath = path.join(sourceHome, "config.toml");
+  if (await regularFileExists(configPath)) {
+    renderCodexConfig(await readOptional(configPath), configPath, []);
+  }
+  const hooksPath = path.join(sourceHome, "hooks.json");
+  if (await regularFileExists(hooksPath)) {
+    parseJsonObject(await readOptional(hooksPath), hooksPath);
+  }
+}
+
 export function environmentAgentHomePath(environmentName: string, platform: Platform): string {
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(environmentName)) throw new Error(`Invalid Environment name: ${environmentName}`);
   return path.join(womaHome(), "environments", environmentName, "home", platform);
@@ -288,7 +311,7 @@ async function linkSkills(
   return links;
 }
 
-async function copyClaudeCredential(environmentName: string, root: string): Promise<void> {
+async function copyClaudeCredential(environmentName: string, root: string, seedFromOriginal: boolean): Promise<void> {
   const name = ".credentials.json";
   const homeCredential = path.join(environmentAgentHomePath(environmentName, "claude"), name);
   const currentCredential = path.join(environmentViewPath(environmentName), "claude", name);
@@ -297,7 +320,10 @@ async function copyClaudeCredential(environmentName: string, root: string): Prom
     ? homeCredential
     : (await pathExists(currentCredential))
       ? currentCredential
-      : originalCredential;
+      : seedFromOriginal
+        ? originalCredential
+        : undefined;
+  if (!source) return;
   const content = await readFile(source).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
@@ -360,20 +386,42 @@ function removeHooks(filePath: string, root: Record<string, unknown>, removals: 
   if (Object.keys(hooks).length === 0) delete root.hooks;
 }
 
-async function buildCodexView(environmentName: string, root: string, packages: InstalledPackage[]): Promise<Record<string, string>> {
+async function buildCodexView(
+  environmentName: string,
+  root: string,
+  packages: InstalledPackage[],
+  previousPackages: InstalledPackage[],
+  seedFromOriginal: boolean,
+): Promise<Record<string, string>> {
   await mkdir(root, { recursive: true, mode: 0o700 });
   const sourceHome = sourceAgentHome("codex");
   const links = await linkSkills(root, packages);
 
   const currentConfig = path.join(environmentViewPath(environmentName), "codex", "config.toml");
-  const sourceConfig = await pathExists(currentConfig) ? currentConfig : path.join(sourceHome, "config.toml");
+  const originalConfig = path.join(sourceHome, "config.toml");
+  const sourceConfig = (await pathExists(currentConfig))
+    ? currentConfig
+    : seedFromOriginal && (await regularFileExists(originalConfig))
+      ? originalConfig
+      : undefined;
   const configDestination = path.join(root, "config.toml");
-  await writeTextAtomic(configDestination, renderCodexConfig(await readOptional(sourceConfig), sourceConfig, packages));
+  await writeTextAtomic(
+    configDestination,
+    renderCodexConfig(sourceConfig ? await readOptional(sourceConfig) : null, sourceConfig ?? configDestination, packages),
+  );
   await chmod(configDestination, 0o600);
 
-  const sourceHooks = path.join(sourceHome, "hooks.json");
-  const hooksRoot = parseJsonObject(await readOptional(sourceHooks), sourceHooks);
-  await mergeHooks(sourceHooks, hooksRoot, collectHooks(packages, "codex"));
+  const currentHooks = path.join(environmentViewPath(environmentName), "codex", "hooks.json");
+  const originalHooks = path.join(sourceHome, "hooks.json");
+  const sourceHooks = (await pathExists(currentHooks))
+    ? currentHooks
+    : seedFromOriginal && (await regularFileExists(originalHooks))
+      ? originalHooks
+      : undefined;
+  const hooksPath = sourceHooks ?? path.join(root, "hooks.json");
+  const hooksRoot = parseJsonObject(sourceHooks ? await readOptional(sourceHooks) : null, hooksPath);
+  removeHooks(hooksPath, hooksRoot, collectHooks(previousPackages, "codex"));
+  await mergeHooks(hooksPath, hooksRoot, collectHooks(packages, "codex"));
   const hooksDestination = path.join(root, "hooks.json");
   await writeJsonAtomic(hooksDestination, hooksRoot);
   await chmod(hooksDestination, 0o600);
@@ -390,17 +438,23 @@ async function buildClaudeView(
   root: string,
   packages: InstalledPackage[],
   previousPackages: InstalledPackage[],
+  seedFromOriginal: boolean,
 ): Promise<Record<string, string>> {
   await mkdir(root, { recursive: true, mode: 0o700 });
   const sourceHome = sourceAgentHome("claude");
   const links = await linkSkills(root, packages);
-  await copyClaudeCredential(environmentName, root);
+  await copyClaudeCredential(environmentName, root, seedFromOriginal);
 
   const currentSettings = path.join(environmentViewPath(environmentName), "claude", "settings.json");
-  const sourceSettings = await pathExists(currentSettings) ? currentSettings : path.join(sourceHome, "settings.json");
-  const settings = parseJsonObject(await readOptional(sourceSettings), sourceSettings);
-  removeHooks(sourceSettings, settings, collectHooks(previousPackages, "claude"));
-  await mergeHooks(sourceSettings, settings, collectHooks(packages, "claude"));
+  const sourceSettings = (await pathExists(currentSettings))
+    ? currentSettings
+    : seedFromOriginal
+      ? path.join(sourceHome, "settings.json")
+      : undefined;
+  const settingsPath = sourceSettings ?? path.join(root, "settings.json");
+  const settings = parseJsonObject(sourceSettings ? await readOptional(sourceSettings) : null, settingsPath);
+  removeHooks(settingsPath, settings, collectHooks(previousPackages, "claude"));
+  await mergeHooks(settingsPath, settings, collectHooks(packages, "claude"));
   const settingsDestination = path.join(root, "settings.json");
   await writeJsonAtomic(settingsDestination, settings);
   await chmod(settingsDestination, 0o600);
@@ -432,18 +486,24 @@ async function buildQoderView(
   root: string,
   packages: InstalledPackage[],
   previousPackages: InstalledPackage[],
+  seedFromOriginal: boolean,
 ): Promise<Record<string, string>> {
   await mkdir(root, { recursive: true, mode: 0o700 });
   const sourceHome = sourceAgentHome("qoder");
   const links = await linkSkills(root, packages);
 
   const currentSettings = path.join(environmentViewPath(environmentName), "qoder", "settings.json");
-  const sourceSettings = await pathExists(currentSettings) ? currentSettings : path.join(sourceHome, "settings.json");
-  const settings = parseJsonObject(await readOptional(sourceSettings), sourceSettings);
-  removeHooks(sourceSettings, settings, collectHooks(previousPackages, "qoder"));
-  await mergeHooks(sourceSettings, settings, collectHooks(packages, "qoder"));
-  removeServers(settings, sourceSettings, collectServers(previousPackages, "qoder"));
-  mergeServers(settings, sourceSettings, collectServers(packages, "qoder"));
+  const sourceSettings = (await pathExists(currentSettings))
+    ? currentSettings
+    : seedFromOriginal
+      ? path.join(sourceHome, "settings.json")
+      : undefined;
+  const settingsPath = sourceSettings ?? path.join(root, "settings.json");
+  const settings = parseJsonObject(sourceSettings ? await readOptional(sourceSettings) : null, settingsPath);
+  removeHooks(settingsPath, settings, collectHooks(previousPackages, "qoder"));
+  await mergeHooks(settingsPath, settings, collectHooks(packages, "qoder"));
+  removeServers(settings, settingsPath, collectServers(previousPackages, "qoder"));
+  mergeServers(settings, settingsPath, collectServers(packages, "qoder"));
   const settingsDestination = path.join(root, "settings.json");
   await writeJsonAtomic(settingsDestination, settings);
   await chmod(settingsDestination, 0o600);
@@ -652,6 +712,7 @@ async function prepareStableHomeTransition(
   packages: InstalledPackage[],
   previousMetadata: ViewMetadata,
   previousPackages: InstalledPackage[],
+  seedFromOriginal: boolean,
 ): Promise<StableHomeTransition> {
   const sharedSkills = await prepareSharedSkillsTransition(environment, packages, previousMetadata, previousPackages);
   const links: {
@@ -709,7 +770,7 @@ async function prepareStableHomeTransition(
     const input = await readOptional(statePath);
     const sourcePath = originalClaudeStatePath(sourceAgentHome("claude"));
     const state = input === null
-      ? parseJsonObject(await readOptional(sourcePath), sourcePath)
+      ? parseJsonObject(seedFromOriginal ? await readOptional(sourcePath) : null, sourcePath)
       : parseJsonObject(input, statePath);
     const currentServers = state.mcpServers;
     if (currentServers !== undefined && (!currentServers || typeof currentServers !== "object" || Array.isArray(currentServers))) {
@@ -838,6 +899,7 @@ export async function materializeEnvironmentView(
   hooks: ViewInstallHooks = {},
 ): Promise<void> {
   const name = environment.metadata.name;
+  const seedFromOriginal = hooks.seedFromOriginal ?? false;
   const destination = environmentViewPath(name);
   const parent = path.dirname(destination);
   await mkdir(parent, { recursive: true, mode: 0o700 });
@@ -850,7 +912,13 @@ export async function materializeEnvironmentView(
     await linkSkills(temporary, packages);
     const skillLinks: Partial<Record<Platform, Record<string, string>>> = {};
     if (environment.spec.targets.includes("codex")) {
-      skillLinks.codex = await buildCodexView(name, path.join(temporary, "codex"), packages);
+      skillLinks.codex = await buildCodexView(
+        name,
+        path.join(temporary, "codex"),
+        packages,
+        hooks.previousPackages ?? [],
+        seedFromOriginal,
+      );
     }
     if (environment.spec.targets.includes("claude")) {
       skillLinks.claude = await buildClaudeView(
@@ -858,6 +926,7 @@ export async function materializeEnvironmentView(
         path.join(temporary, "claude"),
         packages,
         hooks.previousPackages ?? [],
+        seedFromOriginal,
       );
     }
     if (environment.spec.targets.includes("pi")) {
@@ -869,6 +938,7 @@ export async function materializeEnvironmentView(
         path.join(temporary, "qoder"),
         packages,
         hooks.previousPackages ?? [],
+        seedFromOriginal,
       );
     }
     const codexMcpServers = environment.spec.targets.includes("codex")
@@ -888,7 +958,13 @@ export async function materializeEnvironmentView(
       resources: { codexMcpServers, claudeMcpServers, ...(qoderMcpServers ? { qoderMcpServers } : {}) },
     });
     await hooks.beforePublish?.();
-    const homeTransition = await prepareStableHomeTransition(environment, packages, previousMetadata, hooks.previousPackages ?? []);
+    const homeTransition = await prepareStableHomeTransition(
+      environment,
+      packages,
+      previousMetadata,
+      hooks.previousPackages ?? [],
+      seedFromOriginal,
+    );
     await publishViewGeneration(temporary, destination, {
       ...hooks,
       beforeSwap: async () => {
@@ -1025,9 +1101,9 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
       }
       const hooksPath = path.join(root, "codex", "hooks.json");
       const hooksRoot = parseJsonObject(await readOptional(hooksPath), hooksPath);
-      const sourceHooksPath = path.join(sourceAgentHome("codex"), "hooks.json");
-      const expectedHooks = parseJsonObject(await readOptional(sourceHooksPath), sourceHooksPath);
-      await mergeHooks(sourceHooksPath, expectedHooks, collectHooks(packages, "codex"));
+      const expectedHooks = parseJsonObject(await readOptional(hooksPath), hooksPath);
+      removeHooks(hooksPath, expectedHooks, collectHooks(packages, "codex"));
+      await mergeHooks(hooksPath, expectedHooks, collectHooks(packages, "codex"));
       if (!equal(hooksRoot, expectedHooks)) throw new Error(`Codex Hooks differ from the Environment closure in ${hooksPath}`);
     } else if (target === "claude") {
       const statePath = path.join(home, ".claude.json");

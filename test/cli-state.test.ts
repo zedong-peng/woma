@@ -222,9 +222,9 @@ test("CLI reports existing Agent state once without contaminating stdout", { con
     const first = await runCli(["info", "--json"], root, home);
     assert.equal(first.code, 0, first.stderr);
     assert.equal((JSON.parse(first.stdout) as { environment: { name: string } }).environment.name, "base");
-    assert.match(first.stderr, /Woma created an isolated base Environment/);
-    assert.match(first.stderr, /woma migrate skills --dry-run/);
-    assert.match(first.stderr, /woma migrate sessions --dry-run/);
+    assert.match(first.stderr, /Woma created a clean, isolated base Environment/);
+    assert.match(first.stderr, /Run woma init to automatically create a codex Environment/);
+    assert.match(first.stderr, /Use woma migrate for any later or manual imports/);
     assert.doesNotMatch(first.stderr, /codex-private-name/);
 
     const second = await runCli(["list"], root, home);

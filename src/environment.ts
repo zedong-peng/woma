@@ -247,6 +247,21 @@ export async function environmentSnapshot(projectRoot: string, name: string): Pr
   });
 }
 
+export async function validateEnvironmentState(projectRoot: string, name: string): Promise<void> {
+  if (name === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, name)))) {
+    await ensureBaseEnvironment(projectRoot);
+  }
+  await withEnvironmentLock(name, async () => {
+    const [environment, lock] = await Promise.all([
+      readEnvironmentFile(projectRoot, name),
+      readEnvironmentLockFile(projectRoot, name),
+    ]);
+    validateEnvironmentLockGraph(environment, lock);
+    const loaded = await loadEnvironmentSnapshot(environment, lock);
+    await validateEnvironmentView(environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
+  });
+}
+
 async function initializeEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<WomaEnvironment> {
   environmentName.parse(name);
   if (await pathExists(environmentPath(projectRoot, name))) throw new Error(`Environment already exists: ${name}`);
@@ -258,6 +273,7 @@ async function initializeEnvironment(projectRoot: string, name: string, targets:
   environmentSchema.parse(environment);
   try {
     await materializeEnvironmentView(environment, [], {
+      seedFromOriginal: name !== DEFAULT_ENVIRONMENT,
       beforeSwap: async () => {
         await writeJsonAtomic(environmentLockPath(projectRoot, name), emptyLock());
         try {
@@ -373,6 +389,7 @@ export async function importEnvironmentSnapshot(
     const loaded = await loadEnvironmentSnapshot(environment, lock);
     try {
       await materializeEnvironmentView(environment, loaded.names.map((name) => loaded.packages.get(name)!), {
+        seedFromOriginal: requestedName !== DEFAULT_ENVIRONMENT,
         beforeSwap: async () => {
           await writeJsonAtomic(environmentLockPath(projectRoot, requestedName), lock);
           try {
