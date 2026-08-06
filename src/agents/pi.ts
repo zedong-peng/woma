@@ -23,7 +23,7 @@ export const piAdapter: AgentAdapter = {
     return capabilitySupportIssues(piAdapter, input.capabilities);
   },
   plan() {
-    return { files: [], resources: { mcpServers: [] } };
+    return { files: [], resources: { mcpServers: [] }, ownership: [] };
   },
   discover() {
     return { mcpServers: [], hooks: [], externalMcpServers: [] };

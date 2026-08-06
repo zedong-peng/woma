@@ -2,7 +2,8 @@ import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm,
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { canonicalCapabilities } from "./agents/canonical.js";
+import { canonicalCapabilities, canonicalClosure } from "./agents/canonical.js";
+import type { CanonicalOwnershipRecord } from "./agents/canonical.js";
 import { renderCodexConfig } from "./agents/codex.js";
 import { agentAdapter, resourceMetadataPlatforms } from "./agents/registry.js";
 import type {
@@ -230,8 +231,10 @@ async function buildAgentProjection(
   const input: AgentProjectionInput = {
     capabilities: canonicalCapabilities(packages, platform),
     previousCapabilities: canonicalCapabilities(previousPackages, platform),
+    canonicalClosure: canonicalClosure(packages),
     artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
     previousManagedMcpServers: stringArray(previousMetadata.resources?.[resourceMetadataKey(platform)]),
+    previousOwnership: [],
   };
   const errors = adapter.validate(input).filter((issue) => issue.severity === "error");
   if (errors.length > 0) {
@@ -290,6 +293,7 @@ interface ViewMetadata {
   targets?: unknown;
   skills?: unknown;
   resources?: Record<string, unknown> | undefined;
+  ownership?: Record<string, unknown> | undefined;
 }
 
 async function previousViewMetadata(root: string): Promise<ViewMetadata> {
@@ -297,7 +301,7 @@ async function previousViewMetadata(root: string): Promise<ViewMetadata> {
 }
 
 function validateViewMetadataShape(metadata: ViewMetadata, metadataPath: string): void {
-  const allowed = new Set(["environment", "targets", "packages", "skills", "resources"]);
+  const allowed = new Set(["environment", "targets", "packages", "skills", "resources", "ownership"]);
   const unexpected = Object.keys(metadata).filter((key) => !allowed.has(key));
   if (unexpected.length > 0) {
     throw new Error(`Environment view metadata contains unexpected fields at ${metadataPath}: ${unexpected.join(", ")}`);
@@ -687,8 +691,10 @@ export async function materializeEnvironmentView(
       skillLinks[platform] = build.skillLinks;
     }
     const resources: Record<string, string[]> = {};
+    const ownership: Record<string, unknown> = {};
     for (const platform of resourceMetadataPlatforms(environment.spec.targets)) {
       resources[resourceMetadataKey(platform)] = builds.get(platform)?.plan.resources.mcpServers ?? [];
+      ownership[platform] = builds.get(platform)?.plan.ownership ?? [];
     }
     await writeJsonAtomic(path.join(temporary, "view.json"), {
       environment: name,
@@ -696,6 +702,7 @@ export async function materializeEnvironmentView(
       packages: packages.map((pkg) => ({ name: pkg.lock.name, version: pkg.lock.version, integrity: pkg.lock.integrity })),
       skills: skillLinks,
       resources,
+      ownership,
     });
     await hooks.beforePublish?.();
     const homeTransition = await prepareStableHomeTransition(
@@ -850,14 +857,22 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
     const projectionInput: AgentProjectionInput = {
       capabilities,
       previousCapabilities: capabilities,
+      canonicalClosure: canonicalClosure(packages),
       artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
       previousManagedMcpServers: stringArray(
         (metadata.resources as Record<string, unknown> | undefined)?.[resourceMetadataKey(target)],
       ),
+      previousOwnership: Array.isArray((metadata.ownership as Record<string, unknown> | undefined)?.[target])
+        ? (metadata.ownership as Record<string, unknown>)[target] as CanonicalOwnershipRecord[]
+        : [],
     };
     const issues = adapter.diagnose(projectionInput).filter((issue) => issue.severity === "error");
     if (issues.length > 0) throw new Error(`${adapter.descriptor.displayName} Adapter diagnostics failed: ${issues.map((issue) => issue.message).join("; ")}`);
     const plan = adapter.plan(projectionInput);
+    const recordedOwnership = (metadata.ownership as Record<string, unknown> | undefined)?.[target];
+    if (!equal(recordedOwnership, plan.ownership ?? [])) {
+      throw new Error(`Environment ownership metadata is stale for ${target} in ${metadataPath}`);
+    }
     const contracts = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
     for (const file of plan.files) {
       const contract = contracts.get(file.artifactId);
@@ -910,8 +925,10 @@ export async function discoverEnvironmentAgentCapabilities(
     const input: AgentProjectionInput = {
       capabilities,
       previousCapabilities: capabilities,
+      canonicalClosure: canonicalClosure(packages),
       artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
       previousManagedMcpServers: stringArray(metadata.resources?.[resourceMetadataKey(platform)]),
+      previousOwnership: Array.isArray(metadata.ownership?.[platform]) ? metadata.ownership[platform] as CanonicalOwnershipRecord[] : [],
     };
     discoveries.push({ platform, result: adapter.discover(input), diagnostics: adapter.diagnose(input) });
   }

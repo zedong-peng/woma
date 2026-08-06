@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { HookSpec, McpServer, Platform, SkillSpec } from "../types.js";
+import type { CanonicalClosure, CanonicalOwnershipRecord } from "./canonical.js";
 
 export type CapabilityStrategy = "symlink" | "native" | "unsupported";
 
@@ -81,8 +82,10 @@ export interface CanonicalCapabilities {
 export interface AgentProjectionInput {
   capabilities: CanonicalCapabilities;
   previousCapabilities: CanonicalCapabilities;
+  canonicalClosure?: CanonicalClosure;
   artifacts: Readonly<Record<string, ArtifactSnapshot>>;
   previousManagedMcpServers: readonly string[];
+  previousOwnership?: readonly CanonicalOwnershipRecord[];
 }
 
 export interface ProjectionFile {
@@ -95,6 +98,7 @@ export interface ProjectionPlan {
   resources: {
     mcpServers: string[];
   };
+  ownership?: readonly CanonicalOwnershipRecord[];
 }
 
 export interface ValidationIssue {
@@ -107,6 +111,16 @@ export interface DiscoveryResult {
   mcpServers: string[];
   hooks: string[];
   externalMcpServers: string[];
+  candidates?: readonly DiscoveryCandidate[];
+}
+
+export interface DiscoveryCandidate {
+  capability: "mcp" | "hook";
+  identity: string;
+  name: string;
+  origin: "external";
+  source: string;
+  secretBearing: boolean;
 }
 
 export interface Diagnostic {

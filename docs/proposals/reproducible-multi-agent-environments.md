@@ -451,8 +451,9 @@ and explicit recreation over compatibility branches that manufacture trusted run
 Implementation should be split into independently reviewable changes:
 
 1. Extract canonical capability closure construction and per-Agent Adapter interfaces from view publication, with one shared
-   publisher. This boundary and the first new Adapter (OpenCode) are implemented; canonical digesting and removal of Agent and
-   platform fields from capability Package manifests remain a separate schema migration.
+   publisher. This boundary, deterministic `capabilities-v1` digest/identity records, conformance checks, and the first new
+   Adapter (OpenCode) are implemented; removal of Agent and platform fields from capability Package manifests remains a
+   separate schema migration.
 2. Introduce the multi-runtime recipe and lock, Runtime Provider trust contract, immutable Runtime Store, and Environment
    executable directory.
 3. Replace the shared writable Skill root with per-Agent native directories and immutable Package projections.
