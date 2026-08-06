@@ -55,7 +55,7 @@ metadata:
   description: Describe the repeatable outcome this Woma Package delivers.
   tags: []
 spec:
-  platforms: [codex, claude, pi, qoder]
+  platforms: [codex, claude, pi, qoder, opencode]
   dependencies: []
   entrypoints:
     - name: ${name}

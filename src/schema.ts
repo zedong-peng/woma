@@ -11,7 +11,7 @@ const packageName = z
   .max(80)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
 const envName = z.string().regex(/^[A-Z_][A-Z0-9_]*$/, "must be an environment variable name");
-const platform = z.enum(["codex", "claude", "pi", "qoder"]);
+const platform = z.enum(["codex", "claude", "pi", "qoder", "opencode"]);
 const platformList = z.array(platform).min(1).refine((items) => new Set(items).size === items.length, "must not contain duplicates");
 const versionRange = z.string().min(1).refine((value) => validRange(value) !== null, "must be a valid semver range");
 

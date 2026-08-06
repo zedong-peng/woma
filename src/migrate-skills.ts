@@ -152,7 +152,7 @@ function manifest(skill: ExistingSkill, version: string): WomaManifest {
       tags: ["captured", "migrated"],
     },
     spec: {
-      platforms: ["codex", "claude", "pi", "qoder"],
+      platforms: ["codex", "claude", "pi", "qoder", "opencode"],
       dependencies: [],
       entrypoints: [],
       requirements: { env: [], commands: [] },

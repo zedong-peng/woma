@@ -1,16 +1,9 @@
 import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { agentAdapter, SUPPORTED_AGENTS } from "./agents/registry.js";
 import { environmentSnapshot } from "./environment.js";
 import { environmentAgentHomePath, sourceAgentHome } from "./view.js";
-import type { Platform } from "./types.js";
-
-const HOME_VARIABLES: Record<Platform, "CODEX_HOME" | "CLAUDE_CONFIG_DIR" | "PI_CODING_AGENT_DIR" | "QODER_CONFIG_DIR"> = {
-  codex: "CODEX_HOME",
-  claude: "CLAUDE_CONFIG_DIR",
-  pi: "PI_CODING_AGENT_DIR",
-  qoder: "QODER_CONFIG_DIR",
-};
 
 export async function runInEnvironment(options: {
   projectRoot: string;
@@ -22,10 +15,22 @@ export async function runInEnvironment(options: {
   const { environment } = await environmentSnapshot(options.projectRoot, options.environment);
   const selected = new Set(environment.spec.targets);
   const env: NodeJS.ProcessEnv = { ...process.env, WOMA_ENV: environment.metadata.name };
-  for (const platform of Object.keys(HOME_VARIABLES) as Platform[]) {
-    env[HOME_VARIABLES[platform]] = selected.has(platform)
-      ? environmentAgentHomePath(environment.metadata.name, platform)
-      : sourceAgentHome(platform);
+  for (const platform of SUPPORTED_AGENTS) {
+    const descriptor = agentAdapter(platform).descriptor;
+    const environmentHome = environmentAgentHomePath(environment.metadata.name, platform);
+    for (const variable of descriptor.runtimeVariables) {
+      if (selected.has(platform)) {
+        env[variable.name] = path.resolve(environmentHome, variable.selectedRelativePath);
+        continue;
+      }
+      const original = process.env[variable.originalName];
+      if (original !== undefined) {
+        if (original === "") delete env[variable.name];
+        else env[variable.name] = original;
+      } else if (variable.name === descriptor.sourceHome.environmentVariable && platform !== "opencode") {
+        env[variable.name] = sourceAgentHome(platform);
+      }
+    }
   }
   const cwd = path.resolve(options.cwd ?? process.cwd());
   const cwdInfo = await stat(cwd).catch((error: NodeJS.ErrnoException) => {

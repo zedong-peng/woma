@@ -112,10 +112,17 @@ test("CLI help lists commands alphabetically", { concurrency: false }, async () 
   }
 });
 
-test("package metadata exposes only the woma executable", async () => {
-  const metadata = JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as { name: string; bin: Record<string, string> };
+test("package metadata exposes only the woma executable and matches the CLI version", async () => {
+  const metadata = JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as {
+    name: string;
+    version: string;
+    bin: Record<string, string>;
+  };
   assert.equal(metadata.name, "woma");
   assert.deepEqual(metadata.bin, { woma: "dist/src/cli.js" });
+  const result = await runCliProcess(["--version"], process.cwd(), path.join(os.tmpdir(), "woma-cli-version-home"));
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout.trim(), metadata.version);
 });
 
 test("CLI deactivate does not initialize base or write project state", { concurrency: false }, async () => {
@@ -293,6 +300,7 @@ test("CLI lists all Package-managed resources in a selected Environment", { conc
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-list-"));
   const home = path.join(root, "home");
   const previousEnvironment = process.env.WOMA_ENV;
+  const previousOpenCodeDirectory = process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR;
   try {
     delete process.env.WOMA_ENV;
     const pkg = await resourcePackageFixture(root, "listed-resources");
@@ -317,6 +325,17 @@ test("CLI lists all Package-managed resources in a selected Environment", { conc
     assert.match(codexOnly.stdout, /claude-docs\s+http\s+listed-resources@1\.0\.0\s+none/);
     assert.match(codexOnly.stdout, /Stop\s+\*\s+listed-resources@1\.0\.0\s+none/);
 
+    const nativeOpenCode = path.join(root, "native-opencode");
+    process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR = nativeOpenCode;
+    await write(
+      path.join(nativeOpenCode, "opencode.jsonc"),
+      '{ "mcp": { "native-tools": { "type": "local", "command": ["node", "native.mjs"] } } }\n',
+    );
+    assert.equal((await runCli(["env", "create", "listed-opencode", "--target", "opencode"], root, home)).code, 0);
+    const openCode = await runCli(["list", "-n", "listed-opencode"], root, home);
+    assert.equal(openCode.code, 0, openCode.stderr);
+    assert.match(openCode.stdout, /native-tools\s+native\s+external\s+opencode/);
+
     const current = await runCli(["list"], root, home);
     assert.equal(current.code, 0, current.stderr);
     assert.match(current.stdout, /Environment: base/);
@@ -325,6 +344,8 @@ test("CLI lists all Package-managed resources in a selected Environment", { conc
   } finally {
     if (previousEnvironment === undefined) delete process.env.WOMA_ENV;
     else process.env.WOMA_ENV = previousEnvironment;
+    if (previousOpenCodeDirectory === undefined) delete process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR;
+    else process.env.WOMA_ORIGINAL_OPENCODE_CONFIG_DIR = previousOpenCodeDirectory;
     await removeTestTree(root);
   }
 });
@@ -368,10 +389,15 @@ test("CLI creates Pi and all-target Environments", { concurrency: false }, async
     assert.match(qoderOnly.stdout, /targets qoder/);
     assert.match(await readFile(path.join(home, "environments", "qoder-only", "environment.yaml"), "utf8"), /targets:[\s\S]*- qoder/);
 
+    const opencodeOnly = await runCli(["env", "create", "opencode-only", "--target", "opencode"], root, home);
+    assert.equal(opencodeOnly.code, 0, opencodeOnly.stderr);
+    assert.match(opencodeOnly.stdout, /targets opencode/);
+    assert.match(await readFile(path.join(home, "environments", "opencode-only", "environment.yaml"), "utf8"), /targets:[\s\S]*- opencode/);
+
     const all = await runCli(["env", "create", "all-agents", "--target", "all"], root, home);
     assert.equal(all.code, 0, all.stderr);
-    assert.match(all.stdout, /targets codex, claude, pi, qoder/);
-    assert.match(await readFile(path.join(home, "environments", "all-agents", "view", "view.json"), "utf8"), /"qoder"/);
+    assert.match(all.stdout, /targets codex, claude, pi, qoder, opencode/);
+    assert.match(await readFile(path.join(home, "environments", "all-agents", "view", "view.json"), "utf8"), /"opencode"/);
 
     const bundle = path.join(root, "all-agents.woma-env");
     assert.equal((await runCli(["env", "export", "--name", "all-agents", "--output", bundle], root, home)).code, 0);
@@ -391,7 +417,7 @@ test("CLI info reports Agent executables found on PATH", { concurrency: false },
   const previousPath = process.env.PATH;
   try {
     await mkdir(bin, { recursive: true });
-    for (const command of ["codex", "qodercli"]) {
+    for (const command of ["codex", "qodercli", "opencode"]) {
       const executable = path.join(bin, command);
       await writeFile(executable, "#!/bin/sh\nexit 0\n", "utf8");
       await chmod(executable, 0o755);
@@ -407,12 +433,14 @@ test("CLI info reports Agent executables found on PATH", { concurrency: false },
     assert.deepEqual(context.agentClis.claude, { command: "claude", available: false, path: null });
     assert.deepEqual(context.agentClis.pi, { command: "pi", available: false, path: null });
     assert.deepEqual(context.agentClis.qoder, { command: "qodercli", available: true, path: path.join(bin, "qodercli") });
+    assert.deepEqual(context.agentClis.opencode, { command: "opencode", available: true, path: path.join(bin, "opencode") });
 
     const humanResult = await runCli(["info"], root, home);
     assert.equal(humanResult.code, 0, humanResult.stderr);
     assert.ok(humanResult.stdout.includes(`codex   ${path.join(bin, "codex")}`));
     assert.match(humanResult.stdout, /claude\s+claude not found on PATH/);
     assert.ok(humanResult.stdout.includes(`qoder   ${path.join(bin, "qodercli")}`));
+    assert.ok(humanResult.stdout.includes(`opencode ${path.join(bin, "opencode")}`));
   } finally {
     if (previousPath === undefined) delete process.env.PATH;
     else process.env.PATH = previousPath;
@@ -437,6 +465,24 @@ test("CLI runs a command in a selected Environment and preserves its exit code",
     assert.deepEqual(JSON.parse(result.stdout), {
       environment: "runner",
       codex: path.join(home, "environments", "runner", "home", "codex"),
+    });
+
+    const openCodeCreated = await runCli(
+      ["--project", project, "create", "-n", "open-runner", "--target", "opencode"],
+      root,
+      home,
+    );
+    assert.equal(openCodeCreated.code, 0, openCodeCreated.stderr);
+    const openCodeScript = "process.stdout.write(JSON.stringify({ config: process.env.OPENCODE_CONFIG, directory: process.env.OPENCODE_CONFIG_DIR }))";
+    const openCodeResult = await runCliProcess(
+      ["--project", project, "run", "--name", "open-runner", process.execPath, "-e", openCodeScript],
+      root,
+      home,
+    );
+    const openCodeHome = path.join(home, "environments", "open-runner", "home", "opencode");
+    assert.deepEqual(JSON.parse(openCodeResult.stdout), {
+      config: path.join(openCodeHome, "opencode.json"),
+      directory: openCodeHome,
     });
   } finally {
     await removeTestTree(root);

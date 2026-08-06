@@ -27,6 +27,7 @@ import {
   type BaseEnvironmentInitializationOptions,
   type EnvironmentCheck,
 } from "./environment.js";
+import { discoverEnvironmentAgentCapabilities } from "./view.js";
 import { inspectEnvironmentLocalSkills } from "./environment-skills.js";
 import { installPackageSource, loadCachedPackage } from "./package.js";
 import { resolveShell } from "./shell.js";
@@ -73,12 +74,14 @@ function targets(input: string): Platform[] {
   const values = input === "both"
     ? ["codex", "claude"]
     : input === "all"
-      ? ["codex", "claude", "pi", "qoder"]
+      ? ["codex", "claude", "pi", "qoder", "opencode"]
       : input.split(",");
   const result: Platform[] = [];
   for (const item of values) {
     const value = item.trim();
-    if (value !== "codex" && value !== "claude" && value !== "pi" && value !== "qoder") throw new Error(`Unknown target: ${value}`);
+    if (value !== "codex" && value !== "claude" && value !== "pi" && value !== "qoder" && value !== "opencode") {
+      throw new Error(`Unknown target: ${value}`);
+    }
     if (!result.includes(value)) result.push(value);
   }
   if (result.length === 0) throw new Error("Select at least one target");
@@ -119,7 +122,7 @@ function printPackageProvenance(lock: LockedPackage, indent = "  "): void {
 program
   .name("woma")
   .description("Create, reproduce, and switch isolated Agent environments")
-  .version("0.6.0")
+  .version("0.6.1")
   .enablePositionalOptions()
   .configureHelp({
     sortSubcommands: true,
@@ -204,7 +207,7 @@ program
   .command("create")
   .description("create a new Agent environment")
   .requiredOption("-n, --name <environment>", "environment name")
-  .option("-t, --target <target>", "codex, claude, pi, qoder, both, all, or a comma-separated list")
+  .option("-t, --target <target>", "codex, claude, pi, qoder, opencode, both, all, or a comma-separated list")
   .option("-f, --file <bundle>", "create from a portable .woma-env bundle")
   .action(createCommand);
 
@@ -218,7 +221,7 @@ function migrationSource(input: string): SkillMigrationSource {
 envCommand
   .command("create <name>")
   .description("create a global named environment")
-  .option("-t, --target <target>", "codex, claude, pi, qoder, both, all, or a comma-separated list", "both")
+  .option("-t, --target <target>", "codex, claude, pi, qoder, opencode, both, all, or a comma-separated list", "both")
   .action(async (name: string, options: { target: string }, command: Command) => {
     await createCommand({ name, target: options.target }, command);
   });
@@ -319,6 +322,7 @@ program
       for (const skill of loaded.pkg.manifest.spec.skills) managedSkillNames.add(skill.name);
     }
     const localSkills = await inspectEnvironmentLocalSkills(environment, managedSkillNames);
+    const discoveries = await discoverEnvironmentAgentCapabilities(environment, available.map((loaded) => loaded.pkg));
     console.log(`Environment: ${name}${active === name ? " (active)" : ""}`);
     console.log(`  targets   ${environment.spec.targets.join(", ")}`);
     console.log(`  roots     ${environment.spec.roots.map((root) => root.name).join(", ") || "none"}`);
@@ -359,6 +363,12 @@ program
           server.platforms,
         );
         console.log(`    ${server.name}  ${server.transport}  ${loaded.locked.name}@${loaded.locked.version}  ${platforms.join(", ") || "none"}`);
+        resourceCount += 1;
+      }
+    }
+    for (const { platform, result } of discoveries) {
+      for (const server of result.externalMcpServers) {
+        console.log(`    ${server}  native  external  ${platform}`);
         resourceCount += 1;
       }
     }

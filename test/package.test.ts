@@ -408,7 +408,7 @@ spec:
       command: node
 `,
     );
-    await assert.rejects(installPackageSource(mcpRoot), /Pi adapter currently supports Skills only/);
+    await assert.rejects(installPackageSource(mcpRoot), /Pi Adapter does not support MCP server server/);
 
     const hookRoot = path.join(root, "pi-hook");
     await write(
@@ -426,7 +426,7 @@ spec:
       command: "true"
 `,
     );
-    await assert.rejects(installPackageSource(hookRoot), /Pi adapter currently supports Skills only/);
+    await assert.rejects(installPackageSource(hookRoot), /Pi Adapter does not support Hook tool_call/);
   } finally {
     await removeTestTree(root);
   }
@@ -461,6 +461,51 @@ spec:
     assert.deepEqual(pkg.manifest.spec.platforms, ["qoder"]);
     assert.equal(pkg.manifest.spec.mcpServers.length, 1);
     assert.equal(pkg.manifest.spec.hooks.length, 1);
+  } finally {
+    await removeTestTree(root);
+  }
+});
+
+test("Package validation rejects OpenCode Hooks and WebSocket MCP", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "woma-package-opencode-resources-"));
+  process.env.WOMA_HOME = path.join(root, "home");
+  try {
+    const hookRoot = path.join(root, "opencode-hook");
+    await write(
+      path.join(hookRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
+metadata:
+  name: opencode-hook
+  version: 1.0.0
+  description: Unsupported OpenCode Hook fixture.
+spec:
+  platforms: [opencode]
+  hooks:
+    - event: PostToolUse
+      command: "true"
+`,
+    );
+    await assert.rejects(installPackageSource(hookRoot), /OpenCode Adapter does not support Hook PostToolUse/);
+
+    const wsRoot = path.join(root, "opencode-ws");
+    await write(
+      path.join(wsRoot, "woma.yaml"),
+      `apiVersion: woma.dev/v1
+kind: Woma
+metadata:
+  name: opencode-ws
+  version: 1.0.0
+  description: Unsupported OpenCode WebSocket MCP fixture.
+spec:
+  platforms: [opencode]
+  mcpServers:
+    - name: websocket
+      transport: ws
+      url: wss://example.invalid/mcp
+`,
+    );
+    await assert.rejects(installPackageSource(wsRoot), /WebSocket|transport ws.*OpenCode/i);
   } finally {
     await removeTestTree(root);
   }

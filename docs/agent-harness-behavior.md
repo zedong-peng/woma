@@ -15,7 +15,7 @@ between opaque Agent state, Environment-local external Skills, and locked Woma P
 | --- | --- |
 | `$WOMA_HOME` | Woma state root; defaults to `~/.woma` |
 | `<environment>` | A global Woma Environment name such as `base` or `research` |
-| `<agent-home>` | The active root selected by `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, or `QODER_CONFIG_DIR` |
+| `<agent-home>` | The active root selected by an Agent's Adapter-declared Environment variables |
 | `<project>` | The exact working directory, or the directory passed with `--project`; Woma does not search parent directories |
 | `<package>` | A Woma Package name |
 | `<cache-key>` | The content-addressed Package resolution recorded in the Environment lock |
@@ -29,7 +29,7 @@ Paths in this document have one of three stability levels:
   a command explicitly documents an exception.
 
 Do not promote an observed Agent cache, database, plugin installation directory, or credential file into a Woma contract.
-Add a provider adapter and tests first when Woma needs to own a new path.
+Add an [Agent Adapter](agent-adapters.md) and tests first when Woma needs to own a new path.
 
 ## Environment layout
 
@@ -44,14 +44,16 @@ $WOMA_HOME/environments/<environment>/
 │   ├── codex/                # stable CODEX_HOME when Codex is targeted
 │   ├── claude/               # stable CLAUDE_CONFIG_DIR when Claude is targeted
 │   ├── pi/                   # stable PI_CODING_AGENT_DIR when Pi is targeted
-│   └── qoder/                # stable QODER_CONFIG_DIR when Qoder is targeted
+│   ├── qoder/                # stable QODER_CONFIG_DIR when Qoder is targeted
+│   └── opencode/             # stable OpenCode Woma overlay when targeted
 └── view -> .view.gen-<id>/   # atomically published managed generation
     ├── view.json             # generation metadata and resource inventory
     ├── skills/<name>         # links to immutable Package contents
     ├── codex/
     ├── claude/
     ├── pi/
-    └── qoder/
+    ├── qoder/
+    └── opencode/
 ```
 
 The stable Agent homes are not generation-swapped. Each targeted Agent's `skills` path links to the one real
@@ -92,14 +94,15 @@ The shell hook records the original roots and changes only the roots for Agents 
 | Claude Code | `~/.claude` | `$WOMA_HOME/environments/<environment>/home/claude` | `$CLAUDE_CONFIG_DIR/skills` | `$CLAUDE_CONFIG_DIR/settings.json`, Package MCP fields in `$CLAUDE_CONFIG_DIR/.claude.json` |
 | Pi | `~/.pi/agent` | `$WOMA_HOME/environments/<environment>/home/pi` | `$PI_CODING_AGENT_DIR/skills` | none beyond the Skill link |
 | Qoder CLI | `~/.qoder` | `$WOMA_HOME/environments/<environment>/home/qoder` | `$QODER_CONFIG_DIR/skills` | `$QODER_CONFIG_DIR/settings.json` |
+| OpenCode | `~/.config/opencode` | `$WOMA_HOME/environments/<environment>/home/opencode` | `$OPENCODE_CONFIG_DIR/skills` | `$OPENCODE_CONFIG` (`home/opencode/opencode.json`) |
 
-All four selected Skill paths resolve to:
+All five selected Skill paths resolve to:
 
 ```text
 $WOMA_HOME/environments/<environment>/home/skills
 ```
 
-The managed Codex, Claude, and Qoder configuration files in stable homes link into the current view. Woma owns only the
+The managed Codex, Claude, Qoder, and OpenCode configuration files in stable homes link into the current view. Woma owns only the
 Package resource projections described below; it preserves unrelated user-owned fields.
 
 ### Codex
@@ -149,6 +152,16 @@ Qoder Skills use the shared Skill directory. Woma projects Package MCP servers a
 `$QODER_CONFIG_DIR/settings.json` while preserving unrelated settings. Credentials, login state, sessions, and all other
 non-Skill paths are opaque. New Environments do not seed the original Qoder home.
 
+### OpenCode
+
+OpenCode Skills use the shared Skill directory. Woma projects Package MCP servers into `home/opencode/opencode.json`, exports
+that file through `OPENCODE_CONFIG`, and exports `home/opencode` through `OPENCODE_CONFIG_DIR`. Hooks have no canonical
+mapping and are rejected when they target OpenCode. Woma does not override `HOME`, `XDG_CONFIG_HOME`, or `XDG_DATA_HOME`;
+OpenCode still loads its global and project configuration according to its native precedence. Provider authentication, MCP
+OAuth tokens, sessions, caches, Plugins, and other data therefore remain native opaque state outside the managed view and
+Environment bundle. OpenCode exposes no dedicated data-home override that Woma can select, so those ambient paths may be
+shared by multiple Woma Environments.
+
 ## Ownership states
 
 The same Skill-shaped content can have three different ownership states:
@@ -167,10 +180,10 @@ that adopts external Skills.
 
 ### Starting an Agent
 
-After `woma activate <environment>`, starting `codex`, `claude`, `pi`, or `qodercli` directly causes that process to use
-the selected stable Agent home. The process may create or mutate credentials, sessions, databases, caches, Plugins, and
-other runtime files there. Except for the documented managed configuration and Skill paths, these writes are opaque to
-Woma and remain isolated to the Environment.
+After `woma activate <environment>`, starting `codex`, `claude`, `pi`, `qodercli`, or `opencode` directly causes that process to
+use the selected Adapter-declared capability surface. Codex, Claude, Pi, and Qoder can create opaque state under their
+selected stable homes, where it remains isolated to the Environment. OpenCode receives an Environment-specific Skill/MCP
+overlay but continues to use its ambient native data paths; Woma neither reads those paths nor claims that state is isolated.
 
 Woma does not proxy Agent executables, watch their homes, or bind session IDs to Environments. Resuming a session therefore
 uses the Environment selected in the current shell. Already-running Agents may retain startup-time Skill or MCP discovery;
@@ -209,6 +222,7 @@ The following paths in a current Environment home must be symbolic links to the 
 | Codex | `home/codex/config.toml`, `home/codex/hooks.json` |
 | Claude Code | `home/claude/.credentials.json`, `home/claude/settings.json` |
 | Qoder CLI | `home/qoder/settings.json` |
+| OpenCode | `home/opencode/opencode.json` |
 
 Codex `home/codex/auth.json` and Claude `home/claude/.claude.json` are not part of this link set. Codex owns the former as
 an ordinary file. Woma structurally reconciles Package-managed Claude MCP entries in the latter while leaving it in the
@@ -312,13 +326,13 @@ bundle. The Package Store remains intact.
 
 Given one Package manifest, Woma derives target-specific files as follows:
 
-| Package resource | Codex | Claude Code | Pi | Qoder CLI |
-| --- | --- | --- | --- | --- |
-| Skill | shared `home/skills/<name>` via managed view link | same | same | same |
-| MCP server | managed block in `view/codex/config.toml` | managed entry in stable `home/claude/.claude.json` | unsupported | managed entry in `view/qoder/settings.json` |
-| Hook | managed entry in `view/codex/hooks.json` | managed entry in `view/claude/settings.json` | unsupported | managed entry in `view/qoder/settings.json` |
+| Package resource | Codex | Claude Code | Pi | Qoder CLI | OpenCode |
+| --- | --- | --- | --- | --- | --- |
+| Skill | shared `home/skills/<name>` via managed view link | same | same | same | same |
+| MCP server | managed block in `view/codex/config.toml` | managed entry in stable `home/claude/.claude.json` | unsupported | managed entry in `view/qoder/settings.json` | managed entry in `view/opencode/opencode.json` |
+| Hook | managed entry in `view/codex/hooks.json` | managed entry in `view/claude/settings.json` | unsupported | managed entry in `view/qoder/settings.json` | unsupported |
 
-The stable Codex `config.toml` and `hooks.json`, Claude `settings.json`, and Qoder `settings.json` link to these target view
+The stable Codex `config.toml` and `hooks.json`, Claude `settings.json`, Qoder `settings.json`, and OpenCode `opencode.json` link to these target view
 files. Claude MCP state is updated transactionally in its stable `.claude.json` because that Agent state is not represented
 by the generation-swapped settings view.
 
@@ -365,7 +379,8 @@ $WOMA_HOME/
         ├── codex/config.toml              # tracker block, when targeted
         ├── codex/hooks.json               # Hook entry, when targeted
         ├── claude/settings.json           # Hook entry, when targeted
-        └── qoder/settings.json            # MCP and Hook entries, when targeted
+        ├── qoder/settings.json            # MCP and Hook entries, when targeted
+        └── opencode/opencode.json         # MCP entries, when targeted
 ```
 
 If an external `home/skills/review` already owns that name, installation fails rather than overwriting it.
@@ -386,10 +401,13 @@ CODEX_HOME=$WOMA_HOME/environments/research/home/codex       # when targeted
 CLAUDE_CONFIG_DIR=$WOMA_HOME/environments/research/home/claude
 PI_CODING_AGENT_DIR=$WOMA_HOME/environments/research/home/pi
 QODER_CONFIG_DIR=$WOMA_HOME/environments/research/home/qoder
+OPENCODE_CONFIG=$WOMA_HOME/environments/research/home/opencode/opencode.json
+OPENCODE_CONFIG_DIR=$WOMA_HOME/environments/research/home/opencode
 ```
 
-Unsupported targets retain their saved original roots. Activation does not copy files between Environments. This is why an
-Agent login, external Skill, Plugin, session, or database created in one selected Environment does not appear in another.
+Unsupported targets retain their saved original roots. Activation does not copy files between Environments. External Skills
+and state written under a selected dedicated Agent home do not appear in another Environment. OpenCode's ambient login,
+OAuth, session, cache, and Plugin state is outside this guarantee; its selected Skills and MCP overlay remain isolated.
 
 ## Development checklist
 

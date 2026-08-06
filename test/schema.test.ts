@@ -129,6 +129,21 @@ spec:
   assert.deepEqual(manifest.spec.platforms, ["codex", "claude", "pi", "qoder"]);
 });
 
+test("manifest parser accepts OpenCode as a Package platform", () => {
+  const manifest = parseManifest(`
+apiVersion: woma.dev/v1
+kind: Woma
+metadata:
+  name: opencode-skill
+  version: 1.0.0
+  description: OpenCode platform fixture.
+spec:
+  platforms: [opencode]
+  skills: []
+`);
+  assert.deepEqual(manifest.spec.platforms, ["opencode"]);
+});
+
 test("manifest parser rejects duplicate platform declarations", () => {
   assert.throws(
     () =>

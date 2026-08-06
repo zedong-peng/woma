@@ -19,7 +19,7 @@ test("workflow skeleton creates an editable Package recipe under the output dire
     const manifest = await readFile(path.join(result.root, "woma.yaml"), "utf8");
     assert.match(manifest, /name: research-review/);
     assert.match(manifest, /version: 1\.2\.3/);
-    assert.match(manifest, /platforms: \[codex, claude, pi, qoder\]/);
+    assert.match(manifest, /platforms: \[codex, claude, pi, qoder, opencode\]/);
     assert.match(
       await readFile(path.join(result.root, "skills", "research-review-workflow", "SKILL.md"), "utf8"),
       /name: research-review-workflow/,

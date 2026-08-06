@@ -1,5 +1,9 @@
 # Architecture and isolation model
 
+> [!NOTE]
+> This document describes the current implemented architecture. The proposed next Environment model is documented in
+> [Reproducible multi-Agent environments](proposals/reproducible-multi-agent-environments.md).
+
 ## Ownership boundaries
 
 Woma manages reusable Agent capabilities and isolated Agent homes. Repository knowledge and Agent Memory remain outside its ownership boundary.
@@ -8,7 +12,7 @@ Woma manages reusable Agent capabilities and isolated Agent homes. Repository kn
 | --- | --- | --- |
 | Immutable Package contents | User-global | `$WOMA_HOME/packages/` |
 | Environment recipes and locks | User-global | `$WOMA_HOME/environments/<name>/` |
-| Codex, Claude, Pi, and Qoder Environment views | User-global | `$WOMA_HOME/environments/<name>/view/` |
+| Agent Environment views | User-global | `$WOMA_HOME/environments/<name>/view/` |
 | Opaque Agent state | Per Environment | `$WOMA_HOME/environments/<name>/home/<agent>/` |
 | Skill migration snapshots | User-global | `$WOMA_HOME/migrations/skills/<skill-name>/<content-hash>/` |
 | One-time initialization state | User-global | `$WOMA_HOME/initialization.json`, `$WOMA_HOME/default-environment` |
@@ -23,7 +27,7 @@ The first `woma init` discovers supported existing Codex state. If it finds an o
 
 Explicit `woma migrate skills` remains available for Codex changes made after initialization, Claude Skills, and other destinations. Migration discovers the selected Codex and Claude sources, creates one single-Skill Package per deduplicated Skill, validates every temporary Package, and checks Package and Skill ownership against a locked target snapshot. Each read-only source directory is keyed by the Skill name and a deterministic hash of its content and origins. All changed Packages enter the normal Environment installation transaction together, so the lock, recipe, and complete view publish atomically. A repeated identical migration is a no-op; changing one Skill creates a new immutable snapshot and replaces only that Package root in the selected Environment. Dry runs never publish source snapshots or mutate the Package Store or Environment.
 
-An ordinary Skill written through any target Agent inside an already selected Environment immediately belongs to that Environment, just as a pip-installed package belongs to its active Conda environment. Every target Agent resolves its conventional `skills` path to the same stable Environment directory, so a Skill installed through Codex, Claude Code, Pi, or Qoder CLI is visible to all other targets without a Woma reconciliation command. Woma discovers non-hidden direct children with valid `SKILL.md` metadata during `list`, `info`, and `doctor`, labels their origin `external`, and never infers which tool created them. These Environment-local Skills are not Woma Packages: they do not enter the recipe, lock, Package Store, or bundle, and other Environments remain unchanged. Hidden paths such as Codex-owned `.system` are excluded from inventory. Woma does not watch directories or proxy Agent processes because all targets read the same stable storage directly.
+An ordinary Skill written through any target Agent inside an already selected Environment immediately belongs to that Environment, just as a pip-installed package belongs to its active Conda environment. Every target Agent resolves its conventional `skills` path to the same stable Environment directory, so a Skill installed through Codex, Claude Code, Pi, Qoder CLI, or OpenCode is visible to all other targets without a Woma reconciliation command. Woma discovers non-hidden direct children with valid `SKILL.md` metadata during `list`, `info`, and `doctor`, labels their origin `external`, and never infers which tool created them. These Environment-local Skills are not Woma Packages: they do not enter the recipe, lock, Package Store, or bundle, and other Environments remain unchanged. Hidden paths such as Codex-owned `.system` are excluded from inventory. Woma does not watch directories or proxy Agent processes because all targets read the same stable storage directly.
 
 ## Source normalization
 
@@ -43,6 +47,11 @@ Bundles deliberately exclude per-Environment Agent homes, Environment-local exte
 
 ## Activation and direct Agent launch
 
+Target-native projection is implemented through the formal [Agent Adapter contract](agent-adapters.md). Core first resolves
+the Package closure into canonical capabilities. The selected Adapter then validates immutable artifact snapshots and returns
+a declarative plan without filesystem access. One shared publisher owns staging, links, atomic view replacement, stable-home
+updates, and rollback. Adding an Agent therefore does not add another publication transaction or Package schema branch.
+
 Every Environment owns one reusable Agent view:
 
 ```text
@@ -55,15 +64,15 @@ content-addressed Package store
 atomic target-specific managed-resource view
         |
         v
-stable per-Environment CODEX_HOME / CLAUDE_CONFIG_DIR / PI_CODING_AGENT_DIR / QODER_CONFIG_DIR
+stable per-Environment Agent homes and Adapter-declared configuration overlays
         |
         v
-direct codex, claude, pi, or qodercli
+direct codex, claude, pi, qodercli, or opencode
 ```
 
 Package Store replacements are copied into read-only immutable generations and fully validated before an atomic cache-key symlink switch. Skill directories in every view resolve through that stable cache pointer, so repair readers see either the old or new Package and never a missing entry. Every Environment update builds a complete `.view.gen-<id>` directory and atomically replaces the stable `view` symlink, so direct Agent readers never observe mixed Skill, MCP, and Hook generations. Recipe and lock metadata commit under the Environment lock before the view pointer changes and roll back if publication fails.
 
-Each Environment has stable target Agent homes that are never generation-swapped and one real `home/skills` directory shared by all targets. Every target home's conventional `skills` path links to that directory. Woma-owned Skill entries inside it link through the atomic `view/skills` projection, while non-hidden ordinary additions are Environment-local Skills with external origin. Other Environment-specific configuration still links through target views: Codex `config.toml` and `hooks.json`; Claude `.credentials.json` and `settings.json`; and Qoder `settings.json`. Codex owns the ordinary `auth.json` in its stable Environment home; Woma does not seed it from the original home or include it in managed views. The clean `base` does not seed configuration or credentials. Other named Codex and Claude Environments seed supported provider settings and Claude credentials from the original Agent home only when first built, then inherit from the current generation so user edits through `$CODEX_HOME` or `$CLAUDE_CONFIG_DIR` survive later publication. The automatic `codex` import uses this one-time seed. Pi settings, credentials, model catalogs, Pi Packages, and sessions are ordinary Pi-owned files in the stable `$PI_CODING_AGENT_DIR`; a new Environment does not copy the original `~/.pi/agent` state. Woma strips and regenerates its marked Codex MCP blocks and exact Codex, Claude, and Qoder Hook entries while preserving user-owned settings in the Environment copy. Claude `.claude.json` remains in the stable home, where Woma transactionally updates only Package-managed `mcpServers`. Pi has no Woma MCP or Hook adapter, so Package validation rejects those resources when they target Pi instead of silently omitting them. Qoder MCP servers and Hooks live directly in the managed `settings.json` view. Woma never seeds or captures Qoder credentials; login state is ordinary Qoder-owned opaque data in the stable Environment home.
+Each Environment has stable target Agent homes that are never generation-swapped and one real `home/skills` directory shared by all targets. Every target home's conventional `skills` path links to that directory. Woma-owned Skill entries inside it link through the atomic `view/skills` projection, while non-hidden ordinary additions are Environment-local Skills with external origin. Other Environment-specific configuration links through Adapter-declared target views: Codex `config.toml` and `hooks.json`; Claude `.credentials.json` and `settings.json`; Qoder `settings.json`; and OpenCode `opencode.json`. Codex owns the ordinary `auth.json` in its stable Environment home; Woma does not seed it from the original home or include it in managed views. The clean `base` does not seed configuration or credentials. Other named Codex and Claude Environments seed supported provider settings and Claude credentials from the original Agent home only when first built, then inherit from the current generation so user edits through `$CODEX_HOME` or `$CLAUDE_CONFIG_DIR` survive later publication. The automatic `codex` import uses this one-time seed. Pi settings, credentials, model catalogs, Pi Packages, and sessions are ordinary Pi-owned files in the stable `$PI_CODING_AGENT_DIR`; a new Environment does not copy the original `~/.pi/agent` state. Woma strips and regenerates its marked Codex MCP blocks and exact Codex, Claude, and Qoder Hook entries while preserving user-owned settings in the Environment copy. Claude `.claude.json` remains in the stable home, where Woma transactionally updates only Package-managed `mcpServers`. Pi has no Woma MCP or Hook strategy, so Package validation rejects those resources instead of silently omitting them. Qoder MCP servers and Hooks live directly in the managed `settings.json` view. Woma never seeds or captures Qoder credentials; login state is ordinary Qoder-owned opaque data in the stable Environment home. OpenCode Skills and MCP servers use `OPENCODE_CONFIG` and `OPENCODE_CONFIG_DIR` overlays; Hooks are unsupported, and Woma deliberately does not override `XDG_*` or claim provider authentication, MCP OAuth, session, cache, or Plugin state. Those ambient OpenCode data paths may therefore be shared across Woma Environments.
 
 Every other path is opaque Agent-owned state. Environment-local Skill inventory enumerates only direct, non-hidden children of the shared Skill root and reads only their `SKILL.md` frontmatter; it does not hash, copy, adopt, or package them. Apart from that read-only inventory, Environment initialization and view publication do not inspect unknown files, including SQLite main, WAL, and SHM files. `woma migrate sessions` is a separate explicit operation over documented session and history paths: it builds and verifies a link-free temporary snapshot, preflights target conflicts, structurally merges JSONL records, then publishes ordinary files into the selected stable home under the Environment lock. Structured files are atomically replaced and restored on ordinary publication failure. Retired generations contain only managed resources and remain available to processes that still have those files open.
 
@@ -71,7 +80,7 @@ Every other path is opaque Agent-owned state. Environment-local Skill inventory 
 
 Initialization validates the shell edit, Codex configuration, Hooks, and Skill import before publication, records a versioned `pending` state, and advances it to `complete` only after the default Environment is durable. Woma stages an ownership marker and atomically renames that reservation into the `codex` Environment root before creating the recipe. A process interruption therefore leaves either no destination or a marker-matched destination that pending init can resume. An existing unmarked `codex` name is a conflict. Creation, Skill installation, state commit, and rollback share the `codex` Environment lock; rollback deletes only a marker-matched Environment. The initialization lock serializes concurrent init, rename, and remove commands. Renaming the selected default follows the new name, and removing it resets the default to `base`; reference writes happen before the Environment mutation and roll back on ordinary failure, so an interruption preserves the old Environment rather than deleting the referenced state. A later init falls back to `base` if a recorded non-base default is incomplete. A dry run performs the same input validation but publishes nothing. Repeated init uses the completed decision and never resynchronizes the original home. `--reverse` removes only the static hook and managed profile block, preserving Environments, the default, and initialization state.
 
-The rendered hook is static, so ordinary shell startup never launches Node, mutates Woma state, or acquires locks. It saves the original Agent configuration roots, reads `$WOMA_HOME/default-environment` when `WOMA_ENV` is unset, and selects only an Environment with a complete view. Init writes `codex` as the default after an import and `base` otherwise. A stale selection falls back to an existing `base`; if that is unavailable, the hook restores every original Agent home. It parses only a real top-level `activate` or `deactivate` command, never proxies an Agent executable, and restores unsupported target roots. A successful `deactivate` clears the shell selection and restores the original Agent homes; `woma activate base` selects the clean baseline explicitly.
+The rendered hook is static, so ordinary shell startup never launches Node, mutates Woma state, or acquires locks. It saves the original Codex, Claude, Pi, Qoder, and OpenCode configuration variables, reads `$WOMA_HOME/default-environment` when `WOMA_ENV` is unset, and selects only an Environment with a complete view. Init writes `codex` as the default after an import and `base` otherwise. A stale selection falls back to an existing `base`; if that is unavailable, the hook restores every original Agent home. It parses only a real top-level `activate` or `deactivate` command, never proxies `codex`, `claude`, `pi`, `qodercli`, or `opencode`, and restores unsupported target variables. A successful `deactivate` clears the shell selection and restores the original Agent homes; `woma activate base` selects the clean baseline explicitly.
 
 Environment recipes and view metadata intentionally have no schema-version field during the initial build stage. Strict structural validation defines the current format, and version-like fields are rejected instead of enabling compatibility branches. Explicit Skill and session migration import documented Agent-owned state and do not migrate Woma schemas.
 
@@ -88,7 +97,7 @@ The implementation provides:
 - one global target-specific view per Environment;
 - Environment-isolated Skill, MCP, and Hook visibility;
 - direct Agent launch through stable shell-selected per-Environment homes;
-- Environment-isolated opaque Agent state;
+- Environment-isolated opaque Agent state when the Agent exposes a dedicated home selector, with explicit ambient-state limitations otherwise;
 - no ownership of Agent Memory or project context;
 - safe root Package removal with orphan dependency pruning and immutable cache retention.
 

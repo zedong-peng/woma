@@ -15,6 +15,7 @@ import {
   type EnvironmentLocalSkillIssue,
 } from "./environment-skills.js";
 import {
+  discoverEnvironmentAgentCapabilities,
   environmentViewPath,
   materializeEnvironmentView,
   sourceAgentHome,
@@ -27,7 +28,7 @@ const environmentName = z
   .min(1)
   .max(80)
   .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
-const platform = z.enum(["codex", "claude", "pi", "qoder"]);
+const platform = z.enum(["codex", "claude", "pi", "qoder", "opencode"]);
 
 export const DEFAULT_ENVIRONMENT = "base";
 const baseInitializations = new Map<string, Promise<WomaEnvironment>>();
@@ -100,6 +101,7 @@ export interface CurrentEnvironmentContext {
   }[];
   environmentSkills: EnvironmentLocalSkill[];
   environmentSkillIssues: EnvironmentLocalSkillIssue[];
+  environmentMcpServers: { name: string; origin: "external"; platforms: Platform[] }[];
 }
 
 export interface EnvironmentSnapshot {
@@ -914,6 +916,8 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
       for (const skill of pkg.manifest.spec.skills) managedSkillNames.add(skill.name);
     }
     const localSkills = await inspectEnvironmentLocalSkills(loaded.environment, managedSkillNames);
+    const installedPackages = loaded.names.map((name) => loaded.packages.get(name)!);
+    const discoveries = await discoverEnvironmentAgentCapabilities(loaded.environment, installedPackages);
     return {
       projectRoot: project,
       environment: { name: loaded.environment.metadata.name, targets: loaded.environment.spec.targets },
@@ -930,6 +934,8 @@ export async function environmentInfo(projectRoot: string): Promise<CurrentEnvir
       }),
       environmentSkills: localSkills.skills,
       environmentSkillIssues: localSkills.issues,
+      environmentMcpServers: discoveries.flatMap(({ platform, result }) =>
+        result.externalMcpServers.map((name) => ({ name, origin: "external" as const, platforms: [platform] }))),
     };
   });
 }
