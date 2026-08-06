@@ -5,15 +5,18 @@ import {
   projectionDiagnostics,
   type AgentAdapter,
   type AgentProjectionInput,
+  type DiscoveryCandidate,
   type DiscoveryResult,
   type ProjectionPlan,
   type ValidationIssue,
 } from "./adapter.js";
+import { canonicalOwnershipRecords } from "./canonical.js";
 import { jsonDocument } from "./json.js";
 
 interface ExternalMcpConfig {
   names: string[];
   issues: string[];
+  candidates: DiscoveryCandidate[];
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -23,6 +26,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function externalMcpConfig(input: AgentProjectionInput): ExternalMcpConfig {
   const names = new Set<string>();
   const issues: string[] = [];
+  const candidates: DiscoveryCandidate[] = [];
   for (const snapshot of Object.values(input.artifacts).filter((item) => item.contract.target === "input" && item.text !== null)) {
     const errors: ParseError[] = [];
     const document: unknown = parse(snapshot.text!, errors, { allowTrailingComma: true, disallowComments: false });
@@ -41,9 +45,20 @@ function externalMcpConfig(input: AgentProjectionInput): ExternalMcpConfig {
       issues.push(`Cannot inspect external OpenCode MCP config ${snapshot.sourcePath}: mcp must be an object`);
       continue;
     }
-    for (const name of Object.keys(document.mcp)) names.add(name);
+    for (const name of Object.keys(document.mcp)) {
+      names.add(name);
+      candidates.push({
+        capability: "mcp",
+        identity: `mcp:${name}`,
+        name,
+        origin: "external",
+        source: snapshot.sourcePath ?? "unknown",
+        // Native config may contain credentials or secret-bearing env/header values.
+        secretBearing: true,
+      });
+    }
   }
-  return { names: [...names].sort(), issues };
+  return { names: [...names].sort(), issues, candidates: candidates.sort((left, right) => left.identity.localeCompare(right.identity)) };
 }
 
 function mcpValue(server: AgentProjectionInput["capabilities"]["mcpServers"][number]["server"]): Record<string, unknown> {
@@ -86,14 +101,17 @@ function plan(input: AgentProjectionInput): ProjectionPlan {
   return {
     files: [{ artifactId: "config", content: jsonDocument({ $schema: "https://opencode.ai/config.json", mcp }) }],
     resources: { mcpServers: Object.keys(mcp) },
+    ownership: canonicalOwnershipRecords(input.capabilities, { mcp: "opencode.json#mcp", hooks: "hooks" }),
   };
 }
 
 function discover(input: AgentProjectionInput): DiscoveryResult {
+  const external = externalMcpConfig(input);
   return {
     mcpServers: input.capabilities.mcpServers.map(({ server }) => server.name),
     hooks: [],
-    externalMcpServers: externalMcpConfig(input).names,
+    externalMcpServers: external.names,
+    candidates: external.candidates,
   };
 }
 

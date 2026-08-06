@@ -67,6 +67,19 @@ future neutral manifest migration out of every Agent implementation.
 
 Unsupported capabilities fail validation; an Adapter never silently drops them.
 
+## Canonical closure and ownership
+
+Before projection, core can derive the Agent-neutral `capabilities-v1` closure. It contains stable Package, Skill, MCP,
+Hook, requirement, and entrypoint identities, sorted canonical arrays, and a `sha256:` closure digest. Platform selectors
+are compatibility input to Adapter selection and are not included in the canonical resource values. The exact Package
+bytes remain authoritative; the closure is recomputed and its digest is never treated as a second mutable lock.
+
+Each declarative projection may publish ownership records containing the canonical capability identity, Package owner,
+native locator, and value digest. View metadata stores these records per target so `doctor` and future reconciliation can
+distinguish a Woma value from an external same-name value without exposing the native command, environment, or credential
+contents. The shared conformance helper checks that plans, discovery, diagnostics, ownership identities, and secret-safe
+outputs are deterministic for a fixed snapshot. A new Adapter can run that helper without adding a publisher branch.
+
 Codex `config.toml` and `hooks.json`, Claude `settings.json` and `.claude.json`, and Qoder `settings.json` are regular
 files under the selected Environment home. Credentials such as Claude `.credentials.json` are opaque regular files and
 never enter a view generation or bundle. During install and removal the publisher reads the current stable file, removes

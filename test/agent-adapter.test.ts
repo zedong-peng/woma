@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import { assertArtifactContracts } from "../src/agents/adapter.js";
+import { assertAdapterConformance } from "../src/agents/conformance.js";
+import { canonicalClosure, canonicalOwnershipRecords } from "../src/agents/canonical.js";
 import { mergeHooks, mergeMcpServers, removeHooks, removeMcpServers } from "../src/agents/json.js";
 import { agentAdapter, agentAdapters, SUPPORTED_AGENTS } from "../src/agents/registry.js";
+import type { ArtifactSnapshot, AgentProjectionInput } from "../src/agents/adapter.js";
+import type { InstalledPackage, WomaManifest } from "../src/types.js";
 
 test("built-in Agent Adapters expose one neutral contract per supported Agent", () => {
   assert.deepEqual(SUPPORTED_AGENTS, ["codex", "claude", "pi", "qoder", "opencode"]);
@@ -27,6 +31,131 @@ test("built-in Agent Adapters expose one neutral contract per supported Agent", 
     assert.equal(new Set(artifacts.map((artifact) => artifact.id)).size, artifacts.length);
     assert.equal(new Set(artifacts.map((artifact) => `${artifact.target}:${artifact.relativePath}`)).size, artifacts.length);
   }
+});
+
+test("built-in Adapters pass the deterministic conformance suite", () => {
+  for (const platform of SUPPORTED_AGENTS) {
+    const adapter = agentAdapter(platform);
+    const artifacts = adapter.artifacts({
+      environmentName: "tools",
+      sourceHome: path.join("/source", platform),
+      defaultSourceHome: path.join("/source", platform),
+      environmentHome: path.join("/environment", platform),
+      currentView: path.join("/view", platform),
+      seedFromOriginal: false,
+      originalRuntimeVariables: {},
+    });
+    const snapshots: Record<string, ArtifactSnapshot> = {};
+    for (const contract of artifacts) {
+      snapshots[contract.id] = { contract, sourcePath: null, text: null, bytes: null, mode: undefined };
+    }
+    const input: AgentProjectionInput = {
+      capabilities: { skills: [], mcpServers: [], hooks: [] },
+      previousCapabilities: { skills: [], mcpServers: [], hooks: [] },
+      artifacts: snapshots,
+      previousManagedMcpServers: [],
+      canonicalClosure: canonicalClosure([]),
+      previousOwnership: [],
+    };
+    assertAdapterConformance(adapter, input, { secretLiterals: ["super-secret"] });
+  }
+});
+
+test("canonical closure has stable ordering, ownership identity, and digest", () => {
+  const manifest: WomaManifest = {
+    apiVersion: "woma.dev/v1" as const,
+    kind: "Woma" as const,
+    metadata: { name: "canonical", version: "1.0.0", description: "Canonical fixture.", tags: [] },
+    spec: {
+      platforms: ["codex", "claude"],
+      requirements: { env: [{ name: "TOKEN", optional: true }], commands: ["node", "git"] },
+      dependencies: [],
+      entrypoints: [{ name: "start", skill: "review", description: "Start." }],
+      skills: [{ name: "review", path: "./skills/review" }],
+      mcpServers: [{ name: "docs", transport: "stdio" as const, command: "node", args: ["server.mjs"], env: [] }],
+      hooks: [{ event: "PostToolUse", command: "git diff --check" }],
+    },
+  };
+  const pkg: InstalledPackage = {
+    manifest,
+    root: "/package",
+    lock: {
+      name: "canonical",
+      version: "1.0.0",
+      source: "file:/package",
+      integrity: "sha256:fixture",
+      cacheKey: "0123456789abcdef0123",
+      dependencies: [],
+      installedAt: "2026-01-01T00:00:00.000Z",
+    },
+  };
+  const first = canonicalClosure([pkg]);
+  const second = canonicalClosure([{ ...pkg, manifest: { ...manifest, spec: { ...manifest.spec, requirements: { ...manifest.spec.requirements, commands: ["git", "node"] } } } }]);
+  assert.equal(first.schemaRevision, "capabilities-v1");
+  assert.equal(first.digest, second.digest);
+  assert.equal(first.mcpServers[0]?.identity, "mcp:docs");
+  assert.match(first.hooks[0]?.identity ?? "", /^hook:PostToolUse:\*:sha256:[a-f0-9]{64}$/);
+  assert.match(first.digest, /^sha256:[a-f0-9]{64}$/);
+});
+
+test("canonical closure preserves platform selector semantics at each Agent boundary", () => {
+  const base: InstalledPackage = {
+    manifest: {
+      apiVersion: "woma.dev/v1",
+      kind: "Woma",
+      metadata: { name: "codex-tools", version: "1.0.0", description: "Codex fixture.", tags: [] },
+      spec: {
+        platforms: ["codex"],
+        requirements: { env: [], commands: [] },
+        dependencies: [],
+        entrypoints: [],
+        skills: [],
+        mcpServers: [{ name: "tools", transport: "stdio", command: "codex-server", args: [], env: [], platforms: ["codex"] }],
+        hooks: [],
+      },
+    },
+    root: "/codex-tools",
+    lock: {
+      name: "codex-tools",
+      version: "1.0.0",
+      source: "file:/codex-tools",
+      integrity: "sha256:codex",
+      cacheKey: "0123456789abcdef0123",
+      dependencies: [],
+      installedAt: "2026-01-01T00:00:00.000Z",
+    },
+  };
+  const claude: InstalledPackage = {
+    ...base,
+    root: "/claude-tools",
+    manifest: {
+      ...base.manifest,
+      metadata: { ...base.manifest.metadata, name: "claude-tools" },
+      spec: {
+        ...base.manifest.spec,
+        platforms: ["claude"],
+        mcpServers: [{ name: "tools", transport: "stdio", command: "claude-server", args: [], env: [], platforms: ["claude"] }],
+      },
+    },
+    lock: { ...base.lock, name: "claude-tools", source: "file:/claude-tools", integrity: "sha256:claude" },
+  };
+  assert.deepEqual(canonicalClosure([base, claude], "codex").mcpServers.map(({ value }) => value), [
+    { name: "tools", transport: "stdio", command: "codex-server", args: [], env: [] },
+  ]);
+  assert.deepEqual(canonicalClosure([base, claude], "claude").mcpServers.map(({ value }) => value), [
+    { name: "tools", transport: "stdio", command: "claude-server", args: [], env: [] },
+  ]);
+});
+
+test("Hook ownership identities are secret-safe digests", () => {
+  const records = canonicalOwnershipRecords({
+    skills: [],
+    mcpServers: [],
+    hooks: [{ packageName: "pkg", hook: { event: "PostToolUse", matcher: "Edit", command: "TOKEN=super-secret run" } }],
+  }, { mcp: "config#mcp", hooks: "settings#hooks" });
+  assert.equal(records.length, 1);
+  assert.doesNotMatch(records[0]!.identity, /super-secret|TOKEN=/);
+  assert.match(records[0]!.valueDigest, /^sha256:[a-f0-9]{64}$/);
 });
 
 test("Agent Adapter artifact contracts reject duplicate and escaping locations", () => {

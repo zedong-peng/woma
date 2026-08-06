@@ -11,7 +11,7 @@ import {
   type ProjectionPlan,
   type ValidationIssue,
 } from "./adapter.js";
-import { equal } from "./canonical.js";
+import { canonicalOwnershipRecords, equal } from "./canonical.js";
 import { jsonDocument, mergeHooks, parseJsonObject, removeHooks } from "./json.js";
 
 function codexValue(server: McpServer): Record<string, unknown> {
@@ -141,6 +141,7 @@ function plan(input: AgentProjectionInput): ProjectionPlan {
       { artifactId: "hooks", content: jsonDocument(hooksRoot) },
     ],
     resources: { mcpServers: input.capabilities.mcpServers.map(({ server }) => server.name) },
+    ownership: canonicalOwnershipRecords(input.capabilities, { mcp: "config.toml#mcp_servers", hooks: "hooks.json#hooks" }),
   };
 }
 

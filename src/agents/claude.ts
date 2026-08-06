@@ -8,6 +8,7 @@ import {
   type DiscoveryResult,
   type ProjectionPlan,
 } from "./adapter.js";
+import { canonicalOwnershipRecords } from "./canonical.js";
 import { jsonDocument, mergeHooks, mergeMcpServers, parseJsonObject, removeHooks, removeMcpServers } from "./json.js";
 
 function originalStatePath(sourceHome: string): string {
@@ -39,6 +40,7 @@ function plan(input: AgentProjectionInput): ProjectionPlan {
       { artifactId: "state", content: jsonDocument(state) },
     ],
     resources: { mcpServers: input.capabilities.mcpServers.map(({ server }) => server.name) },
+    ownership: canonicalOwnershipRecords(input.capabilities, { mcp: ".claude.json#mcpServers", hooks: "settings.json#hooks" }),
   };
 }
 
