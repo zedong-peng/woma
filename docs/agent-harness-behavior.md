@@ -233,21 +233,10 @@ temporary sibling and renames it over the active path replaces the symbolic link
 view file remains unchanged. This is deterministic on Unix; CC Switch also removes the destination before renaming on
 Windows, with the same resulting ordinary file.
 
-CC Switch uses this temporary-file-and-rename strategy for JSON and TOML writes. Its default configuration directories are
-the conventional Agent homes, such as `~/.codex` and `~/.claude`, rather than Woma's shell-selected homes. The managed-link
-failure occurs when a CC Switch custom Codex or Claude configuration directory is set to a Woma Environment home. Other
-editors and configuration managers with the same atomic-replacement strategy produce the same result.
-
-After a non-credential managed link is replaced with an ordinary file:
-
-- the Agent may continue using that ordinary file, so the immediate provider change can appear successful;
-- `woma doctor` and `woma activate` fail with a missing managed Agent home link;
-- `woma install` and `woma remove` fail because the managed Agent home path is not a symbolic link;
-- Woma does not import the replacement file into the recipe, lock, or current view automatically.
-
-Claude `.credentials.json` has a credential-recovery path during view publication: install or remove can copy the bytes from an
-ordinary replacement into the next view and restore the managed link. `doctor` and ordinary current-layout activation
-still require the link and report it as invalid before such a publication.
+CC Switch and other editors commonly use temporary-file-and-rename writes. Codex, Claude, and Qoder configuration files
+under a Woma Environment are stable regular files, so this native write pattern does not replace a managed view link. Woma
+reads the current file for each install or remove, preserves unknown and Agent-owned fields, and only removes a previous Woma
+value when its observed value still matches the value Woma projected previously.
 
 To diagnose the representation without reading configuration contents:
 
@@ -260,26 +249,12 @@ readlink "$environment_root/home/codex/config.toml"
 woma doctor --name "$environment"
 ```
 
-A healthy Codex entry is a symbolic link whose target resolves to
-`$environment_root/view/codex/config.toml`. Repeat the check with the paths in the table above for another target. A regular
-file at one of those paths confirms representation drift even when its contents are valid Agent configuration.
-
-There is currently no public Woma command that automatically adopts a replacement config file and repairs a non-credential
-managed link. Stop or redirect the external writer first. Preserve the ordinary file, recreate the expected link, validate
-the Environment, and then review the preserved file for non-Woma settings that need to be reapplied. For example, for
-Codex:
-
-```bash
-mv "$environment_root/home/codex/config.toml" \
-  "$environment_root/home/codex/config.toml.external-backup"
-ln -s "$environment_root/view/codex/config.toml" \
-  "$environment_root/home/codex/config.toml"
-woma doctor --name "$environment"
-```
-
-Do not copy the complete backup over the managed target: it may remove or replace Package-managed MCP blocks. Compare the
-backup with the restored configuration and reapply only the intended user/provider settings. Keep the backup until the
-Agent and `woma doctor` both succeed.
+Healthy Codex entries are regular files under `home/codex`; Claude credentials are also regular opaque files under
+`home/claude` and never appear in a view. Only dedicated immutable overlays, such as OpenCode's
+`view/opencode/opencode.json`, remain generation-backed links. A same-name external MCP server with different content, or a
+Woma-owned value changed by an Agent, causes install/remove to fail with an ownership conflict and leaves the stable file
+unchanged. The publisher also rechecks the file immediately before replacement, so a write during preparation is reported
+rather than silently lost.
 
 ## Woma command effects
 
@@ -329,12 +304,12 @@ Given one Package manifest, Woma derives target-specific files as follows:
 | Package resource | Codex | Claude Code | Pi | Qoder CLI | OpenCode |
 | --- | --- | --- | --- | --- | --- |
 | Skill | shared `home/skills/<name>` via managed view link | same | same | same | same |
-| MCP server | managed block in `view/codex/config.toml` | managed entry in stable `home/claude/.claude.json` | unsupported | managed entry in `view/qoder/settings.json` | managed entry in `view/opencode/opencode.json` |
-| Hook | managed entry in `view/codex/hooks.json` | managed entry in `view/claude/settings.json` | unsupported | managed entry in `view/qoder/settings.json` | unsupported |
+| MCP server | managed block in stable `home/codex/config.toml` | managed entry in stable `home/claude/.claude.json` | unsupported | managed entry in stable `home/qoder/settings.json` | managed entry in `view/opencode/opencode.json` |
+| Hook | managed entry in stable `home/codex/hooks.json` | managed entry in stable `home/claude/settings.json` | unsupported | managed entry in stable `home/qoder/settings.json` | unsupported |
 
-The stable Codex `config.toml` and `hooks.json`, Claude `settings.json`, Qoder `settings.json`, and OpenCode `opencode.json` link to these target view
-files. Claude MCP state is updated transactionally in its stable `.claude.json` because that Agent state is not represented
-by the generation-swapped settings view.
+Codex, Claude, and Qoder configuration files are regular files in their stable homes. Claude MCP state is updated
+transactionally in its stable `.claude.json`; OpenCode's dedicated MCP overlay remains generation-backed because it is
+Woma-owned content with no mixed-ownership native file.
 
 Woma filters resources by the Environment targets, Package platforms, and optional resource platforms. Unsupported target
 combinations fail validation instead of being silently ignored.

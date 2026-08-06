@@ -84,15 +84,15 @@ test("init creates a clean base and snapshots supported existing Codex state onc
     const base = await environmentSnapshot(root, "base");
     assert.deepEqual(base.environment.spec.targets, ["codex", "claude"]);
     assert.deepEqual(base.lock.packages, {});
-    assert.doesNotMatch(await readFile(path.join(environmentViewPath("base"), "codex", "config.toml"), "utf8"), /legacy-model/);
-    assert.deepEqual(JSON.parse(await readFile(path.join(environmentViewPath("base"), "codex", "hooks.json"), "utf8")), {});
+    assert.doesNotMatch(await readFile(path.join(environmentAgentHomePath("base", "codex"), "config.toml"), "utf8"), /legacy-model/);
+    assert.deepEqual(JSON.parse(await readFile(path.join(environmentAgentHomePath("base", "codex"), "hooks.json"), "utf8")), {});
 
     const imported = await environmentSnapshot(root, "codex");
     assert.deepEqual(imported.environment.spec.targets, ["codex"]);
     assert.deepEqual(Object.keys(imported.lock.packages), ["review-notes"]);
-    assert.match(await readFile(path.join(environmentViewPath("codex"), "codex", "config.toml"), "utf8"), /legacy-model/);
+    assert.match(await readFile(path.join(environmentAgentHomePath("codex", "codex"), "config.toml"), "utf8"), /legacy-model/);
     assert.deepEqual(
-      JSON.parse(await readFile(path.join(environmentViewPath("codex"), "codex", "hooks.json"), "utf8")),
+      JSON.parse(await readFile(path.join(environmentAgentHomePath("codex", "codex"), "hooks.json"), "utf8")),
       { hooks: { SessionStart: [{ command: "legacy-hook" }] }, custom: true },
     );
     assert.match(
@@ -122,9 +122,9 @@ test("init creates a clean base and snapshots supported existing Codex state onc
     assert.deepEqual(repeated.actions, []);
     const stable = await environmentSnapshot(root, "codex");
     assert.deepEqual(Object.keys(stable.lock.packages), ["review-notes"]);
-    assert.match(await readFile(path.join(environmentViewPath("codex"), "codex", "config.toml"), "utf8"), /legacy-model/);
+    assert.match(await readFile(path.join(environmentAgentHomePath("codex", "codex"), "config.toml"), "utf8"), /legacy-model/);
     assert.deepEqual(
-      JSON.parse(await readFile(path.join(environmentViewPath("codex"), "codex", "hooks.json"), "utf8")),
+      JSON.parse(await readFile(path.join(environmentAgentHomePath("codex", "codex"), "hooks.json"), "utf8")),
       { hooks: { SessionStart: [{ command: "legacy-hook" }] }, custom: true },
     );
     assert.match(
@@ -136,7 +136,7 @@ test("init creates a clean base and snapshots supported existing Codex state onc
     await rm(environmentViewPath("codex"), { force: true });
     await installIntoEnvironment(root, "codex", "builtin:paper-search");
     assert.doesNotMatch(
-      await readFile(path.join(environmentViewPath("codex"), "codex", "config.toml"), "utf8"),
+      await readFile(path.join(environmentAgentHomePath("codex", "codex"), "config.toml"), "utf8"),
       /changed-later/,
     );
   });
@@ -166,7 +166,7 @@ test("init still imports Codex state when another command created base first", {
     const initialized = await initializeBootstrap(root);
     assert.equal(initialized.defaultEnvironment, "codex");
     await access(environmentPath(root, "codex"));
-    assert.match(await readFile(path.join(environmentViewPath("codex"), "codex", "config.toml"), "utf8"), /legacy-model/);
+    assert.match(await readFile(path.join(environmentAgentHomePath("codex", "codex"), "config.toml"), "utf8"), /legacy-model/);
   });
 });
 
@@ -191,7 +191,7 @@ test("invalid Codex configuration is rejected before bootstrap and can be retrie
     await write(path.join(codex, "config.toml"), 'model = "fixed"\n');
     const recovered = await initializeBootstrap(root);
     assert.equal(recovered.defaultEnvironment, "codex");
-    assert.match(await readFile(path.join(environmentViewPath("codex"), "codex", "config.toml"), "utf8"), /fixed/);
+    assert.match(await readFile(path.join(environmentAgentHomePath("codex", "codex"), "config.toml"), "utf8"), /fixed/);
   });
 });
 

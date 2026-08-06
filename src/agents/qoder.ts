@@ -14,14 +14,22 @@ function plan(input: AgentProjectionInput): ProjectionPlan {
   const artifact = artifactText(input, "settings");
   const settings = parseJsonObject(artifact.content, artifact.path);
   removeHooks(artifact.path, settings, input.previousCapabilities.hooks);
-  mergeHooks(artifact.path, settings, input.capabilities.hooks);
+  mergeHooks(artifact.path, settings, input.capabilities.hooks, input.previousCapabilities.hooks);
   removeMcpServers(
     settings,
     artifact.path,
     "mcpServers",
-    input.previousCapabilities.mcpServers.map(({ server }) => server.name),
+    input.previousCapabilities.mcpServers,
+    "Qoder",
   );
-  mergeMcpServers(settings, artifact.path, "mcpServers", input.capabilities.mcpServers, "Qoder");
+  mergeMcpServers(
+    settings,
+    artifact.path,
+    "mcpServers",
+    input.capabilities.mcpServers,
+    "Qoder",
+    input.previousCapabilities.mcpServers,
+  );
   return {
     files: [{ artifactId: "settings", content: jsonDocument(settings) }],
     resources: { mcpServers: input.capabilities.mcpServers.map(({ server }) => server.name) },
@@ -61,9 +69,9 @@ export const qoderAdapter: AgentAdapter = {
     return [{
       id: "settings",
       relativePath: "settings.json",
-      target: "view",
+      target: "home",
       sources: [
-        path.join(context.currentView, "settings.json"),
+        path.join(context.environmentHome, "settings.json"),
         ...(context.seedFromOriginal ? [path.join(context.sourceHome, "settings.json")] : []),
       ],
       content: "text",
