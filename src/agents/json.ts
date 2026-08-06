@@ -43,16 +43,6 @@ export function hookValue(hook: HookSpec): Record<string, unknown> {
   return { ...(hook.matcher ? { matcher: hook.matcher } : {}), hooks: [handler] };
 }
 
-function hookIdentity(hook: HookSpec): string {
-  return `${hook.event}:${hook.matcher ?? "*"}`;
-}
-
-function existingHookIdentity(value: unknown): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  return typeof record.matcher === "string" ? record.matcher : "*";
-}
-
 export function mergeHooks(
   filePath: string,
   root: Record<string, unknown>,
@@ -61,33 +51,33 @@ export function mergeHooks(
 ): void {
   if (additions.length === 0) return;
   const hooks = objectAt(root, "hooks", filePath);
-  const previousIdentities = new Set(previouslyOwned.map(({ hook }) => hookIdentity(hook)));
   for (const { hook } of additions) {
     const eventHooks = arrayAt(hooks, hook.event, filePath);
     const value = hookValue(hook);
-    const identity = hookIdentity(hook);
-    const existing = eventHooks.filter((candidate) => existingHookIdentity(candidate) === (hook.matcher ?? "*"));
-    if (existing.some((candidate) => !equal(candidate, value))) {
-      throw new Error(`Refusing to overwrite managed ${hook.event} Hook in ${filePath}`);
-    }
-    if (existing.length > 0 && !previousIdentities.has(identity)) {
+    const exact = eventHooks.some((candidate) => equal(candidate, value));
+    const previouslyOwnedValue = previouslyOwned.some(({ hook: previous }) => equal(hookValue(previous), value));
+    if (exact && !previouslyOwnedValue) {
       throw new Error(`Refusing to implicitly adopt external ${hook.event} Hook in ${filePath}`);
     }
-    if (existing.length === 0) eventHooks.push(value);
+    if (!exact) eventHooks.push(value);
   }
 }
 
 export function removeHooks(filePath: string, root: Record<string, unknown>, removals: OwnedHook[]): void {
-  if (removals.length === 0 || root.hooks === undefined) return;
+  if (removals.length === 0) return;
+  if (root.hooks === undefined) {
+    throw new Error(`Refusing to remove missing managed Hook from ${filePath}`);
+  }
   const hooks = objectAt(root, "hooks", filePath);
   for (const { hook } of removals) {
     const existing = hooks[hook.event];
-    if (existing === undefined) continue;
+    if (existing === undefined) {
+      throw new Error(`Refusing to remove missing managed ${hook.event} Hook from ${filePath}`);
+    }
     if (!Array.isArray(existing)) throw new Error(`Cannot merge ${filePath}: hooks.${hook.event} must be an array`);
     const desired = hookValue(hook);
-    const sameIdentity = existing.filter((value) => existingHookIdentity(value) === (hook.matcher ?? "*"));
-    if (sameIdentity.length > 0 && !sameIdentity.some((value) => equal(value, desired))) {
-      throw new Error(`Refusing to remove modified managed ${hook.event} Hook from ${filePath}`);
+    if (!existing.some((value) => equal(value, desired))) {
+      throw new Error(`Refusing to remove modified managed ${hook.event} Hook from ${filePath} (value is missing or changed)`);
     }
     const retained = existing.filter((value) => !equal(value, desired));
     if (retained.length > 0) hooks[hook.event] = retained;
@@ -121,11 +111,16 @@ export function removeMcpServers(
   removals: readonly OwnedMcpServer[],
   agentName = "managed",
 ): void {
-  if (removals.length === 0 || root[key] === undefined) return;
+  if (removals.length === 0) return;
+  if (root[key] === undefined) {
+    throw new Error(`Refusing to remove missing managed ${agentName} MCP server from ${filePath}`);
+  }
   const servers = objectAt(root, key, filePath);
   for (const { server } of removals) {
     const existing = servers[server.name];
-    if (existing === undefined) continue;
+    if (existing === undefined) {
+      throw new Error(`Refusing to remove missing managed ${agentName} MCP server ${server.name} from ${filePath}`);
+    }
     if (!equal(existing, claudeMcpValue(server))) {
       throw new Error(`Refusing to overwrite ${agentName} MCP server ${server.name} in ${filePath}`);
     }

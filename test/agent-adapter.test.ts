@@ -99,6 +99,25 @@ test("native JSON reconciliation rejects ownership drift and implicit adoption",
   );
 });
 
+test("native JSON reconciliation supports multiple Hooks with the same matcher", () => {
+  const first = { packageName: "pkg", packageRoot: "/pkg", hook: { event: "PostToolUse", matcher: "Edit", command: "command-a" } };
+  const second = { packageName: "pkg", packageRoot: "/pkg", hook: { event: "PostToolUse", matcher: "Edit", command: "command-b" } };
+  const root: Record<string, unknown> = {};
+  mergeHooks("settings.json", root, [first, second]);
+  assert.deepEqual(root, {
+    hooks: {
+      PostToolUse: [
+        { matcher: "Edit", hooks: [{ type: "command", command: "command-a" }] },
+        { matcher: "Edit", hooks: [{ type: "command", command: "command-b" }] },
+      ],
+    },
+  });
+  assert.throws(
+    () => removeHooks("settings.json", {}, [first]),
+    /Refusing to remove missing managed Hook/,
+  );
+});
+
 test("OpenCode Adapter declares an isolated Woma overlay without claiming opaque state", () => {
   const adapter = agentAdapter("opencode");
   assert.deepEqual(adapter.descriptor.runtimeVariables, [

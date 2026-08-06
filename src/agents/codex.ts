@@ -60,6 +60,7 @@ function codexBlock(packageName: string, server: McpServer): string {
 function withoutWomaBlocks(content: string, filePath: string, projection: AgentProjectionInput): string {
   const lines = content.split(/\r?\n/);
   const kept: string[] = [];
+  const seenPreviousMarkers = new Set<string>();
   for (let index = 0; index < lines.length; index += 1) {
     const match = /^# >>> woma:(.+:mcp:.+)$/.exec(lines[index]!);
     if (!match) {
@@ -77,9 +78,16 @@ function withoutWomaBlocks(content: string, filePath: string, projection: AgentP
       kept.push(...lines.slice(blockStart, index + 1));
       continue;
     }
+    seenPreviousMarkers.add(marker);
     const expected = codexBlock(previous.packageName, previous.server);
     if (block !== expected) {
       throw new Error(`Refusing to remove modified Woma MCP block ${marker} from ${filePath}`);
+    }
+  }
+  for (const { packageName, server } of projection.previousCapabilities.mcpServers) {
+    const marker = `${packageName}:mcp:${server.name}`;
+    if (!seenPreviousMarkers.has(marker)) {
+      throw new Error(`Refusing to remove missing Woma MCP block ${marker} from ${filePath}`);
     }
   }
   return kept.join("\n").trimEnd();
