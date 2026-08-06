@@ -224,19 +224,15 @@ export function projectionDiagnostics(adapter: AgentAdapter, input: AgentProject
     // Planning is pure. Running it during diagnosis makes native ownership
     // conflicts visible before publication without adding filesystem effects
     // to an Adapter.
-    const plan = adapter.plan(input);
+    adapter.plan(input);
     for (const previous of input.previousOwnership) {
-      const current = plan.ownership.find((record) =>
-        record.nativeLocator === previous.nativeLocator && record.identity === previous.identity,
-      );
       if (
-        current
-        && (current.packageOwner !== previous.packageOwner || current.valueDigest !== previous.valueDigest)
+        !previous.identity
+        || !previous.packageOwner
+        || !previous.nativeLocator
+        || !/^sha256:[a-f0-9]{64}$/.test(previous.valueDigest)
       ) {
-        diagnostics.push({
-          severity: "error",
-          message: `Ownership record drift at ${previous.nativeLocator}`,
-        });
+        diagnostics.push({ severity: "error", message: "Invalid previous ownership record" });
       }
     }
   } catch (error) {
