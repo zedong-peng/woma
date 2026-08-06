@@ -99,10 +99,8 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     assert.equal((await lstat(claudeHome)).isDirectory(), true);
     await assert.rejects(access(path.join(codexHome, "auth.json")), /ENOENT/);
     await assert.rejects(access(path.join(toolsView, "codex", "auth.json")), /ENOENT/);
-    assert.equal(
-      await realpath(path.join(claudeHome, ".credentials.json")),
-      await realpath(path.join(toolsView, "claude", ".credentials.json")),
-    );
+    assert.equal((await lstat(path.join(claudeHome, ".credentials.json"))).isSymbolicLink(), false);
+    await assert.rejects(access(path.join(toolsView, "claude", ".credentials.json")), /ENOENT/);
     await write(path.join(originalCodex, "auth.json"), '{"api_key":"latest"}\n');
     await write(path.join(originalClaude, ".credentials.json"), '{"oauth":"latest"}\n');
     await assert.rejects(access(path.join(codexHome, "auth.json")), /ENOENT/);
@@ -116,11 +114,7 @@ test("stable Agent homes isolate opaque state from atomic managed views", { conc
     ] as const) {
       for (const name of names) {
         const link = path.join(environmentAgentHomePath("tools", platform), name);
-        assert.equal((await lstat(link)).isSymbolicLink(), true);
-        assert.equal(
-          path.resolve(path.dirname(link), await readlink(link)),
-          path.join(environmentViewPath("tools"), platform, name),
-        );
+        assert.equal((await lstat(link)).isSymbolicLink(), false);
       }
     }
     const sharedSkills = environmentSkillsPath("tools");
@@ -439,8 +433,7 @@ test("Qoder merges MCP servers and Hooks into a managed settings.json view", { c
     const settingsLink = path.join(home, "settings.json");
     assert.equal((await lstat(skills)).isSymbolicLink(), true);
     assert.equal(path.resolve(path.dirname(skills), await readlink(skills)), environmentSkillsPath("qoder-tools"));
-    assert.equal((await lstat(settingsLink)).isSymbolicLink(), true);
-    assert.equal(path.resolve(path.dirname(settingsLink), await readlink(settingsLink)), path.join(view, "qoder", "settings.json"));
+    assert.equal((await lstat(settingsLink)).isSymbolicLink(), false);
 
     const packageRoot = path.join(root, "qoder-package");
     await write(
@@ -482,7 +475,7 @@ spec:
     assert.deepEqual(settings.hooks.PostToolUse, [
       { matcher: "Edit", hooks: [{ type: "command", command: "git diff --check" }] },
     ]);
-    assert.deepEqual((await readdir(path.join(view, "qoder"))).sort(), ["settings.json", "skills"]);
+    assert.deepEqual((await readdir(path.join(view, "qoder"))).sort(), ["skills"]);
     const metadata = JSON.parse(await readFile(path.join(view, "view.json"), "utf8"));
     assert.deepEqual(metadata.resources.qoderMcpServers, ["view-server"]);
 
@@ -494,6 +487,15 @@ spec:
     ]);
     assert.match(await readFile(path.join(home, "sessions", "project", "session.jsonl"), "utf8"), /session/);
     assert.equal((await doctorEnvironment(root, "qoder-tools")).find((check) => check.label === "view")?.status, "ok");
+
+    updated.mcpServers["view-server"].command = "agent-modified";
+    await write(settingsLink, `${JSON.stringify(updated, null, 2)}\n`);
+    await assert.rejects(
+      installIntoEnvironment(root, "qoder-tools", "builtin:woma-package-builder"),
+      /Refusing to overwrite Qoder MCP server view-server/,
+    );
+    const preserved = JSON.parse(await readFile(settingsLink, "utf8"));
+    assert.equal(preserved.mcpServers["view-server"].command, "agent-modified");
   } finally {
     if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
     else process.env.WOMA_HOME = previous.womaHome;

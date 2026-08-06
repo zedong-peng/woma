@@ -59,13 +59,21 @@ future neutral manifest migration out of every Agent implementation.
 
 | Agent | Skills | MCP | Hooks | Managed artifacts |
 | --- | --- | --- | --- | --- |
-| Codex | shared symlink | native TOML (`stdio`, `http`) | native JSON | `config.toml`, `hooks.json` |
-| Claude Code | shared symlink | native stable-home JSON (all v1 transports) | native JSON | `.credentials.json`, `settings.json`, `.claude.json` MCP fields |
+| Codex | shared symlink | native stable-home TOML (`stdio`, `http`) | native stable-home JSON | `config.toml`, `hooks.json` |
+| Claude Code | shared symlink | native stable-home JSON (all v1 transports) | native stable-home JSON | `.credentials.json`, `settings.json`, `.claude.json` MCP fields |
 | Pi | shared symlink | unsupported | unsupported | none beyond `skills` |
-| Qoder CLI | shared symlink | native JSON (all v1 transports) | native JSON | `settings.json` |
+| Qoder CLI | shared symlink | native stable-home JSON (all v1 transports) | native stable-home JSON | `settings.json` |
 | OpenCode | shared symlink | native JSON (`stdio`, `http`, `sse`) | unsupported | `opencode.json` |
 
 Unsupported capabilities fail validation; an Adapter never silently drops them.
+
+Codex `config.toml` and `hooks.json`, Claude `settings.json` and `.claude.json`, and Qoder `settings.json` are regular
+files under the selected Environment home. Credentials such as Claude `.credentials.json` are opaque regular files and
+never enter a view generation or bundle. During install and removal the publisher reads the current stable file, removes
+only a previous Woma value that still matches its last projected value, and merges the new closure while preserving
+unknown and Agent-owned fields. A changed Woma-owned value, or a same-name external value with different content, fails
+with an ownership conflict and leaves the file unchanged. The publisher also rechecks the observed file immediately before
+each atomic replacement to catch writes made by an Agent or editor during preparation.
 
 ## OpenCode overlay
 

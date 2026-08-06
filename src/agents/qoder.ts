@@ -19,7 +19,7 @@ function plan(input: AgentProjectionInput): ProjectionPlan {
     settings,
     artifact.path,
     "mcpServers",
-    input.previousCapabilities.mcpServers.map(({ server }) => server.name),
+    input.previousCapabilities.mcpServers,
   );
   mergeMcpServers(settings, artifact.path, "mcpServers", input.capabilities.mcpServers, "Qoder");
   return {
@@ -61,9 +61,9 @@ export const qoderAdapter: AgentAdapter = {
     return [{
       id: "settings",
       relativePath: "settings.json",
-      target: "view",
+      target: "home",
       sources: [
-        path.join(context.currentView, "settings.json"),
+        path.join(context.environmentHome, "settings.json"),
         ...(context.seedFromOriginal ? [path.join(context.sourceHome, "settings.json")] : []),
       ],
       content: "text",

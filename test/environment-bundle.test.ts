@@ -116,8 +116,8 @@ test("Environment bundle restores a local Package offline into a fresh Store", {
       Buffer.from([0, 255, 128, 1, 2, 0]),
     );
     assert.equal((await readFile(path.join(local.root, "skills", "local-performance", "run.sh"), "utf8")).startsWith("#!/bin/sh"), true);
-    assert.match(await readFile(path.join(process.env.WOMA_HOME, "environments", "performance", "view", "codex", "config.toml"), "utf8"), /local-tools/);
-    assert.match(await readFile(path.join(process.env.WOMA_HOME, "environments", "performance", "view", "claude", "settings.json"), "utf8"), /git diff --check/);
+    assert.match(await readFile(path.join(process.env.WOMA_HOME, "environments", "performance", "home", "codex", "config.toml"), "utf8"), /local-tools/);
+    assert.match(await readFile(path.join(process.env.WOMA_HOME, "environments", "performance", "home", "claude", "settings.json"), "utf8"), /git diff --check/);
   } finally {
     if (previous.womaHome === undefined) delete process.env.WOMA_HOME;
     else process.env.WOMA_HOME = previous.womaHome;

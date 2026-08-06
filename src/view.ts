@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, rmdir, stat, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, rmdir, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -189,6 +189,19 @@ async function readArtifactSnapshot(contract: NativeArtifactContract): Promise<A
     };
   }
   return { contract, sourcePath: null, text: null, bytes: null, mode: undefined };
+}
+
+async function writeBufferAtomic(filePath: string, content: Uint8Array, mode: number): Promise<void> {
+  await mkdir(path.dirname(filePath), { recursive: true });
+  const temporary = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    await writeFile(temporary, content, { mode });
+    await chmod(temporary, mode);
+    await rename(temporary, filePath);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 function resourceMetadataKey(platform: Platform): string {
@@ -538,20 +551,45 @@ async function prepareStableHomeTransition(
 
   const homeWrites: {
     path: string;
-    input: string | null;
+    input: string | Buffer | null;
     mode: number | undefined;
-    output: string;
+    output: string | Buffer;
     outputMode: number;
+    forceRegular: boolean;
+    previousLink: string | undefined;
   }[] = [];
   for (const [platform, build] of builds) {
     const contracts = new Map(build.artifacts.map((artifact) => [artifact.id, artifact]));
-    for (const file of build.plan.files) {
-      const contract = contracts.get(file.artifactId)!;
-      if (contract.target !== "home") continue;
+    const planned = new Map(build.plan.files.map((file) => [file.artifactId, file.content]));
+    for (const contract of build.artifacts.filter((artifact) => artifact.target === "home")) {
       const destination = path.join(environmentAgentHomePath(environment.metadata.name, platform), contract.relativePath);
-      const input = await readOptional(destination);
       const info = await lstat(destination).catch(() => undefined);
-      homeWrites.push({ path: destination, input, mode: info?.mode, output: file.content, outputMode: contract.mode });
+      const previousLink = info?.isSymbolicLink() ? await readlink(destination) : undefined;
+      const input = contract.content === "opaque"
+        ? await readFile(destination).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        })
+        : await readOptional(destination);
+      const output = contract.content === "opaque"
+        ? build.input.artifacts[contract.id]?.bytes
+        : planned.get(contract.id);
+      if (output === undefined || output === null) continue;
+      if (contract.content === "text" && typeof output !== "string") {
+        throw new Error(`${build.adapter.descriptor.displayName} planned non-text output for ${contract.id}`);
+      }
+      if (contract.content === "opaque" && !(output instanceof Uint8Array)) {
+        throw new Error(`${build.adapter.descriptor.displayName} planned non-binary output for ${contract.id}`);
+      }
+      homeWrites.push({
+        path: destination,
+        input,
+        mode: info?.mode,
+        output: contract.content === "opaque" ? Buffer.from(output) : output as string,
+        outputMode: contract.mode,
+        forceRegular: previousLink !== undefined,
+        previousLink,
+      });
     }
   }
 
@@ -576,12 +614,34 @@ async function prepareStableHomeTransition(
             }
           });
         }
-        for (const write of homeWrites.filter((item) => item.input !== item.output)) {
+        for (const write of homeWrites.filter((item) => item.forceRegular || !equal(item.input, item.output))) {
+          const currentInfo = await lstat(write.path).catch((error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT") return undefined;
+            throw error;
+          });
+          const currentLink = currentInfo?.isSymbolicLink() ? await readlink(write.path) : undefined;
+          const currentInput = write.output instanceof Buffer
+            ? await readFile(write.path).catch((error: NodeJS.ErrnoException) => {
+              if (error.code === "ENOENT") return null;
+              throw error;
+            })
+            : await readOptional(write.path);
+          if (currentLink !== write.previousLink || !equal(currentInput, write.input)) {
+            throw new Error(`Stable Agent home changed while preparing ${write.path}; retry after the Agent stops writing`);
+          }
           await mkdir(path.dirname(write.path), { recursive: true, mode: 0o700 });
-          await writeTextAtomic(write.path, write.output);
-          await chmod(write.path, write.outputMode);
+          if (typeof write.output === "string") {
+            await writeTextAtomic(write.path, write.output);
+            await chmod(write.path, write.outputMode);
+          } else {
+            await writeBufferAtomic(write.path, write.output, write.outputMode);
+          }
           rollbacks.push(async () => {
-            if (write.input === null) await rm(write.path, { force: true });
+            if (write.previousLink !== undefined) {
+              await rm(write.path, { force: true });
+              await replaceSymlink(write.previousLink, write.path, false);
+            } else if (write.input === null) await rm(write.path, { force: true });
+            else if (Buffer.isBuffer(write.input)) await writeBufferAtomic(write.path, write.input, write.mode ?? write.outputMode);
             else {
               await writeTextAtomic(write.path, write.input);
               if (write.mode !== undefined) await chmod(write.path, write.mode);
@@ -825,6 +885,13 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
       const expected = path.join(root, target, name);
       const actual = path.resolve(path.dirname(link), await readlink(link));
       if (actual !== expected) throw new Error(`Managed Agent home link has an unexpected target: ${link}`);
+    }
+    for (const artifact of artifacts.filter((item) => item.target === "home" && item.content === "opaque")) {
+      const pathInHome = path.join(home, artifact.relativePath);
+      const info = await lstat(pathInHome).catch(() => undefined);
+      if (info && (!info.isFile() || info.isSymbolicLink())) {
+        throw new Error(`Opaque Agent state must be a regular file: ${pathInHome}`);
+      }
     }
     const homeSkills = path.join(home, "skills");
     const homeSkillsInfo = await lstat(homeSkills).catch(() => undefined);

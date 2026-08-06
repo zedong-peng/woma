@@ -89,11 +89,15 @@ export function removeMcpServers(
   root: Record<string, unknown>,
   filePath: string,
   key: string,
-  removals: readonly string[],
+  removals: readonly OwnedMcpServer[],
 ): void {
   if (removals.length === 0 || root[key] === undefined) return;
   const servers = objectAt(root, key, filePath);
-  for (const name of removals) delete servers[name];
+  for (const { server } of removals) {
+    const existing = servers[server.name];
+    if (existing === undefined) continue;
+    if (equal(existing, claudeMcpValue(server))) delete servers[server.name];
+  }
   if (Object.keys(servers).length === 0) delete root[key];
 }
 

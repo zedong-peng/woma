@@ -23,11 +23,7 @@ function plan(input: AgentProjectionInput): ProjectionPlan {
 
   const stateArtifact = artifactText(input, "state");
   const state = parseJsonObject(stateArtifact.content, stateArtifact.path);
-  const previousNames = new Set([
-    ...input.previousManagedMcpServers,
-    ...input.previousCapabilities.mcpServers.map(({ server }) => server.name),
-  ]);
-  removeMcpServers(state, stateArtifact.path, "mcpServers", [...previousNames]);
+  removeMcpServers(state, stateArtifact.path, "mcpServers", input.previousCapabilities.mcpServers);
   mergeMcpServers(state, stateArtifact.path, "mcpServers", input.capabilities.mcpServers, "Claude");
 
   return {
@@ -73,10 +69,9 @@ export const claudeAdapter: AgentAdapter = {
       {
         id: "credential",
         relativePath: ".credentials.json",
-        target: "view",
+        target: "home",
         sources: [
           path.join(context.environmentHome, ".credentials.json"),
-          path.join(context.currentView, ".credentials.json"),
           ...(context.seedFromOriginal ? [path.join(context.sourceHome, ".credentials.json")] : []),
         ],
         content: "opaque",
@@ -86,9 +81,9 @@ export const claudeAdapter: AgentAdapter = {
       {
         id: "settings",
         relativePath: "settings.json",
-        target: "view",
+        target: "home",
         sources: [
-          path.join(context.currentView, "settings.json"),
+          path.join(context.environmentHome, "settings.json"),
           ...(context.seedFromOriginal ? [path.join(context.sourceHome, "settings.json")] : []),
         ],
         content: "text",
