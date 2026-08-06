@@ -877,6 +877,12 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
     if (!homeInfo?.isDirectory() || homeInfo.isSymbolicLink()) {
       throw new Error(`Stable Agent home is missing or invalid: ${home}`);
     }
+    for (const artifact of artifacts.filter((item) => item.target === "home" && item.content === "text")) {
+      const info = await lstat(path.join(home, artifact.relativePath)).catch(() => undefined);
+      if (!info?.isFile()) {
+        throw new Error(`Stable Agent home text config must be a regular file: ${path.join(home, artifact.relativePath)}`);
+      }
+    }
     for (const artifact of artifacts.filter((item) => item.target === "view")) {
       const name = artifact.relativePath;
       const link = path.join(home, name);
