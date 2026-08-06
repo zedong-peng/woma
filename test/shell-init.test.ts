@@ -151,7 +151,7 @@ test("CLI init automatically imports supported existing Codex state", { concurre
     assert.match(initialized.stdout, /Imported 1 existing Codex Skill/);
     assert.equal(await readFile(path.join(stateHome, "default-environment"), "utf8"), "codex\n");
     assert.match(
-      await readFile(path.join(stateHome, "environments", "codex", "view", "codex", "config.toml"), "utf8"),
+      await readFile(path.join(stateHome, "environments", "codex", "home", "codex", "config.toml"), "utf8"),
       /existing/,
     );
     assert.equal(

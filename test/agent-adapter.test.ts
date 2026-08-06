@@ -4,6 +4,7 @@ import test from "node:test";
 import { assertArtifactContracts } from "../src/agents/adapter.js";
 import { assertAdapterConformance } from "../src/agents/conformance.js";
 import { canonicalClosure, canonicalOwnershipRecords } from "../src/agents/canonical.js";
+import { mergeHooks, mergeMcpServers, removeHooks, removeMcpServers } from "../src/agents/json.js";
 import { agentAdapter, agentAdapters, SUPPORTED_AGENTS } from "../src/agents/registry.js";
 import type { ArtifactSnapshot, AgentProjectionInput } from "../src/agents/adapter.js";
 import type { InstalledPackage, WomaManifest } from "../src/types.js";
@@ -175,6 +176,74 @@ test("Agent Adapter artifact contracts reject duplicate and escaping locations",
   assert.throws(
     () => assertArtifactContracts(adapter, [{ ...artifact, relativePath: "../settings.json" }]),
     /declared unsafe artifact path/,
+  );
+});
+
+test("native JSON reconciliation rejects ownership drift and implicit adoption", () => {
+  const server = {
+    packageName: "pkg",
+    server: { name: "tools", transport: "stdio" as const, command: "node", args: [], env: [] },
+  };
+  assert.throws(
+    () => removeMcpServers(
+      { mcpServers: { tools: { type: "stdio", command: "agent", args: [] } } },
+      "settings.json",
+      "mcpServers",
+      [server],
+      "Claude",
+    ),
+    /Refusing to overwrite Claude MCP server tools/,
+  );
+  assert.throws(
+    () => mergeMcpServers(
+      { mcpServers: { tools: { type: "stdio", command: "node", args: [] } } },
+      "settings.json",
+      "mcpServers",
+      [server],
+      "Claude",
+    ),
+    /Refusing to implicitly adopt external Claude MCP server tools/,
+  );
+
+  const hook = {
+    packageName: "pkg",
+    packageRoot: "/pkg",
+    hook: { event: "PostToolUse", matcher: "Edit", command: "git diff" },
+  };
+  assert.throws(
+    () => removeHooks(
+      "settings.json",
+      { hooks: { PostToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "agent" }] }] } },
+      [hook],
+    ),
+    /Refusing to remove modified managed PostToolUse Hook/,
+  );
+  assert.throws(
+    () => mergeHooks(
+      "settings.json",
+      { hooks: { PostToolUse: [{ matcher: "Edit", hooks: [{ type: "command", command: "git diff" }] }] } },
+      [hook],
+    ),
+    /Refusing to implicitly adopt external PostToolUse Hook/,
+  );
+});
+
+test("native JSON reconciliation supports multiple Hooks with the same matcher", () => {
+  const first = { packageName: "pkg", packageRoot: "/pkg", hook: { event: "PostToolUse", matcher: "Edit", command: "command-a" } };
+  const second = { packageName: "pkg", packageRoot: "/pkg", hook: { event: "PostToolUse", matcher: "Edit", command: "command-b" } };
+  const root: Record<string, unknown> = {};
+  mergeHooks("settings.json", root, [first, second]);
+  assert.deepEqual(root, {
+    hooks: {
+      PostToolUse: [
+        { matcher: "Edit", hooks: [{ type: "command", command: "command-a" }] },
+        { matcher: "Edit", hooks: [{ type: "command", command: "command-b" }] },
+      ],
+    },
+  });
+  assert.throws(
+    () => removeHooks("settings.json", {}, [first]),
+    /Refusing to remove missing managed Hook/,
   );
 });
 

@@ -57,24 +57,44 @@ function codexBlock(packageName: string, server: McpServer): string {
   return lines.join("\n");
 }
 
-function withoutWomaBlocks(content: string, filePath: string): string {
+function withoutWomaBlocks(content: string, filePath: string, projection: AgentProjectionInput): string {
   const lines = content.split(/\r?\n/);
   const kept: string[] = [];
+  const seenPreviousMarkers = new Set<string>();
   for (let index = 0; index < lines.length; index += 1) {
     const match = /^# >>> woma:(.+:mcp:.+)$/.exec(lines[index]!);
     if (!match) {
       kept.push(lines[index]!);
       continue;
     }
-    const end = `# <<< woma:${match[1]}`;
+    const marker = match[1]!;
+    const end = `# <<< woma:${marker}`;
+    const blockStart = index;
     while (index < lines.length && lines[index] !== end) index += 1;
     if (index === lines.length) throw new Error(`Cannot merge ${filePath}: unterminated Woma-managed Codex block`);
+    const block = lines.slice(blockStart, index + 1).join("\n");
+    const previous = projection.previousCapabilities.mcpServers.find(({ packageName, server }) => marker === `${packageName}:mcp:${server.name}`);
+    if (!previous) {
+      kept.push(...lines.slice(blockStart, index + 1));
+      continue;
+    }
+    seenPreviousMarkers.add(marker);
+    const expected = codexBlock(previous.packageName, previous.server);
+    if (block !== expected) {
+      throw new Error(`Refusing to remove modified Woma MCP block ${marker} from ${filePath}`);
+    }
+  }
+  for (const { packageName, server } of projection.previousCapabilities.mcpServers) {
+    const marker = `${packageName}:mcp:${server.name}`;
+    if (!seenPreviousMarkers.has(marker)) {
+      throw new Error(`Refusing to remove missing Woma MCP block ${marker} from ${filePath}`);
+    }
   }
   return kept.join("\n").trimEnd();
 }
 
 export function renderCodexConfig(input: string | null, filePath: string, projection: AgentProjectionInput): string {
-  const baseline = withoutWomaBlocks(input ?? "", filePath);
+  const baseline = withoutWomaBlocks(input ?? "", filePath, projection);
   let parsed: Record<string, unknown> = {};
   try {
     parsed = (baseline ? parseToml(baseline) : {}) as Record<string, unknown>;
@@ -154,9 +174,9 @@ export const codexAdapter: AgentAdapter = {
       {
         id: "config",
         relativePath: "config.toml",
-        target: "view",
+        target: "home",
         sources: [
-          path.join(context.currentView, "config.toml"),
+          path.join(context.environmentHome, "config.toml"),
           ...(context.seedFromOriginal ? [path.join(context.sourceHome, "config.toml")] : []),
         ],
         content: "text",
@@ -165,9 +185,9 @@ export const codexAdapter: AgentAdapter = {
       {
         id: "hooks",
         relativePath: "hooks.json",
-        target: "view",
+        target: "home",
         sources: [
-          path.join(context.currentView, "hooks.json"),
+          path.join(context.environmentHome, "hooks.json"),
           ...(context.seedFromOriginal ? [path.join(context.sourceHome, "hooks.json")] : []),
         ],
         content: "text",
