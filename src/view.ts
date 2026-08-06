@@ -104,8 +104,10 @@ export async function validateCodexSourceConfiguration(): Promise<void> {
     renderCodexConfig(await readOptional(configPath), configPath, {
       capabilities,
       previousCapabilities: capabilities,
+      canonicalClosure: canonicalClosure([], "codex"),
       artifacts: {},
       previousManagedMcpServers: [],
+      previousOwnership: [],
     });
   }
   const hooksPath = path.join(sourceHome, "hooks.json");
@@ -231,10 +233,12 @@ async function buildAgentProjection(
   const input: AgentProjectionInput = {
     capabilities: canonicalCapabilities(packages, platform),
     previousCapabilities: canonicalCapabilities(previousPackages, platform),
-    canonicalClosure: canonicalClosure(packages),
+    canonicalClosure: canonicalClosure(packages, platform),
     artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
     previousManagedMcpServers: stringArray(previousMetadata.resources?.[resourceMetadataKey(platform)]),
-    previousOwnership: [],
+    previousOwnership: Array.isArray(previousMetadata.ownership?.[platform])
+      ? previousMetadata.ownership[platform] as CanonicalOwnershipRecord[]
+      : [],
   };
   const errors = adapter.validate(input).filter((issue) => issue.severity === "error");
   if (errors.length > 0) {
@@ -857,7 +861,7 @@ export async function validateEnvironmentView(environment: WomaEnvironment, pack
     const projectionInput: AgentProjectionInput = {
       capabilities,
       previousCapabilities: capabilities,
-      canonicalClosure: canonicalClosure(packages),
+      canonicalClosure: canonicalClosure(packages, target),
       artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
       previousManagedMcpServers: stringArray(
         (metadata.resources as Record<string, unknown> | undefined)?.[resourceMetadataKey(target)],
@@ -925,7 +929,7 @@ export async function discoverEnvironmentAgentCapabilities(
     const input: AgentProjectionInput = {
       capabilities,
       previousCapabilities: capabilities,
-      canonicalClosure: canonicalClosure(packages),
+      canonicalClosure: canonicalClosure(packages, platform),
       artifacts: Object.fromEntries(snapshots.map((snapshot) => [snapshot.contract.id, snapshot])),
       previousManagedMcpServers: stringArray(metadata.resources?.[resourceMetadataKey(platform)]),
       previousOwnership: Array.isArray(metadata.ownership?.[platform]) ? metadata.ownership[platform] as CanonicalOwnershipRecord[] : [],

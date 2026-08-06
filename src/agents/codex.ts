@@ -92,6 +92,12 @@ export function renderCodexConfig(input: string | null, filePath: string, projec
     if (existing !== undefined && !equal(existing, desired)) {
       throw new Error(`Refusing to overwrite Codex MCP server ${server.name} from ${filePath}`);
     }
+    if (
+      existing !== undefined
+      && !projection.previousCapabilities.mcpServers.some(({ server: previous }) => previous.name === server.name)
+    ) {
+      throw new Error(`Refusing to implicitly adopt external Codex MCP server ${server.name} from ${filePath}`);
+    }
     if (existing === undefined) blocks.push(codexBlock(packageName, server));
   }
   const prefix = baseline ? `${baseline}\n\n` : "";
@@ -108,7 +114,7 @@ function plan(input: AgentProjectionInput): ProjectionPlan {
   const hooks = artifactText(input, "hooks");
   const hooksRoot = parseJsonObject(hooks.content, hooks.path);
   removeHooks(hooks.path, hooksRoot, input.previousCapabilities.hooks);
-  mergeHooks(hooks.path, hooksRoot, input.capabilities.hooks);
+  mergeHooks(hooks.path, hooksRoot, input.capabilities.hooks, input.previousCapabilities.hooks);
   return {
     files: [
       { artifactId: "config", content: renderCodexConfig(config.content, config.path, input) },

@@ -85,11 +85,16 @@ function canonicalHookValue(hook: HookSpec): unknown {
   return value;
 }
 
+function canonicalHookIdentity(hook: HookSpec): string {
+  return `hook:${hook.event}:${hook.matcher ?? "*"}:${canonicalDigest(canonicalHookValue(hook))}`;
+}
+
 /**
- * Build the Agent-neutral, reproducible closure. Platform selectors are a
- * compatibility concern and deliberately do not appear in this projection.
+ * Build the reproducible closure. When a target is supplied, selectors are
+ * applied before conflict detection; selector fields never enter canonical
+ * resource values or digests.
  */
-export function canonicalClosure(packages: InstalledPackage[]): CanonicalClosure {
+export function canonicalClosure(packages: InstalledPackage[], platform?: Platform): CanonicalClosure {
   const orderedPackages = [...packages].sort((left, right) => canonicalPackage(left).identity.localeCompare(canonicalPackage(right).identity));
   const packageRecords = orderedPackages.map(canonicalPackage);
   const skills: CanonicalClosure["skills"] = [];
@@ -112,6 +117,7 @@ export function canonicalClosure(packages: InstalledPackage[]): CanonicalClosure
       }
     }
     for (const server of pkg.manifest.spec.mcpServers) {
+      if (platform !== undefined && !appliesTo(platform, server.platforms)) continue;
       const identity = `mcp:${server.name}`;
       const value = canonicalMcp(server);
       const digest = stable(value);
@@ -123,7 +129,8 @@ export function canonicalClosure(packages: InstalledPackage[]): CanonicalClosure
       }
     }
     for (const hook of pkg.manifest.spec.hooks) {
-      const identity = `hook:${hook.event}:${hook.matcher ?? "*"}:${hook.command}`;
+      if (platform !== undefined && !appliesTo(platform, hook.platforms)) continue;
+      const identity = canonicalHookIdentity(hook);
       if (!hookIdentities.has(identity)) {
         hookIdentities.add(identity);
         hooks.push({ identity, event: hook.event, ...(hook.matcher ? { matcher: hook.matcher } : {}), packageOwner: pkg.lock.name, value: canonicalHookValue(hook) });
@@ -171,7 +178,7 @@ export function canonicalOwnershipRecords(
     })),
     ...capabilities.hooks.map(({ packageName, hook }) => ({
       capability: "hook" as const,
-      identity: `hook:${hook.event}:${hook.matcher ?? "*"}:${hook.command}`,
+      identity: canonicalHookIdentity(hook),
       packageOwner: packageName,
       nativeLocator: `${locators.hooks}.${hook.event}${hook.matcher ? `:${hook.matcher}` : ""}`,
       valueDigest: canonicalDigest(canonicalHookValue(hook)),

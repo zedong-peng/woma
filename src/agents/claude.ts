@@ -20,16 +20,19 @@ function plan(input: AgentProjectionInput): ProjectionPlan {
   const settingsArtifact = artifactText(input, "settings");
   const settings = parseJsonObject(settingsArtifact.content, settingsArtifact.path);
   removeHooks(settingsArtifact.path, settings, input.previousCapabilities.hooks);
-  mergeHooks(settingsArtifact.path, settings, input.capabilities.hooks);
+  mergeHooks(settingsArtifact.path, settings, input.capabilities.hooks, input.previousCapabilities.hooks);
 
   const stateArtifact = artifactText(input, "state");
   const state = parseJsonObject(stateArtifact.content, stateArtifact.path);
-  const previousNames = new Set([
-    ...input.previousManagedMcpServers,
-    ...input.previousCapabilities.mcpServers.map(({ server }) => server.name),
-  ]);
-  removeMcpServers(state, stateArtifact.path, "mcpServers", [...previousNames]);
-  mergeMcpServers(state, stateArtifact.path, "mcpServers", input.capabilities.mcpServers, "Claude");
+  removeMcpServers(state, stateArtifact.path, "mcpServers", input.previousCapabilities.mcpServers, "Claude");
+  mergeMcpServers(
+    state,
+    stateArtifact.path,
+    "mcpServers",
+    input.capabilities.mcpServers,
+    "Claude",
+    input.previousCapabilities.mcpServers,
+  );
 
   return {
     files: [

@@ -82,10 +82,10 @@ export interface CanonicalCapabilities {
 export interface AgentProjectionInput {
   capabilities: CanonicalCapabilities;
   previousCapabilities: CanonicalCapabilities;
-  canonicalClosure?: CanonicalClosure;
+  canonicalClosure: CanonicalClosure;
   artifacts: Readonly<Record<string, ArtifactSnapshot>>;
   previousManagedMcpServers: readonly string[];
-  previousOwnership?: readonly CanonicalOwnershipRecord[];
+  previousOwnership: readonly CanonicalOwnershipRecord[];
 }
 
 export interface ProjectionFile {
@@ -98,7 +98,7 @@ export interface ProjectionPlan {
   resources: {
     mcpServers: string[];
   };
-  ownership?: readonly CanonicalOwnershipRecord[];
+  ownership: readonly CanonicalOwnershipRecord[];
 }
 
 export interface ValidationIssue {
@@ -219,5 +219,28 @@ export function artifactText(input: AgentProjectionInput, id: string): { content
 }
 
 export function projectionDiagnostics(adapter: AgentAdapter, input: AgentProjectionInput): Diagnostic[] {
-  return adapter.validate(input).map((issue) => ({ severity: issue.severity, message: issue.message }));
+  const diagnostics = adapter.validate(input).map((issue) => ({ severity: issue.severity, message: issue.message }));
+  try {
+    // Planning is pure. Running it during diagnosis makes native ownership
+    // conflicts visible before publication without adding filesystem effects
+    // to an Adapter.
+    const plan = adapter.plan(input);
+    for (const previous of input.previousOwnership) {
+      const current = plan.ownership.find((record) =>
+        record.nativeLocator === previous.nativeLocator && record.identity === previous.identity,
+      );
+      if (
+        current
+        && (current.packageOwner !== previous.packageOwner || current.valueDigest !== previous.valueDigest)
+      ) {
+        diagnostics.push({
+          severity: "error",
+          message: `Ownership record drift at ${previous.nativeLocator}`,
+        });
+      }
+    }
+  } catch (error) {
+    diagnostics.push({ severity: "error", message: (error as Error).message });
+  }
+  return diagnostics;
 }

@@ -3,7 +3,7 @@ import path from "node:path";
 import test from "node:test";
 import { assertArtifactContracts } from "../src/agents/adapter.js";
 import { assertAdapterConformance } from "../src/agents/conformance.js";
-import { canonicalClosure } from "../src/agents/canonical.js";
+import { canonicalClosure, canonicalOwnershipRecords } from "../src/agents/canonical.js";
 import { agentAdapter, agentAdapters, SUPPORTED_AGENTS } from "../src/agents/registry.js";
 import type { ArtifactSnapshot, AgentProjectionInput } from "../src/agents/adapter.js";
 import type { InstalledPackage, WomaManifest } from "../src/types.js";
@@ -53,6 +53,8 @@ test("built-in Adapters pass the deterministic conformance suite", () => {
       previousCapabilities: { skills: [], mcpServers: [], hooks: [] },
       artifacts: snapshots,
       previousManagedMcpServers: [],
+      canonicalClosure: canonicalClosure([]),
+      previousOwnership: [],
     };
     assertAdapterConformance(adapter, input, { secretLiterals: ["super-secret"] });
   }
@@ -91,8 +93,68 @@ test("canonical closure has stable ordering, ownership identity, and digest", ()
   assert.equal(first.schemaRevision, "capabilities-v1");
   assert.equal(first.digest, second.digest);
   assert.equal(first.mcpServers[0]?.identity, "mcp:docs");
-  assert.equal(first.hooks[0]?.identity, "hook:PostToolUse:*:git diff --check");
+  assert.match(first.hooks[0]?.identity ?? "", /^hook:PostToolUse:\*:sha256:[a-f0-9]{64}$/);
   assert.match(first.digest, /^sha256:[a-f0-9]{64}$/);
+});
+
+test("canonical closure preserves platform selector semantics at each Agent boundary", () => {
+  const base: InstalledPackage = {
+    manifest: {
+      apiVersion: "woma.dev/v1",
+      kind: "Woma",
+      metadata: { name: "codex-tools", version: "1.0.0", description: "Codex fixture.", tags: [] },
+      spec: {
+        platforms: ["codex"],
+        requirements: { env: [], commands: [] },
+        dependencies: [],
+        entrypoints: [],
+        skills: [],
+        mcpServers: [{ name: "tools", transport: "stdio", command: "codex-server", args: [], env: [], platforms: ["codex"] }],
+        hooks: [],
+      },
+    },
+    root: "/codex-tools",
+    lock: {
+      name: "codex-tools",
+      version: "1.0.0",
+      source: "file:/codex-tools",
+      integrity: "sha256:codex",
+      cacheKey: "0123456789abcdef0123",
+      dependencies: [],
+      installedAt: "2026-01-01T00:00:00.000Z",
+    },
+  };
+  const claude: InstalledPackage = {
+    ...base,
+    root: "/claude-tools",
+    manifest: {
+      ...base.manifest,
+      metadata: { ...base.manifest.metadata, name: "claude-tools" },
+      spec: {
+        ...base.manifest.spec,
+        platforms: ["claude"],
+        mcpServers: [{ name: "tools", transport: "stdio", command: "claude-server", args: [], env: [], platforms: ["claude"] }],
+      },
+    },
+    lock: { ...base.lock, name: "claude-tools", source: "file:/claude-tools", integrity: "sha256:claude" },
+  };
+  assert.deepEqual(canonicalClosure([base, claude], "codex").mcpServers.map(({ value }) => value), [
+    { name: "tools", transport: "stdio", command: "codex-server", args: [], env: [] },
+  ]);
+  assert.deepEqual(canonicalClosure([base, claude], "claude").mcpServers.map(({ value }) => value), [
+    { name: "tools", transport: "stdio", command: "claude-server", args: [], env: [] },
+  ]);
+});
+
+test("Hook ownership identities are secret-safe digests", () => {
+  const records = canonicalOwnershipRecords({
+    skills: [],
+    mcpServers: [],
+    hooks: [{ packageName: "pkg", hook: { event: "PostToolUse", matcher: "Edit", command: "TOKEN=super-secret run" } }],
+  }, { mcp: "config#mcp", hooks: "settings#hooks" });
+  assert.equal(records.length, 1);
+  assert.doesNotMatch(records[0]!.identity, /super-secret|TOKEN=/);
+  assert.match(records[0]!.valueDigest, /^sha256:[a-f0-9]{64}$/);
 });
 
 test("Agent Adapter artifact contracts reject duplicate and escaping locations", () => {

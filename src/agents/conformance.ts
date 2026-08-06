@@ -9,7 +9,7 @@ function planShape(plan: ProjectionPlan): unknown {
   return {
     files: plan.files,
     resources: plan.resources,
-    ownership: plan.ownership ?? [],
+    ownership: plan.ownership,
   };
 }
 
@@ -29,6 +29,15 @@ export function adapterConformanceIssues(
   options: AdapterConformanceOptions = {},
 ): string[] {
   const issues: string[] = [];
+  let firstValidation;
+  let secondValidation;
+  try {
+    firstValidation = adapter.validate(input);
+    secondValidation = adapter.validate(input);
+  } catch (error) {
+    return [`validate throws: ${(error as Error).message}`];
+  }
+  if (stable(firstValidation) !== stable(secondValidation)) issues.push("validate is not deterministic");
   let firstPlan: ProjectionPlan;
   let secondPlan: ProjectionPlan;
   try {
@@ -43,9 +52,28 @@ export function adapterConformanceIssues(
   if (fileDuplicate) issues.push(`plan writes artifact ${fileDuplicate} more than once`);
   const resourceDuplicate = duplicate(firstPlan.resources.mcpServers);
   if (resourceDuplicate) issues.push(`plan repeats MCP resource ${resourceDuplicate}`);
-  const ownership = firstPlan.ownership ?? [];
+  const expectedResources = input.capabilities.mcpServers.map(({ server }) => server.name).sort();
+  if (stable([...firstPlan.resources.mcpServers].sort()) !== stable(expectedResources)) {
+    issues.push("plan omits or invents an MCP resource");
+  }
+  const ownership = firstPlan.ownership;
   const ownershipDuplicate = duplicate(ownership.map((record) => record.identity));
   if (ownershipDuplicate) issues.push(`plan repeats ownership identity ${ownershipDuplicate}`);
+  for (const record of ownership) {
+    if (!record.identity || !record.packageOwner || !record.nativeLocator || !/^sha256:[a-f0-9]{64}$/.test(record.valueDigest)) {
+      issues.push(`plan contains malformed ownership record ${record.identity || "<empty>"}`);
+    }
+  }
+  for (const record of ownership.filter((item) => item.capability === "hook")) {
+    const exposesCommand = input.capabilities.hooks.some(({ hook }) =>
+      hook.command
+      && record.nativeLocator.includes(`${hook.event}${hook.matcher ? `:${hook.matcher}` : ""}`)
+      && record.identity.includes(hook.command),
+    );
+    if (exposesCommand) {
+      issues.push(`ownership identity exposes Hook command for ${record.nativeLocator}`);
+    }
+  }
 
   const firstDiscovery = adapter.discover(input);
   const secondDiscovery = adapter.discover(input);
@@ -54,7 +82,7 @@ export function adapterConformanceIssues(
   const secondDiagnostics = adapter.diagnose(input);
   if (stable(firstDiagnostics) !== stable(secondDiagnostics)) issues.push("diagnostics are not deterministic");
 
-  const rendered = stable({ plan: firstPlan, discovery: firstDiscovery, diagnostics: firstDiagnostics });
+  const rendered = stable({ ownership, discovery: firstDiscovery, diagnostics: firstDiagnostics });
   for (const secret of options.secretLiterals ?? []) {
     if (secret && rendered.includes(secret)) issues.push("plan, discovery, or diagnostics expose a literal secret");
   }
