@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 - 2026-09-12
+
+First release of the v2 environment contract. Breaking: v1 environments, commands, and
+bundles are superseded and require explicit recreation.
+
+- Replace the multi-target projection model with v2 single-harness environments and independently pinned official Codex/Claude runtime releases.
+- Add explicit runtime/package updates, native Plugin installation, stable real configuration files, selective registration ownership, and transactional rollback with drift checks.
+- Standardize name/prefix selection, shell-only activation, child execution with signal propagation, recipe export, and exact managed-content locks.
+- Remove implicit base/bootstrap, automatic import, capture, shared writable Skills, generic MCP/Hook translation, and offline bundles. Legacy environments remain untouched and require explicit recreation.
+- Update documentation and examples to the minimal package format. `performance-engineering` is now a plain Skill package; the native Claude example demonstrates an upstream Hook format.
+
+## Previous v1 Development
+
+These entries describe the superseded implementation, not the v2 command contract.
 
 - Added a formal pure `AgentAdapter` contract, canonical capability projection layer, static built-in registry, and one shared transactional publisher; migrated Codex, Claude Code, Pi, and Qoder CLI projections and added OpenCode Skills/MCP support through `OPENCODE_CONFIG` and `OPENCODE_CONFIG_DIR` overlays without overriding `XDG_*` or claiming native credentials, sessions, caches, Hooks, or Plugins.
 - Added automatic first-run bootstrap to `woma init`: it creates a clean `base`, detects supported existing Codex state, creates a separate `codex` Environment with a one-time copy of `config.toml` and `hooks.json`, snapshots ordinary Skills as Packages, and selects the imported Environment by default without changing the original Codex home.

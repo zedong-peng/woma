@@ -1,112 +1,65 @@
-# Woma package manifest
+# Package Format
 
-`woma.yaml` describes one reusable Package. A Package may provide any combination of Skills, MCP servers, hooks, requirements, dependencies, and user-facing Skill entrypoints. It contains no credential values and no project-specific build commands.
+Woma recognizes the native package content first. It does not synthesize or rewrite an upstream capability manifest.
 
-```yaml
-apiVersion: woma.dev/v1
-kind: Woma
-metadata:
-  name: repository-research
-  version: 0.1.0
-  description: Search and analyze repositories with a repeatable evidence method.
-  tags: [research]
-spec:
-  platforms: [codex, claude, pi, qoder, opencode]
-  dependencies:
-    - name: paper-search
-      version: ^1.0.0
-      source: builtin:paper-search
-    - name: idea-gen
-      version: ^1.0.0
-      source: builtin:idea-gen
-  entrypoints:
-    - name: research
-      skill: repository-research
-      description: Run the complete evidence-to-experiment research method.
-  requirements:
-    env:
-      - name: GITHUB_TOKEN
-        description: GitHub API access for private repositories.
-        optional: false
-    commands: [git, node]
-  skills:
-    - name: repository-research
-      path: ./skills/repository-research
-  mcpServers:
-    - name: github
-      transport: stdio
-      command: npx
-      args: [-y, "@modelcontextprotocol/server-github"]
-      env: [GITHUB_TOKEN]
-      platforms: [codex, claude, opencode]
-  hooks:
-    - event: PostToolUse
-      matcher: Edit|Write
-      command: git diff --check
-      timeout: 10
-      platforms: [codex, claude]
+## Accepted layouts
+
+```text
+review/SKILL.md                          # standalone Skill, with companions
+review/references/...
+
+toolkit/skills/review/SKILL.md            # direct Skill collection
+toolkit/skills/design/SKILL.md
+
+native/.codex-plugin/plugin.json         # Codex native Plugin
+native/.mcp.json
+native/hooks/hooks.json
+native/skills/review/SKILL.md
+
+native/.claude-plugin/plugin.json        # Claude native Plugin
+
+collection/woma.yaml                     # dependencies only
 ```
 
-## Implicit Skill Packages
+The initial adapter requires one explicit harness manifest. Dual manifests and universal root `plugin.json` layouts are rejected until their overlay/precedence rules have a verified adapter. Upstream native manifest fields, Hooks, MCP configuration, and file content are otherwise preserved. Plugins with native dependency declarations are rejected because Woma cannot prevent unlocked resolution through the native loader.
 
-Package authors use `woma.yaml`, but existing Skills do not need to add one before installation. When no root manifest exists, the Source Adapter accepts either one root `SKILL.md` or one conventional collection of direct `skills/*/SKILL.md` children. It generates the manifest only in temporary staging and then applies the same Package schema and validation shown in this document.
+Standalone and direct collection Skills require YAML frontmatter with a nonempty `name` and `description`. Skill names, package names, and environment names use lowercase letters, digits, dots, underscores, and hyphens, starting with a letter or digit, up to 80 characters. `codex` and `claude` are reserved runtime package names.
 
-Implicit Packages contain Skills only and support Codex, Claude, Pi, Qoder, and OpenCode. Woma does not infer dependencies, entrypoints, MCP servers, Hooks, requirements, or workflow semantics from Skill prose. The root manifest always takes precedence when present, including over raw Skill layouts. Nested discovery is forbidden, so a repository containing multiple Package directories must be installed one Package directory at a time.
+Package trees are complete snapshots except `.git`, `.woma`, and `.DS_Store`. Symlinks and special files are rejected. Woma does not inspect native homes to discover packages: the source must be an explicitly supplied package directory. Export never reads this source again.
 
-The adapter derives a standalone Package name and description from Skill YAML frontmatter. For a multi-Skill source, it derives the Package name from the source directory or Git repository and includes every direct conventional Skill in deterministic directory-name order. Duplicate Skill names and malformed metadata are rejected. Local content or the resolved Git commit supplies an informational SemVer build version; the lock remains authoritative for source, exact resolution, normalized integrity, and cache identity.
-
-## Dependencies and coordinating Skills
-
-`dependencies` declares other Woma packages required by this package. Installation recursively resolves dependencies before their parent, validates package identity and SemVer constraints, rejects cycles and conflicting resolutions, and writes the complete dependency closure to the global Environment lock atomically.
-
-Until a registry provides package-name resolution, every dependency includes a `source`. It accepts the same sources as `woma install`: built-ins, local paths, GitHub shorthand, HTTPS Git, and SSH Git. A relative local source is resolved from the directory containing the parent package:
+## Optional woma.yaml
 
 ```yaml
+name: research
+version: 1.0.0
+harnesses:
+  codex: '>=0.154.0'
 dependencies:
-  - name: paper-search
+  - name: review
     version: ^1.0.0
-    source: ../paper-search
+    source: ../review
 ```
 
-Local sources are useful during development but are not portable across machines. For security, packages installed from Git or the built-in catalog cannot declare local dependency sources; their dependencies must also use Git or built-in sources. Published packages should use immutable Git tags or commits until registry-backed resolution is available.
+These are the only supported fields. `dependencies` defaults to empty. `harnesses` maps supported harnesses to runtime semver constraints; omitted constraints allow both harnesses for Skills and only the native harness for a Plugin. Name/version default to native metadata or content-derived identity. A supplied name/version must agree with the native Plugin manifest.
 
-`entrypoints` identifies a Package's user-facing starting Skills. It does not define workflow steps or create a DAG. When a Package teaches an end-to-end method, an ordinary coordinating Skill keeps its ordering, branching rules, interruption behavior, and expected output in `SKILL.md`; Woma only manages the Packages needed to make that method available.
+Each dependency declares `name`, `source`, and an optional semver `version` constraint (default `*`). Local relative paths resolve beside the declaring package. Repository-relative Git dependencies resolve inside the same exact commit; other Git dependencies may name their own source/ref. Absolute local dependencies from Git packages are rejected.
 
-For example, an `auto-research` Package can expose one coordinating `auto-research` Skill while depending on independently versioned `paper-search`, `idea-gen`, and `exp-design` Packages. Installing `auto-research` installs and locks all four Packages:
+Dependency cycles, source disagreements, name collisions, mismatched versions, duplicate Skills, conflicting installation paths, and incompatible harnesses fail before publication. Git submodules are rejected; supply complete local content or explicit package dependencies. Installing another package preserves existing resolutions. Explicit updates re-resolve only the selected package subtrees and check them against the whole closure.
 
-```bash
-woma install ./auto-research
-```
+The previous `apiVersion/kind/metadata/spec` manifest is unsupported. Move native MCP and Hooks into a harness-native Plugin. Woma has no core MCP, Hook, entrypoint, or cross-harness translation language. Native Plugins may intentionally target one harness.
 
-The same component Packages can still be installed individually or composed into another ordinary Package by the `woma-package-builder` Agent Skill. A dependency-only aggregation Package may omit Skills and entrypoints entirely. These are structural variations of one Package model, not separate Package types.
-
-Remote MCP headers map HTTP header names to environment variable names:
+## Recipe and lock
 
 ```yaml
-mcpServers:
-  - name: internal-docs
-    transport: http
-    url: https://mcp.example.com/mcp
-    headers:
-      Authorization: INTERNAL_MCP_AUTHORIZATION
+format: woma.environment/v2
+name: research
+harness: codex
+runtime: latest
+packages:
+  - name: review
+    source: file:/absolute/path/to/review
 ```
 
-## Target mapping
+A recipe captures direct intent and can resolve newer content when used to create an environment. A lock uses `format: woma.lock/v2`, contains that recipe, records the platform, and enumerates every package in the dependency closure. Each package records exact name/version/kind, source identity, SHA-256 snapshot integrity, dependency edges, harness constraints, and installation descriptors. Runtime sources additionally record the official provider, artifact names/versions/URLs/SHA-512 integrity, and executable path.
 
-| Package resource | Codex Environment view | Claude Code Environment view | Pi Environment view | Qoder Environment view | OpenCode Environment view |
-| --- | --- | --- | --- | --- | --- |
-| Skill | `home/codex/skills/<name>` | `home/claude/skills/<name>` | `home/pi/skills/<name>` | `home/qoder/skills/<name>` | `home/opencode/skills/<name>` |
-| MCP server | managed block in `home/codex/config.toml` | entry in `home/claude/.claude.json` | unsupported | entry in `home/qoder/settings.json` | entry in `view/opencode/opencode.json` |
-| Hook | entry in `home/codex/hooks.json` | entry in `home/claude/settings.json` | unsupported | entry in `home/qoder/settings.json` | unsupported |
-
-All five Agent Skill paths resolve to the Environment's real `home/skills` directory. Woma-managed entries there link through the atomic `view/skills/<name>` projection; ordinary entries written through any target path are immediately visible through the other target paths. Pi consumes Woma Skills but does not support Package MCP servers or Hooks. OpenCode consumes Skills and MCP servers but has no canonical Hook mapping. Packages must use resource `platforms` selectors to exclude unsupported combinations; validation rejects them instead of silently dropping resources. Qoder supports Skills, MCP servers, and Hooks through its stable-home `settings.json`; Woma does not capture, migrate, or seed Qoder credentials or sessions. Codex, Claude, and Qoder configuration files are regular files in the stable Agent home. Woma reconciles only its previous MCP/Hook values, preserves unknown and external fields, and rejects a changed Woma-owned value instead of silently overwriting it. Claude credentials remain opaque regular files outside the view. Omitting `spec.platforms` retains the compatibility default `[codex, claude]`.
-
-Codex owns the hidden `home/skills/.system` entry as mutable per-Environment state. It is not a Package Skill and is excluded from Environment-local Skill inventory, Package Store entries, ownership metadata, locks, and bundles. A non-hidden ordinary Skill added beside `.system` through any target immediately belongs to that Environment with origin `external`; it becomes an immutable Package only when installed explicitly through `woma install`.
-
-`~/.woma/environments/<environment>/lock.json` records source, full Git commit, Git subdirectory, content integrity, cache key, and dependency names for every package in a global Environment's resolved closure. Git-only provenance fields are omitted for local and built-in Packages. Legacy locks containing `resolved` and `requestedRef` remain readable, but new locks do not write those fields. The active Environment belongs to the current shell and is selected by `WOMA_ENV`; no Environment state is stored in a project.
-
-## Requirements
-
-`commands` declares executable names that must exist on the machine. `env` declares environment variable names but never their values.
-
-Repository-specific build, test, benchmark, and operational knowledge does not belong in a portable package manifest. Keep it in repository-owned documentation or the Agent/user context system chosen for that project. Woma core does not define, discover, inject, or persist project context; the optional `woma-project-memory` Skill can operate on project-owned `.woma/memory.md` only when selected.
+Creating from a lock checks identities and content. It fetches only the locked Git commits or official runtime artifacts when needed. Missing local snapshots fail explicitly. It never substitutes current local content, upgrades a ref, or uses a system executable. A lock contains no native user configuration, plugin enable state, credentials, sessions, or Memory.

@@ -1,22 +1,2 @@
-apiVersion: woma.dev/v1
-kind: Woma
-metadata:
-  name: performance-engineering
-  version: 0.2.0
-  description: Evidence-first benchmark, profile, optimize, and regression-report loop for existing software.
-  tags: [performance, benchmark, profiling]
-spec:
-  platforms: [codex, claude, pi, qoder, opencode]
-  requirements:
-    env: []
-    commands: [git, node]
-  skills:
-    - name: performance-loop
-      path: ./skills/performance-loop
-  mcpServers: []
-  hooks:
-    - event: PostToolUse
-      matcher: Edit|Write
-      platforms: [codex, claude]
-      command: git diff --check
-      timeout: 10
+name: performance-engineering
+version: 0.2.0

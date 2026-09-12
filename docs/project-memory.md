@@ -5,7 +5,7 @@ Woma core manages Agent capabilities and isolated Environments, not Agent Memory
 Projects that need shared build commands, test procedures, coding conventions, or operational knowledge can explicitly install the ordinary, removable Project Memory Package:
 
 ```bash
-woma install builtin:woma-project-memory
+woma install ./examples/woma-project-memory
 ```
 
 The Package contributes one Skill to the selected Environment. It has no special runtime semantics and is not installed into `base` or new Environments automatically. Installation, activation, deactivation, and Environment switching do not invoke the Skill or create project files.

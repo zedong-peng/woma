@@ -1,16 +1,2 @@
-apiVersion: woma.dev/v1
-kind: Woma
-metadata:
-  name: idea-gen
-  version: 1.0.0
-  description: Generate one evidence-grounded, falsifiable research idea.
-  tags: [research, ideation]
-spec:
-  platforms: [codex, claude, pi, qoder, opencode]
-  entrypoints:
-    - name: generate
-      skill: idea-gen
-      description: Generate one concrete idea with a falsification plan.
-  skills:
-    - name: idea-gen
-      path: ./skills/idea-gen
+name: idea-gen
+version: 1.0.0

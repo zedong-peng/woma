@@ -1,16 +1,2 @@
-apiVersion: woma.dev/v1
-kind: Woma
-metadata:
-  name: exp-design
-  version: 1.0.0
-  description: Turn a research idea into a controlled, executable experiment specification.
-  tags: [research, experiment]
-spec:
-  platforms: [codex, claude, pi, qoder, opencode]
-  entrypoints:
-    - name: design
-      skill: exp-design
-      description: Produce a controlled experiment and falsification specification.
-  skills:
-    - name: exp-design
-      path: ./skills/exp-design
+name: exp-design
+version: 1.0.0

@@ -1,17 +1,2 @@
-apiVersion: woma.dev/v1
-kind: Woma
-metadata:
-  name: reproducibility-core
-  version: 0.1.0
-  description: Shared evidence, environment capture, and failure-recording discipline for technical work.
-  tags: [reproducibility, evidence]
-spec:
-  platforms: [codex, claude, pi, qoder, opencode]
-  requirements:
-    env: []
-    commands: [git]
-  skills:
-    - name: reproducibility-core
-      path: ./skills/reproducibility-core
-  mcpServers: []
-  hooks: []
+name: reproducibility-core
+version: 0.1.0

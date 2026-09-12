@@ -1,0 +1,5 @@
+{
+  "name": "native-codex-review",
+  "version": "1.0.0",
+  "description": "Review changed code using Codex's native Plugin and Skill loading."
+}

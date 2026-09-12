@@ -2,7 +2,7 @@ import { lstat, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { womaHome, writeTextPreservingFile } from "./fs.js";
-import { renderShellHook, type SupportedShell } from "./shell.js";
+import { renderShellHook, shellQuote, type SupportedShell } from "./shell.js";
 import type { Action } from "./types.js";
 
 const markerStart = "# >>> woma initialize >>>";
@@ -39,10 +39,6 @@ async function readOptional(filePath: string): Promise<string | null> {
       },
     );
   });
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function initializationBlock(hookPath: string): string {
