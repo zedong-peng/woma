@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { access, chmod, lstat, mkdir, readFile, readlink, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -87,7 +88,7 @@ export function womaHome(): string {
 
 export function assertInside(root: string, candidate: string, label: string): void {
   const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`${label} escapes the woma package: ${candidate}`);
   }
 }
@@ -95,7 +96,6 @@ export function assertInside(root: string, candidate: string, label: string): vo
 export const EXCLUDED_PACKAGE_PATH_NAMES: ReadonlySet<string> = new Set([
   ".git",
   ".woma",
-  "node_modules",
   ".DS_Store",
 ]);
 
@@ -108,6 +108,7 @@ async function hashEntry(root: string, relative: string, hash: ReturnType<typeof
     return;
   }
   if (info.isDirectory()) {
+    hash.update(`dir:${normalized}\0`);
     const entries = (await readdir(absolute)).filter((entry) => !EXCLUDED_PACKAGE_PATH_NAMES.has(entry)).sort();
     for (const entry of entries) await hashEntry(root, path.join(relative, entry), hash);
     return;
@@ -115,14 +116,18 @@ async function hashEntry(root: string, relative: string, hash: ReturnType<typeof
   if (!info.isFile()) return;
   // Cache publication removes write bits; integrity tracks content and executable/readable shape, not mutability.
   hash.update(`file:${normalized}:${info.mode & 0o555}\0`);
-  hash.update(await readFile(absolute));
+  for await (const chunk of createReadStream(absolute)) hash.update(chunk);
   hash.update("\0");
 }
 
-export async function hashDirectory(root: string): Promise<string> {
+export async function hashPath(root: string): Promise<string> {
   const hash = createHash("sha256");
-  await hashEntry(await realpath(root), "", hash);
+  await hashEntry(root, "", hash);
   return `sha256-${hash.digest("hex")}`;
+}
+
+export async function hashDirectory(root: string): Promise<string> {
+  return hashPath(await realpath(root));
 }
 
 export async function removeEmptyParents(start: string, stop: string): Promise<void> {

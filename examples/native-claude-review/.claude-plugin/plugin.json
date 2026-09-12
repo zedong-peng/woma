@@ -1,0 +1,5 @@
+{
+  "name": "native-claude-review",
+  "version": "1.0.0",
+  "description": "A native Claude Code Plugin with a post-edit whitespace check."
+}

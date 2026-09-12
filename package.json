@@ -1,6 +1,6 @@
 {
   "name": "woma",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Reproducible environments and packages for coding agents.",
   "type": "module",
   "bin": {
@@ -17,7 +17,8 @@
     "examples/auto-research",
     "examples/woma-package-builder",
     "examples/woma-project-memory",
-    "scripts/benchmark-switch.mjs",
+    "examples/native-codex-review",
+    "examples/native-claude-review",
     "scripts/postinstall.mjs",
     "CHANGELOG.md",
     "README.md",
@@ -28,12 +29,12 @@
     "build": "npm run clean --silent && tsc -p tsconfig.json && node -e \"require('node:fs').chmodSync('dist/src/cli.js', 0o755)\"",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
-    "benchmark": "npm run build --silent && node scripts/benchmark-switch.mjs",
+    "test:live": "npm run build --silent && WOMA_LIVE_TESTS=1 node --test dist/test/live.test.js",
     "postinstall": "node scripts/postinstall.mjs",
     "start": "node dist/src/cli.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": "^20.19.0 || ^22.13.0 || >=24"
   },
   "keywords": [
     "agent",
@@ -59,7 +60,8 @@
     "commander": "^14.0.0",
     "jsonc-parser": "^3.3.1",
     "semver": "^7.8.5",
-    "smol-toml": "^1.4.2",
+    "tar": "^7.5.22",
+    "toml-eslint-parser": "^1.0.3",
     "yaml": "^2.8.0",
     "zod": "^4.0.0"
   },

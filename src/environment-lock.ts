@@ -121,20 +121,18 @@ export async function withEnvironmentLock<T>(name: string, operation: () => Prom
   }
 }
 
-export async function withProjectLock<T>(projectRoot: string, operation: () => Promise<T>): Promise<T> {
-  const resolved = path.resolve(projectRoot);
-  const project = await realpath(resolved).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return resolved;
-    throw error;
-  });
-  const key = createHash("sha256").update(project).digest("hex").slice(0, 24);
-  const directory = path.join(womaHome(), "locks", "projects", `${key}.lock`);
-  const release = await acquire(directory, `project ${project}`);
-  try {
-    return await operation();
-  } finally {
-    await release();
+export async function canonicalPrefix(input: string): Promise<string> {
+  const resolved = path.resolve(input);
+  try { return await realpath(resolved); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return path.join(await canonicalPrefix(path.dirname(resolved)), path.basename(resolved));
   }
+}
+
+export async function withPrefixLock<T>(prefix: string, operation: () => Promise<T>): Promise<T> {
+  const key = createHash("sha256").update(await canonicalPrefix(prefix)).digest("hex");
+  return withEnvironmentLock(key, operation);
 }
 
 export async function withPackageLock<T>(name: string, cacheKey: string, operation: () => Promise<T>): Promise<T> {

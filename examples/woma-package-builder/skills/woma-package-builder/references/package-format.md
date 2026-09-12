@@ -1,159 +1,31 @@
-# Woma Package authoring reference
+# Minimal v2 Package Format
 
-Use this contract when creating or updating a Package. Omit empty optional sections instead of inventing resources or requirements. Woma has one Package type; the fields present describe what it provides.
+Accepted sources are a local directory (or standalone SKILL.md path) and Git. A Skill package contains `SKILL.md` with `name` and `description` frontmatter, or direct `skills/*/SKILL.md` entries. Native Plugins use exactly one explicit `.codex-plugin/plugin.json` or `.claude-plugin/plugin.json`. Preserve their original contents. Woma does not support dual/universal overlays or native dependency resolution in the initial adapters.
 
-## Directory layouts
-
-A wrapped standalone Skill becomes self-contained:
-
-```text
-paper-search/
-├── woma.yaml
-└── skills/
-    └── paper-search/
-        ├── SKILL.md
-        └── optional bundled resources
-```
-
-A Package may combine resource kinds:
-
-```text
-repository-tools/
-├── woma.yaml
-└── skills/
-    └── repository-review/
-        └── SKILL.md
-```
-
-Keep every declared path inside the Package root. Copy external resources rather than using escaping paths. Package validation rejects Skill-root and nested symbolic links.
-
-## General manifest
+Optional metadata:
 
 ```yaml
-apiVersion: woma.dev/v1
-kind: Woma
-metadata:
-  name: repository-tools
-  version: 0.1.0
-  description: Review repositories with optional GitHub tools and validation hooks.
-  tags: [repository, review]
-spec:
-  platforms: [codex, claude, pi]
-  dependencies: []
-  entrypoints:
-    - name: review
-      skill: repository-review
-      description: Review a repository and report actionable findings.
-  requirements:
-    env:
-      - name: GITHUB_TOKEN
-        description: GitHub access token for private repositories.
-        optional: true
-    commands: [git, node]
-  skills:
-    - name: repository-review
-      path: ./skills/repository-review
-  mcpServers:
-    - name: github
-      transport: stdio
-      command: npx
-      args: [-y, "@modelcontextprotocol/server-github"]
-      env: [GITHUB_TOKEN]
-      platforms: [codex, claude]
-  hooks:
-    - event: PostToolUse
-      matcher: Edit|Write
-      command: git diff --check
-      timeout: 10
-      platforms: [codex, claude]
+name: research
+version: 1.0.0
+harnesses:
+  codex: '>=0.154.0'
+dependencies:
+  - name: review
+    version: ^1.0.0
+    source: ../review
 ```
 
-Required invariants:
+Only `name`, `version`, `harnesses`, and `dependencies` are accepted. Do not add `apiVersion`, `kind`, `metadata`, `spec`, `skills`, `mcpServers`, `hooks`, `entrypoints`, or `requirements`. Existing native packages need no Woma manifest. Names/versions must agree with native metadata when both are provided.
 
-- Use lowercase Package, Skill, entrypoint, MCP, and dependency names containing only letters, digits, `.`, `_`, or `-`.
-- Use valid SemVer for `metadata.version` and valid SemVer ranges for dependency versions.
-- List each Agent target once. Resource-level platforms must be a subset of Package platforms. Pi currently supports Skills only, so every MCP server and Hook in a Pi-capable Package must explicitly exclude `pi`.
-- Ensure every entrypoint references a Skill declared in `spec.skills`.
-- Ensure every Skill path is inside the Package and contains a `SKILL.md` whose frontmatter name matches the manifest Skill name and whose description is non-empty.
-- Declare executable names under `requirements.commands` and environment variable names under `requirements.env`.
-- Map MCP environment and header fields to declared variable names. Never store secret values.
-- Use commands relative to the Package only when the runtime can execute them from the required location; otherwise declare a stable executable requirement.
-- Omit `entrypoints` when the Package has no user-facing Skill. Omit `skills` when the Package provides only MCP servers, hooks, requirements, or dependencies.
+Names use lowercase letters, digits, dots, underscores, and hyphens, beginning with a letter or digit, up to 80 characters. Runtime names `codex` and `claude` are reserved. Versions are semantic versions. Each dependency provides name/source and an optional semver constraint (default `*`). Local relative dependencies resolve beside the declaring package; Git relative dependencies stay in the same locked repository commit.
 
-## Skill frontmatter
-
-Every Skill uses only the required frontmatter fields:
-
-```markdown
----
-name: repository-review
-description: Reviews a repository and reports prioritized findings. Use when the user requests an evidence-based code or design review.
----
-
-# Repository review
-
-State the reusable instructions and output contract.
-```
-
-Keep portable Skills independent of one repository's commands and paths. Put detailed reusable material in the Skill's `references/`, deterministic helpers in `scripts/`, and output templates or boilerplate in `assets/`.
-
-## Wrapping existing resources
-
-For a standalone Skill:
-
-1. Read its complete `SKILL.md` and inspect bundled files.
-2. Derive the manifest Skill name from valid frontmatter, not only the directory name.
-3. Copy the complete Skill directory into `skills/<name>/`, excluding source-control metadata, dependency caches, Woma project state, and OS metadata.
-4. Preserve executable bits required by bundled scripts.
-5. Reject or resolve symbolic links before packaging; never allow a link to escape the captured content.
-6. Leave the original directory unchanged.
-
-For MCP servers and hooks, inspect the source Agent configuration, translate only requested entries, declare environment variable names, and remove literal credential values. Do not copy authentication, sessions, history, or unrelated Agent settings.
-
-## Dependencies and coordinating Skills
-
-Declare Package dependencies as an unordered install graph:
-
-```yaml
-spec:
-  dependencies:
-    - name: paper-search
-      version: ^1.0.0
-      source: gh:owner/paper-search#v1.0.0
-    - name: idea-gen
-      version: ^1.0.0
-      source: gh:owner/idea-gen#v1.0.0
-    - name: exp-design
-      version: ^1.0.0
-      source: gh:owner/exp-design#v1.0.0
-  entrypoints:
-    - name: research
-      skill: auto-research
-      description: Produce an evidence-backed idea and executable experiment plan.
-  skills:
-    - name: auto-research
-      path: ./skills/auto-research
-```
-
-Make every dependency `name` match the Package returned by `woma inspect <source>`. Accepted sources are `builtin:name`, local paths, `gh:owner/repository#tag-or-revision`, HTTPS Git, and SSH Git. Relative local sources resolve from the parent Package and are appropriate only for local development. Git and built-in Packages cannot depend on local paths.
-
-A dependency-only Package may omit Skills and entrypoints. Add a coordinating entrypoint Skill only when the Package must teach the Agent a reusable method. That Skill may describe normal capability ordering, evidence-based branching, retries, returns, interruption checkpoints, success and failure conditions, budgets, no-progress limits, and outputs. It must not turn the dependency array into steps or require a Woma workflow engine.
-
-## Updating an existing Package
-
-- Read and validate the current Package before editing.
-- Preserve resources and metadata outside the user's requested change.
-- Keep existing Package and Skill identities unless the user explicitly requests a breaking rename.
-- Reconcile requirements when adding or removing MCP servers and hooks.
-- Re-run complete dependency resolution after any dependency change.
-- Report breaking identity, target, entrypoint, or requirement changes explicitly.
-
-## Validation
-
-From the Package's parent directory, run:
+Every package file is snapshotted except `.git`, `.woma`, and `.DS_Store`. Symlinks and special files are unsupported. Native configuration, credentials, sessions, caches, Memory, external tools/services, and model behavior are not package content or exportable environment state.
 
 ```bash
-woma inspect ./repository-tools
+woma create -n authoring codex@0.154.0
+woma install -n authoring ./my-package
+woma doctor -n authoring
+woma export -n authoring --explicit -f woma.lock
 ```
 
-This resolves the complete dependency closure and validates manifest structure, Package identities, versions, Skill frontmatter and paths, MCP and hook declarations, source portability, and Package contents. Do not report completion until it succeeds. To test activation separately, install into an inactive disposable Environment only with explicit user authorization.
+For Claude native Plugins use a Claude environment with runtime >=2.1.269. New plugins install disabled and retain native enable/disable controls. Full upstream manifest and behavior are preserved within the verified native contract.

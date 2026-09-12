@@ -1,1054 +1,250 @@
-import { lstat, readlink, readdir, readFile, rename, rm, symlink } from "node:fs/promises";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { lstat, mkdir, readFile, readdir, rename } from "node:fs/promises";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { satisfies } from "semver";
-import { z } from "zod";
-import { AGENT_SESSION_ENTRIES, AGENT_SKILLS_DIRECTORY } from "./agent-state-paths.js";
-import { detectAgentCli, detectAgentClis, findExecutable, type AgentCliStatus } from "./agent-cli.js";
-import { womaHome, pathExists, writeJsonAtomic, writeTextAtomic } from "./fs.js";
-import { withEnvironmentLock } from "./environment-lock.js";
-import { installPackageTree, loadCachedPackage, repairLockedPackage, type PackageInstallPlan, type PackageSourceOptions } from "./package.js";
-import {
-  inspectEnvironmentLocalSkills,
-  type EnvironmentLocalSkill,
-  type EnvironmentLocalSkillIssue,
-} from "./environment-skills.js";
-import {
-  discoverEnvironmentAgentCapabilities,
-  environmentViewPath,
-  materializeEnvironmentView,
-  sourceAgentHome,
-  validateEnvironmentView,
-} from "./view.js";
-import type { Action, CodexClaudePlatform, WomaEnvironment, InstalledPackage, LockFile, LockedPackage, Platform } from "./types.js";
+import { removeTree } from "./content.js";
+import { canonicalPrefix, withEnvironmentLock, withPrefixLock } from "./environment-lock.js";
+import { pathExists, readJson, womaHome, writeJsonAtomic } from "./fs.js";
+import { nativeConfigPath, reconcileNativeConfig, validateNativeContract } from "./native.js";
+import { assertCompatible, dependencyOrder, loadPackage, resolveClosure, resolvePackage } from "./package.js";
+import { npmRuntimeProvider, runtimePlatform, type RuntimeProvider } from "./runtime.js";
+import { nameSchema, parseLock, parseRecipe, parseState } from "./schema.js";
+import { canonicalSource } from "./source.js";
+import { assertNoTransactions, assertOrdinaryAncestors, installationOwners, managedDrift, publishEnvironment, statePath, type PublicationHooks } from "./transaction.js";
+import type { EnvironmentLock, EnvironmentRecipe, EnvironmentState, Harness, InstalledPackage, PackageRecord } from "./types.js";
 
-const environmentName = z
-  .string()
-  .min(1)
-  .max(80)
-  .regex(/^[a-z0-9][a-z0-9._-]*$/, "must use lowercase letters, digits, '.', '_' or '-'");
-const platform = z.enum(["codex", "claude", "pi", "qoder", "opencode"]);
+export interface Target { name?: string | undefined; prefix?: string | undefined }
+export interface MutationOptions { provider?: RuntimeProvider; hooks?: PublicationHooks }
 
-export const DEFAULT_ENVIRONMENT = "base";
-const baseInitializations = new Map<string, Promise<WomaEnvironment>>();
-
-const lockedPackageSchema = z
-  .object({
-    name: environmentName,
-    version: z.string().min(1),
-    source: z.string().min(1),
-    resolved: z.string().min(1).optional(),
-    requestedRef: z.string().min(1).optional(),
-    commit: z.string().regex(/^[a-f0-9]{40,64}$/, "must be a full lowercase hexadecimal commit SHA").optional(),
-    subdirectory: z.string().min(1).optional(),
-    integrity: z.string().min(1),
-    cacheKey: z.string().regex(/^[a-f0-9]{20}$/, "must be a 20-character lowercase hexadecimal cache key"),
-    dependencies: z.array(environmentName),
-    installedAt: z.string().min(1),
-  })
-  .strict();
-
-const lockSchema = z
-  .object({
-    lockfileVersion: z.literal(1),
-    packages: z.record(environmentName, lockedPackageSchema),
-  })
-  .strict();
-
-const environmentSchema = z
-  .object({
-    kind: z.literal("WomaEnvironment"),
-    metadata: z.object({ name: environmentName }).strict(),
-    spec: z
-      .object({
-        targets: z.array(platform).min(1),
-        roots: z
-          .array(z.object({ name: environmentName, source: z.string().min(1) }).strict())
-          .default([]),
-      })
-      .strict(),
-  })
-  .strict();
-
-export interface BaseEnvironmentInitializationOptions {
-  onExistingAgentStateDetected?: () => void;
+export async function selectPrefix(target: Target, active = process.env.WOMA_PREFIX): Promise<string> {
+  if (target.name && target.prefix) throw new Error("Select an environment with --name or --prefix, not both");
+  if (target.name) return canonicalPrefix(path.join(womaHome(), "environments", nameSchema.parse(target.name)));
+  if (target.prefix) return canonicalPrefix(target.prefix);
+  if (active) return canonicalPrefix(active);
+  throw new Error("No environment selected. Use -n/--name, -p/--prefix, or woma activate; Woma does not create a default environment.");
 }
 
-export interface EnvironmentActivationResult {
-  name?: string;
-  packages: string[];
-  targets: Platform[];
-  actions: Action[];
-}
-
-export interface EnvironmentCheck {
-  status: "ok" | "warn" | "fail";
-  label: string;
-  detail: string;
-}
-
-export interface CurrentEnvironmentContext {
-  projectRoot: string;
-  environment: { name: string; targets: Platform[] } | null;
-  agentClis: Record<Platform, AgentCliStatus>;
-  packages: {
-    name: string;
-    version: string;
-    source: string;
-    skills: string[];
-    entrypoints: { name: string; skill: string; description: string }[];
-  }[];
-  environmentSkills: EnvironmentLocalSkill[];
-  environmentSkillIssues: EnvironmentLocalSkillIssue[];
-  environmentMcpServers: { name: string; origin: "external"; platforms: Platform[] }[];
-}
-
-export interface EnvironmentSnapshot {
-  environment: WomaEnvironment;
-  lock: LockFile;
-}
-
-interface LoadedEnvironment {
-  environment: WomaEnvironment;
-  lock: LockFile;
-  names: string[];
-  packages: Map<string, InstalledPackage>;
-}
-
-interface EnvironmentMutationHooks {
-  onResourcesApplied?: () => Promise<void> | void;
-  onViewPrepared?: () => Promise<void> | void;
-  onMetadataPrepared?: () => Promise<void> | void;
-}
-
-interface EnvironmentInstallHooks extends EnvironmentMutationHooks {
-  sourceOptions?: PackageSourceOptions;
-}
-
-interface EnvironmentUninstallOptions extends EnvironmentMutationHooks {
-  dryRun?: boolean;
-}
-
-export interface EnvironmentUninstallResult {
-  environment: WomaEnvironment;
-  root: InstalledPackage;
-  packages: InstalledPackage[];
-  dependencies: InstalledPackage[];
-  skills: string[];
-  mcpServers: string[];
-  hooks: string[];
-  dryRun: boolean;
-}
-
-interface EnvironmentActivationHooks {
-  onProjectApplied?: () => Promise<void> | void;
-}
-
-export function environmentsRoot(_projectRoot?: string): string {
-  return path.join(womaHome(), "environments");
-}
-
-export function environmentPath(_projectRoot: string, name: string): string {
-  environmentName.parse(name);
-  return path.join(environmentsRoot(), name, "environment.yaml");
-}
-
-export function environmentLockPath(_projectRoot: string, name: string): string {
-  environmentName.parse(name);
-  return path.join(environmentsRoot(), name, "lock.json");
-}
-
-function formatIssues(error: z.ZodError): string {
-  return error.issues.map((issue) => `${issue.path.join(".") || "environment"}: ${issue.message}`).join("\n");
-}
-
-export function parseEnvironment(input: string, source = "environment.yaml"): WomaEnvironment {
-  let document: unknown;
-  try {
-    document = parseYaml(input);
-  } catch (error) {
-    throw new Error(`${source}: invalid YAML: ${(error as Error).message}`);
+export function validateLock(lock: EnvironmentLock): void {
+  if (lock.platform !== runtimePlatform()) throw new Error(`Platform mismatch: lock has ${lock.platform}, current platform is ${runtimePlatform()}`);
+  const runtime = lock.packages[lock.recipe.harness];
+  const runtimes = Object.values(lock.packages).filter((p) => p.kind === "runtime");
+  if (runtimes.length !== 1 || runtime?.kind !== "runtime" || runtime.source.type !== "runtime" || runtime.source.platform !== lock.platform || runtime.dependencies.length || runtime.skills.length || runtime.plugin) throw new Error("Lock must contain exactly one matching managed runtime");
+  if (lock.recipe.runtime !== "latest" && lock.recipe.runtime !== runtime.version) throw new Error("Locked runtime version does not match the recipe's exact requirement");
+  const roots = lock.recipe.packages.map((p) => p.name);
+  if (new Set(roots).size !== roots.length || roots.includes(lock.recipe.harness)) throw new Error("Duplicate or invalid direct package requirements");
+  const order = dependencyOrder(lock);
+  if (order.length !== Object.keys(lock.packages).length) throw new Error("Lock contains packages outside its dependency closure");
+  for (const pkg of Object.values(lock.packages)) {
+    if ((pkg.kind === "runtime") !== (pkg.source.type === "runtime")) throw new Error(`Invalid package source kind: ${pkg.name}`);
+    if ((pkg.kind === "plugin") !== Boolean(pkg.plugin)) throw new Error(`Invalid plugin metadata: ${pkg.name}`);
+    assertCompatible(pkg, lock.recipe.harness, runtime.version);
+    validateNativeContract(pkg, runtime.version);
   }
-  const parsed = environmentSchema.safeParse(document);
-  if (!parsed.success) throw new Error(`${source}: invalid environment\n${formatIssues(parsed.error)}`);
-  const roots = new Set<string>();
-  for (const root of parsed.data.spec.roots) {
-    if (roots.has(root.name)) throw new Error(`${source}: duplicate root package ${root.name}`);
-    roots.add(root.name);
+}
+
+export async function readEnvironment(prefix: string): Promise<EnvironmentState> {
+  await assertOrdinaryAncestors(prefix, statePath);
+  const file = path.join(prefix, statePath);
+  const info = await lstat(file).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; return undefined; });
+  if (!info) {
+    if (await pathExists(path.join(prefix, "environment.yaml"))) throw new Error(`Legacy environment at ${prefix}. It is preserved; create a new v2 environment. Automatic migration is not supported.`);
+    throw new Error(`Environment does not exist: ${prefix}`);
   }
-  return parsed.data;
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Environment metadata must be an ordinary file: ${file}`);
+  const state = parseState(JSON.parse(await readFile(file, "utf8")));
+  validateLock(state.lock);
+  const owners = installationOwners(Object.values(state.lock.packages));
+  if (owners.size !== state.paths.length || new Set(state.paths.map((p) => p.path)).size !== state.paths.length || state.paths.some((p) => owners.get(p.path) !== p.package)) throw new Error("Environment ownership metadata does not match the managed package closure");
+  return state;
 }
 
-async function readEnvironmentFile(projectRoot: string, name: string): Promise<WomaEnvironment> {
-  const filePath = environmentPath(projectRoot, name);
-  const input = await readFile(filePath, "utf8").catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") {
-      throw new Error(`Unknown environment: ${name}; run woma create --name ${name}`);
-    }
-    throw error;
-  });
-  const environment = parseEnvironment(input, filePath);
-  if (environment.metadata.name !== name) {
-    throw new Error(`${filePath}: metadata.name must match filename ${name}`);
+async function loadClosure(lock: EnvironmentLock, restore: boolean, provider: RuntimeProvider): Promise<InstalledPackage[]> {
+  validateLock(lock);
+  const packages: InstalledPackage[] = [];
+  for (const name of dependencyOrder(lock)) {
+    const record = lock.packages[name]!;
+    packages.push(record.kind === "runtime" && restore ? await provider.restore(record) : await loadPackage(record, restore));
   }
-  return environment;
+  return packages;
 }
 
-export async function readEnvironment(projectRoot: string, name: string): Promise<WomaEnvironment> {
-  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
-  return readEnvironmentFile(projectRoot, name);
-}
-
-async function writeEnvironment(projectRoot: string, environment: WomaEnvironment): Promise<void> {
-  const validated = environmentSchema.parse(environment);
-  await writeTextAtomic(environmentPath(projectRoot, validated.metadata.name), stringifyYaml(validated, { lineWidth: 120 }));
-}
-
-function emptyLock(): LockFile {
-  return { lockfileVersion: 1, packages: {} };
-}
-
-export function parseEnvironmentLock(input: string, source = "lock.json"): LockFile {
-  let document: unknown;
-  try {
-    document = JSON.parse(input);
-  } catch (error) {
-    throw new Error(`Cannot parse ${source}: ${(error as Error).message}`);
-  }
-  const parsed = lockSchema.safeParse(document);
-  if (!parsed.success) throw new Error(`${source}: invalid environment lock\n${formatIssues(parsed.error)}`);
-  for (const [packageName, locked] of Object.entries(parsed.data.packages)) {
-    if (packageName !== locked.name) {
-      throw new Error(`${source}: lock key ${packageName} does not match package identity ${locked.name}`);
-    }
-  }
-  return parsed.data;
-}
-
-async function readEnvironmentLockFile(projectRoot: string, name: string): Promise<LockFile> {
-  const filePath = environmentLockPath(projectRoot, name);
-  if (!(await pathExists(filePath))) return emptyLock();
-  return parseEnvironmentLock(await readFile(filePath, "utf8"), filePath);
-}
-
-export async function readEnvironmentLock(projectRoot: string, name: string): Promise<LockFile> {
-  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
-  return readEnvironmentLockFile(projectRoot, name);
-}
-
-export async function environmentSnapshot(projectRoot: string, name: string): Promise<EnvironmentSnapshot> {
-  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
-  return withEnvironmentLock(name, async () => {
-    const [environment, lock] = await Promise.all([
-      readEnvironmentFile(projectRoot, name),
-      readEnvironmentLockFile(projectRoot, name),
-    ]);
-    validateEnvironmentLockGraph(environment, lock);
-    return { environment, lock };
+async function registerPrefix(prefix: string, remove = false): Promise<void> {
+  await withEnvironmentLock("prefix-registry", async () => {
+    const file = path.join(womaHome(), "prefixes.json");
+    const known = await readJson<string[]>(file, []);
+    const next = known.filter((p) => p !== prefix);
+    if (!remove) next.push(prefix);
+    if (!isDeepStrictEqual(known, next)) await writeJsonAtomic(file, next);
   });
 }
 
-export async function validateEnvironmentState(projectRoot: string, name: string): Promise<void> {
-  if (name === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, name)))) {
-    await ensureBaseEnvironment(projectRoot);
-  }
-  await withEnvironmentLock(name, async () => {
-    const [environment, lock] = await Promise.all([
-      readEnvironmentFile(projectRoot, name),
-      readEnvironmentLockFile(projectRoot, name),
-    ]);
-    validateEnvironmentLockGraph(environment, lock);
-    const loaded = await loadEnvironmentSnapshot(environment, lock);
-    await validateEnvironmentView(environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
-  });
-}
-
-async function initializeEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<WomaEnvironment> {
-  environmentName.parse(name);
-  if (await pathExists(environmentPath(projectRoot, name))) throw new Error(`Environment already exists: ${name}`);
-  const environment: WomaEnvironment = {
-    kind: "WomaEnvironment",
-    metadata: { name },
-    spec: { targets: [...new Set(targets)], roots: [] },
-  };
-  environmentSchema.parse(environment);
-  try {
-    await materializeEnvironmentView(environment, [], {
-      seedFromOriginal: name !== DEFAULT_ENVIRONMENT,
-      beforeSwap: async () => {
-        await writeJsonAtomic(environmentLockPath(projectRoot, name), emptyLock());
-        try {
-          await writeEnvironment(projectRoot, environment);
-        } catch (error) {
-          await rm(environmentLockPath(projectRoot, name), { force: true });
-          throw error;
-        }
-        return async () => {
-          await rm(environmentPath(projectRoot, name), { force: true });
-          await rm(environmentLockPath(projectRoot, name), { force: true });
-        };
-      },
-    });
-  } catch (error) {
-    await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
-    throw error;
-  }
-  return environment;
-}
-
-async function existingAgentStateDetected(): Promise<boolean> {
-  const platforms: CodexClaudePlatform[] = ["codex", "claude"];
-  for (const platform of platforms) {
-    const home = sourceAgentHome(platform);
-    const skills = await lstat(path.join(home, AGENT_SKILLS_DIRECTORY)).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-    if (skills?.isDirectory() && !skills.isSymbolicLink()) return true;
-    for (const name of AGENT_SESSION_ENTRIES[platform]) {
-      const info = await lstat(path.join(home, name)).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return undefined;
-        throw error;
-      });
-      if (info && !info.isSymbolicLink() && (info.isFile() || info.isDirectory())) return true;
+export async function createEnvironment(target: Target, options: MutationOptions & { harness?: Harness; version?: string; file?: string }): Promise<string> {
+  if (!target.name && !target.prefix) throw new Error("create requires -n/--name or -p/--prefix");
+  const prefix = await selectPrefix(target);
+  return withPrefixLock(prefix, async () => {
+    if (await lstat(prefix).catch(() => undefined)) throw new Error(`Environment prefix already exists: ${prefix}`);
+    const name = target.name ?? nameSchema.parse(path.basename(prefix).toLowerCase().replace(/[^a-z0-9._-]/g, "-"));
+    const provider = options.provider ?? npmRuntimeProvider;
+    let lock: EnvironmentLock;
+    let packages: InstalledPackage[];
+    if (options.file) {
+      if (options.harness || options.version) throw new Error("A recipe or lock supplies the harness and runtime; do not also specify them");
+      const input: unknown = parseYaml(await readFile(options.file, "utf8"));
+      if ((input as { format?: unknown })?.format === "woma.lock/v2") {
+        lock = parseLock(input);
+        lock.recipe.name = name;
+        packages = await loadClosure(lock, true, provider);
+      } else {
+        const recipe = parseRecipe(input);
+        recipe.name = name;
+        recipe.packages = recipe.packages.map((r) => ({ ...r, source: canonicalSource(r.source, path.dirname(path.resolve(options.file!))) }));
+        const runtime = await provider.resolve(recipe.harness, recipe.runtime);
+        const closure = await resolveClosure({ roots: recipe.packages });
+        lock = { format: "woma.lock/v2", platform: runtimePlatform(), recipe, packages: { [recipe.harness]: runtime.record, ...closure } };
+        packages = await loadClosure(lock, false, provider);
+      }
+    } else {
+      if (!options.harness) throw new Error("create requires a harness (codex or claude) or --file");
+      const runtime = await provider.resolve(options.harness, options.version ?? "latest");
+      const recipe: EnvironmentRecipe = { format: "woma.environment/v2", name, harness: options.harness, runtime: options.version ?? "latest", packages: [] };
+      lock = { format: "woma.lock/v2", platform: runtimePlatform(), recipe, packages: { [options.harness]: runtime.record } };
+      validateLock(lock); packages = [runtime];
     }
-  }
-  return false;
-}
-
-export function ensureBaseEnvironment(
-  projectRoot = process.cwd(),
-  options: BaseEnvironmentInitializationOptions = {},
-): Promise<WomaEnvironment> {
-  const filePath = environmentPath(projectRoot, DEFAULT_ENVIRONMENT);
-  const existing = baseInitializations.get(filePath);
-  if (existing) return existing;
-  const initialization = withEnvironmentLock(DEFAULT_ENVIRONMENT, async () => {
-    if (!(await pathExists(filePath))) {
-      const detected = await existingAgentStateDetected();
-      const environment = await initializeEnvironment(projectRoot, DEFAULT_ENVIRONMENT, ["codex", "claude"]);
-      if (detected) options.onExistingAgentStateDetected?.();
-      return environment;
-    }
+    await mkdir(path.dirname(prefix), { recursive: true });
+    const stage = path.join(path.dirname(prefix), `.woma-create-${randomUUID()}`);
+    await mkdir(path.join(stage, "home"), { recursive: true, mode: 0o700 });
+    let published = false;
     try {
-      if (!(await pathExists(environmentLockPath(projectRoot, DEFAULT_ENVIRONMENT)))) {
-        throw new Error(`Missing ${environmentLockPath(projectRoot, DEFAULT_ENVIRONMENT)}`);
-      }
-      const environment = await readEnvironmentFile(projectRoot, DEFAULT_ENVIRONMENT);
-      const lock = await readEnvironmentLockFile(projectRoot, DEFAULT_ENVIRONMENT);
-      const loaded = await loadEnvironmentSnapshot(environment, lock);
-      const packages = loaded.names.map((name) => loaded.packages.get(name)!);
-      try {
-        await validateEnvironmentView(environment, packages);
-      } catch {
-        await materializeEnvironmentView(environment, packages, { previousPackages: packages });
-      }
-      await validateEnvironmentView(environment, packages);
-      return environment;
+      await publishEnvironment(stage, lock, packages, undefined, { identityPrefix: prefix, ...(options.hooks ? { hooks: options.hooks } : {}) });
+      await rename(stage, prefix); published = true;
+      await registerPrefix(prefix);
+      return prefix;
     } catch (error) {
-      throw new Error(`The base Environment is incomplete or corrupt: ${(error as Error).message}`);
-    }
-  });
-  baseInitializations.set(filePath, initialization);
-  void initialization.finally(() => {
-    if (baseInitializations.get(filePath) === initialization) baseInitializations.delete(filePath);
-  }).catch(() => undefined);
-  return initialization;
-}
-
-export async function createEnvironment(projectRoot: string, name: string, targets: Platform[]): Promise<WomaEnvironment> {
-  if (name === DEFAULT_ENVIRONMENT) {
-    await ensureBaseEnvironment(projectRoot);
-    throw new Error("The base environment exists implicitly and cannot be created");
-  }
-  return withEnvironmentLock(name, () => initializeEnvironment(projectRoot, name, targets));
-}
-
-export async function importEnvironmentSnapshot(
-  projectRoot: string,
-  sourceEnvironment: WomaEnvironment,
-  lock: LockFile,
-  requestedName = sourceEnvironment.metadata.name,
-): Promise<EnvironmentSnapshot> {
-  environmentName.parse(requestedName);
-  if (requestedName === DEFAULT_ENVIRONMENT) {
-    throw new Error("The base environment exists implicitly and cannot be imported; pass --name <name>");
-  }
-  const candidate: WomaEnvironment = {
-    ...sourceEnvironment,
-    metadata: { name: requestedName },
-    spec: {
-      targets: [...sourceEnvironment.spec.targets],
-      roots: sourceEnvironment.spec.roots.map((root) => ({ ...root })),
-    },
-  };
-  environmentSchema.parse(candidate);
-  const environment = candidate;
-  return withEnvironmentLock(requestedName, async () => {
-    const root = path.dirname(environmentPath(projectRoot, requestedName));
-    if (await pathExists(root)) throw new Error(`Environment already exists: ${requestedName}`);
-    const loaded = await loadEnvironmentSnapshot(environment, lock);
-    try {
-      await materializeEnvironmentView(environment, loaded.names.map((name) => loaded.packages.get(name)!), {
-        seedFromOriginal: requestedName !== DEFAULT_ENVIRONMENT,
-        beforeSwap: async () => {
-          await writeJsonAtomic(environmentLockPath(projectRoot, requestedName), lock);
-          try {
-            await writeEnvironment(projectRoot, environment);
-          } catch (error) {
-            await rm(environmentLockPath(projectRoot, requestedName), { force: true });
-            throw error;
-          }
-          return async () => {
-            await rm(environmentPath(projectRoot, requestedName), { force: true });
-            await rm(environmentLockPath(projectRoot, requestedName), { force: true });
-          };
-        },
-      });
-      return { environment, lock };
-    } catch (error) {
-      await rm(root, { recursive: true, force: true });
+      if (published) await removeTree(prefix);
       throw error;
-    }
+    } finally { await removeTree(stage); }
   });
 }
 
-export async function listEnvironments(projectRoot: string): Promise<string[]> {
-  if (!(await pathExists(environmentPath(projectRoot, DEFAULT_ENVIRONMENT)))) await ensureBaseEnvironment(projectRoot);
-  return (await readdir(environmentsRoot(projectRoot), { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
-}
-
-export async function removeEnvironment(projectRoot: string, name: string): Promise<void> {
-  if (name === DEFAULT_ENVIRONMENT) throw new Error("The base environment cannot be removed");
-  if (process.env.WOMA_ENV === name) throw new Error(`Environment ${name} is active in this shell; run woma deactivate first`);
-  await withEnvironmentLock(name, async () => {
-    await readEnvironmentFile(projectRoot, name);
-    await rm(path.dirname(environmentPath(projectRoot, name)), { recursive: true, force: true });
+async function mutate(prefix: string, options: MutationOptions, operation: (old: EnvironmentLock) => Promise<EnvironmentLock>): Promise<EnvironmentState> {
+  prefix = await canonicalPrefix(prefix);
+  return withPrefixLock(prefix, async () => {
+    const previous = await readEnvironment(prefix);
+    await assertNoTransactions(prefix);
+    const drift = await managedDrift(prefix, previous);
+    if (drift.length) throw new Error(drift.join("\n"));
+    const lock = await operation(structuredClone(previous.lock));
+    const packages = await loadClosure(lock, false, options.provider ?? npmRuntimeProvider);
+    return publishEnvironment(prefix, lock, packages, previous, options);
   });
 }
 
-async function rewriteRenamedEnvironmentLinks(root: string, previousRoot: string, nextRoot: string): Promise<void> {
-  async function visit(directory: string): Promise<void> {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-        continue;
-      }
-      if (!entry.isSymbolicLink()) continue;
-      const target = await readlink(entryPath);
-      if (!path.isAbsolute(target)) continue;
-      const relative = path.relative(previousRoot, target);
-      if (relative.startsWith("..") || path.isAbsolute(relative)) continue;
-      const replacement = path.join(nextRoot, relative);
-      const temporary = `${entryPath}.rename-${process.pid}-${randomUUID()}`;
-      const replacementInfo = process.platform === "win32" ? await lstat(replacement).catch(() => undefined) : undefined;
-      await symlink(
-        replacement,
-        temporary,
-        process.platform === "win32" ? (replacementInfo?.isDirectory() ? "junction" : "file") : undefined,
-      );
-      try {
-        await rename(temporary, entryPath);
-      } finally {
-        await rm(temporary, { force: true });
-      }
-    }
-  }
-  await visit(root);
-}
-
-async function withEnvironmentPairLock<T>(left: string, right: string, operation: () => Promise<T>): Promise<T> {
-  const [first, second] = [left, right].sort((a, b) => a.localeCompare(b));
-  return withEnvironmentLock(first!, () => withEnvironmentLock(second!, operation));
-}
-
-export async function renameEnvironment(projectRoot: string, source: string, destination: string): Promise<WomaEnvironment> {
-  environmentName.parse(source);
-  environmentName.parse(destination);
-  if (source === DEFAULT_ENVIRONMENT || destination === DEFAULT_ENVIRONMENT) {
-    throw new Error("The base environment cannot be renamed or replaced");
-  }
-  if (source === destination) throw new Error("Source and destination environment names must differ");
-  if (process.env.WOMA_ENV === source) {
-    throw new Error(`Environment ${source} is active in this shell; run woma deactivate first`);
-  }
-  return withEnvironmentPairLock(source, destination, async () => {
-    const sourceRoot = path.dirname(environmentPath(projectRoot, source));
-    const destinationRoot = path.dirname(environmentPath(projectRoot, destination));
-    const environment = await readEnvironmentFile(projectRoot, source);
-    const lock = await readEnvironmentLockFile(projectRoot, source);
-    const loaded = await loadEnvironmentSnapshot(environment, lock);
-    const packages = loaded.names.map((name) => loaded.packages.get(name)!);
-    await validateEnvironmentView(environment, packages);
-    if (await pathExists(destinationRoot)) throw new Error(`Environment already exists: ${destination}`);
-    const renamed: WomaEnvironment = { ...environment, metadata: { name: destination } };
-    let moved = false;
-    try {
-      await rename(sourceRoot, destinationRoot);
-      moved = true;
-      await rewriteRenamedEnvironmentLinks(destinationRoot, sourceRoot, destinationRoot);
-      await writeEnvironment(projectRoot, renamed);
-      const metadataPath = path.join(environmentViewPath(destination), "view.json");
-      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as Record<string, unknown>;
-      metadata.environment = destination;
-      await writeJsonAtomic(metadataPath, metadata);
-      await validateEnvironmentView(renamed, packages);
-      return renamed;
-    } catch (error) {
-      if (moved) {
-        const rollbackErrors: unknown[] = [];
-        await rewriteRenamedEnvironmentLinks(destinationRoot, destinationRoot, sourceRoot).catch((rollbackError) => {
-          rollbackErrors.push(rollbackError);
-        });
-        let restored = false;
-        try {
-          await rename(destinationRoot, sourceRoot);
-          restored = true;
-        } catch (rollbackError) {
-          rollbackErrors.push(rollbackError);
-        }
-        if (restored) {
-          await writeEnvironment(projectRoot, environment).catch((rollbackError) => {
-            rollbackErrors.push(rollbackError);
-          });
-          const metadataPath = path.join(environmentViewPath(source), "view.json");
-          const metadata = await readFile(metadataPath, "utf8")
-            .then((input) => JSON.parse(input) as Record<string, unknown>)
-            .catch((rollbackError) => {
-              rollbackErrors.push(rollbackError);
-              return undefined;
-            });
-          if (metadata) {
-            metadata.environment = source;
-            await writeJsonAtomic(metadataPath, metadata).catch((rollbackError) => {
-              rollbackErrors.push(rollbackError);
-            });
-          }
-        }
-        if (rollbackErrors.length > 0) {
-          throw new AggregateError([error, ...rollbackErrors], "Environment rename failed and rollback was incomplete");
-        }
-      }
-      throw error;
-    }
-  });
-}
-
-async function validateLock(lock: LockFile): Promise<void> {
-  for (const [packageName, locked] of Object.entries(lock.packages)) {
-    if (packageName !== locked.name) throw new Error(`Lock key ${packageName} does not match package identity ${locked.name}`);
-    const pkg = await loadCachedPackage(locked);
-    const declared = pkg.manifest.spec.dependencies.map((dependency) => dependency.name);
-    if (JSON.stringify(locked.dependencies ?? []) !== JSON.stringify(declared)) {
-      throw new Error(`Lock dependency edges for ${locked.name} do not match its manifest`);
-    }
-    for (const dependency of pkg.manifest.spec.dependencies) {
-      const resolved = lock.packages[dependency.name];
-      if (!resolved) throw new Error(`Package ${locked.name} requires ${dependency.name}, which is missing from the lock`);
-      if (!satisfies(resolved.version, dependency.version, { includePrerelease: true })) {
-        throw new Error(`Package ${locked.name} requires ${dependency.name}@${dependency.version}, but the lock resolves ${resolved.version}`);
-      }
-    }
-  }
-}
-
-function validateEnvironmentLockGraph(environment: WomaEnvironment, lock: LockFile): string[] {
-  const rootNames = environment.spec.roots.map((root) => root.name);
-  const names = dependencyOrder(lock, rootNames);
-  for (const root of environment.spec.roots) {
-    const locked = lock.packages[root.name];
-    if (!locked) throw new Error(`Root ${root.name} is missing from the environment lock`);
-    if (locked.source !== root.source) {
-      throw new Error(`Root ${root.name} source ${root.source} does not match lock source ${locked.source}`);
-    }
-  }
-  const reachable = new Set(names);
-  const unreachable = Object.keys(lock.packages).filter((name) => !reachable.has(name));
-  if (unreachable.length > 0) throw new Error(`Environment lock contains packages unreachable from its roots: ${unreachable.join(", ")}`);
-  return names;
-}
-
-async function validateEnvironmentLock(environment: WomaEnvironment, lock: LockFile): Promise<string[]> {
-  const names = validateEnvironmentLockGraph(environment, lock);
-  await validateLock(lock);
-  return names;
-}
-
-export function dependencyOrder(lock: LockFile, roots: string[]): string[] {
-  const ordered: string[] = [];
-  const visited = new Set<string>();
-  const visiting: string[] = [];
-  function visit(name: string): void {
-    if (visited.has(name)) return;
-    const cycleAt = visiting.indexOf(name);
-    if (cycleAt !== -1) throw new Error(`Locked dependency cycle: ${[...visiting.slice(cycleAt), name].join(" -> ")}`);
-    const pkg = lock.packages[name];
-    if (!pkg) throw new Error(`Root or dependency ${name} is missing from the environment lock`);
-    visiting.push(name);
-    for (const dependency of pkg.dependencies ?? []) visit(dependency);
-    visiting.pop();
-    visited.add(name);
-    ordered.push(name);
-  }
-  for (const root of roots) visit(root);
-  return ordered;
-}
-
-function reachableLock(lock: LockFile, roots: string[]): LockFile {
-  const names = dependencyOrder(lock, roots);
-  return { lockfileVersion: 1, packages: Object.fromEntries(names.map((name) => [name, lock.packages[name]!])) };
-}
-
-async function writeEnvironmentInstall(
-  projectRoot: string,
-  environmentNameValue: string,
-  environment: WomaEnvironment,
-  lock: LockFile,
-  previousLock: LockFile,
-): Promise<void> {
-  await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), lock);
-  try {
-    await writeEnvironment(projectRoot, environment);
-  } catch (error) {
-    await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), previousLock);
-    throw error;
-  }
-}
-
-async function publishEnvironmentUpdate(
-  projectRoot: string,
-  environmentNameValue: string,
-  previousEnvironment: WomaEnvironment,
-  previousLock: LockFile,
-  previous: LoadedEnvironment,
-  updatedEnvironment: WomaEnvironment,
-  updatedLock: LockFile,
-  desired: LoadedEnvironment,
-  hooks: EnvironmentMutationHooks,
-): Promise<void> {
-  await materializeEnvironmentView(
-    updatedEnvironment,
-    desired.names.map((name) => desired.packages.get(name)!),
-    {
-      previousPackages: previous.names.map((name) => previous.packages.get(name)!),
-      ...(hooks.onViewPrepared ? { beforePublish: hooks.onViewPrepared } : {}),
-      beforeSwap: async () => {
-        await hooks.onResourcesApplied?.();
-        await writeEnvironmentInstall(
-          projectRoot,
-          environmentNameValue,
-          updatedEnvironment,
-          updatedLock,
-          previousLock,
-        );
-        try {
-          await hooks.onMetadataPrepared?.();
-        } catch (error) {
-          await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), previousLock);
-          await writeEnvironment(projectRoot, previousEnvironment);
-          throw error;
-        }
-        return async () => {
-          await writeJsonAtomic(environmentLockPath(projectRoot, environmentNameValue), previousLock);
-          await writeEnvironment(projectRoot, previousEnvironment);
-        };
-      },
-    },
-  );
-}
-
-export async function installIntoEnvironment(
-  projectRoot: string,
-  environmentNameValue: string,
-  source: string,
-  cwd = process.cwd(),
-  hooks: EnvironmentInstallHooks = {},
-): Promise<{ environment: WomaEnvironment; root: InstalledPackage; packages: InstalledPackage[] }> {
-  const result = await installPackagesIntoEnvironment(projectRoot, environmentNameValue, [source], cwd, hooks);
-  return { environment: result.environment, root: result.roots[0]!, packages: result.packages };
-}
-
-export async function installPackagesIntoEnvironment(
-  projectRoot: string,
-  environmentNameValue: string,
-  sources: string[],
-  cwd = process.cwd(),
-  hooks: EnvironmentInstallHooks = {},
-): Promise<{ environment: WomaEnvironment; roots: InstalledPackage[]; packages: InstalledPackage[] }> {
-  if (sources.length === 0) throw new Error("Install at least one Package source");
-  if (environmentNameValue === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, environmentNameValue)))) {
-    await ensureBaseEnvironment(projectRoot);
-  }
-  return withEnvironmentLock(environmentNameValue, async () => {
-    const [environment, currentLock] = await Promise.all([
-      readEnvironmentFile(projectRoot, environmentNameValue),
-      readEnvironmentLockFile(projectRoot, environmentNameValue),
-    ]);
-    const currentNames = validateEnvironmentLockGraph(environment, currentLock);
-    for (const packageName of currentNames) await repairLockedPackage(currentLock.packages[packageName]!);
-    const previous = await loadEnvironmentSnapshot(environment, currentLock);
-    const installations: PackageInstallPlan[] = [];
+export async function installPackages(prefix: string, sources: string[], options: MutationOptions = {}): Promise<EnvironmentState> {
+  if (!sources.length) throw new Error("install requires at least one source");
+  return mutate(prefix, options, async (lock) => {
+    const additions: (InstalledPackage & { intent: string })[] = [];
     for (const source of sources) {
-      installations.push(await installPackageTree(source, cwd, sources.length === 1 ? hooks.sourceOptions : {}));
+      const pkg = await resolvePackage(source);
+      const old = lock.packages[pkg.record.name];
+      if (old && (!isDeepStrictEqual(old.source, pkg.record.source) || old.integrity !== pkg.record.integrity)) throw new Error(`Package ${pkg.record.name} is already locked to different content or source; use woma update ${pkg.record.name}`);
+      const duplicate = additions.find((p) => p.record.name === pkg.record.name);
+      if (duplicate && !isDeepStrictEqual(duplicate.record, pkg.record)) throw new Error(`Conflicting sources or content for ${pkg.record.name}`);
+      if (!duplicate) additions.push(pkg);
+      if (!lock.recipe.packages.some((r) => r.name === pkg.record.name)) lock.recipe.packages.push({ name: pkg.record.name, source: pkg.intent });
     }
-    const resolved = new Map<string, InstalledPackage>();
-    for (const installation of installations) {
-      for (const pkg of installation.packages) {
-        const existing = resolved.get(pkg.lock.name);
-        if (
-          existing &&
-          (existing.lock.version !== pkg.lock.version ||
-            existing.lock.source !== pkg.lock.source ||
-            existing.lock.commit !== pkg.lock.commit ||
-            existing.lock.integrity !== pkg.lock.integrity)
-        ) {
-          throw new Error(
-            `Conflicting resolutions for ${pkg.lock.name}: ${existing.lock.source}@${existing.lock.version} and ${pkg.lock.source}@${pkg.lock.version}`,
-          );
-        }
-        if (!existing) resolved.set(pkg.lock.name, pkg);
-      }
-    }
-    const next: LockFile = { lockfileVersion: 1, packages: { ...currentLock.packages } };
-    for (const pkg of resolved.values()) {
-      const existing = currentLock.packages[pkg.lock.name];
-      const unchanged =
-        existing &&
-        existing.version === pkg.lock.version &&
-        existing.source === pkg.lock.source &&
-        existing.commit === pkg.lock.commit &&
-        existing.integrity === pkg.lock.integrity &&
-        existing.cacheKey === pkg.lock.cacheKey;
-      next.packages[pkg.lock.name] = unchanged ? existing : pkg.lock;
-    }
-    let roots = environment.spec.roots;
-    for (const installation of installations) {
-      roots = roots.some((root) => root.name === installation.root.lock.name)
-        ? roots.map((root) =>
-            root.name === installation.root.lock.name ? { name: root.name, source: installation.root.lock.source } : root,
-          )
-        : [...roots, { name: installation.root.lock.name, source: installation.root.lock.source }];
-    }
-    const pruned = reachableLock(next, roots.map((root) => root.name));
-    const updated: WomaEnvironment = { ...environment, spec: { ...environment.spec, roots } };
-    const desired = await loadEnvironmentSnapshot(updated, pruned);
-    await publishEnvironmentUpdate(
-      projectRoot,
-      environmentNameValue,
-      environment,
-      currentLock,
-      previous,
-      updated,
-      pruned,
-      desired,
-      hooks,
-    );
-    return {
-      environment: updated,
-      roots: installations.map((installation) => installation.root),
-      packages: [...resolved.values()],
-    };
+    const closure = await resolveClosure({ roots: lock.recipe.packages, previous: lock, additions });
+    lock.packages = { [lock.recipe.harness]: lock.packages[lock.recipe.harness]!, ...closure };
+    return lock;
   });
 }
 
-function requiringRoots(environment: WomaEnvironment, lock: LockFile, packageName: string): string[] {
-  return environment.spec.roots
-    .map((root) => root.name)
-    .filter((root) => dependencyOrder(lock, [root]).includes(packageName));
+export async function updatePackages(prefix: string, names: string[], options: MutationOptions = {}): Promise<EnvironmentState> {
+  return mutate(prefix, options, async (lock) => {
+    const refresh = new Set<string>();
+    let runtimeVersion: string | undefined;
+    const selected = names.length ? names : [lock.recipe.harness, ...lock.recipe.packages.map((r) => r.name)];
+    function mark(name: string) {
+      if (refresh.has(name)) return;
+      const record = lock.packages[name];
+      if (!record) throw new Error(`Package is not installed: ${name}`);
+      refresh.add(name);
+      for (const dep of record.dependencies) mark(dep.name);
+    }
+    for (const spec of selected) {
+      const match = /^(codex|claude)(?:@(.+))?$/.exec(spec);
+      if (match) {
+        if (match[1] !== lock.recipe.harness) throw new Error("Changing harness brands requires a new environment");
+        runtimeVersion = match[2] ?? "latest";
+      } else mark(spec);
+    }
+    let runtime = lock.packages[lock.recipe.harness]!;
+    if (runtimeVersion) {
+      runtime = (await (options.provider ?? npmRuntimeProvider).resolve(lock.recipe.harness, runtimeVersion)).record;
+      lock.recipe.runtime = runtimeVersion;
+    }
+    const closure = await resolveClosure({ roots: lock.recipe.packages, previous: lock, refresh });
+    lock.packages = { [lock.recipe.harness]: runtime, ...closure };
+    return lock;
+  });
 }
 
-function effectivePlatforms(
-  environment: WomaEnvironment,
-  pkg: InstalledPackage,
-  resourcePlatforms?: Platform[],
-): Platform[] {
-  const supported = new Set(resourcePlatforms ?? pkg.manifest.spec.platforms);
-  return environment.spec.targets.filter((target) => supported.has(target));
+export async function removePackages(prefix: string, names: string[], options: MutationOptions = {}): Promise<EnvironmentState> {
+  if (!names.length) throw new Error("remove requires at least one package name");
+  return mutate(prefix, options, async (lock) => {
+    for (const name of names) {
+      if (name === lock.recipe.harness) throw new Error("Cannot remove the environment's runtime; use env remove to delete the environment");
+      if (!lock.recipe.packages.some((r) => r.name === name)) throw new Error(`Package ${name} is not a direct requirement; remove its dependent package first`);
+    }
+    lock.recipe.packages = lock.recipe.packages.filter((r) => !names.includes(r.name));
+    const order = dependencyOrder(lock);
+    lock.packages = Object.fromEntries(order.map((name) => [name, lock.packages[name]!]));
+    return lock;
+  });
 }
 
-interface EnvironmentResourceKeys {
-  skills: Map<string, string>;
-  mcpServers: Map<string, string>;
-  hooks: Map<string, string>;
+export async function exportEnvironment(prefix: string, explicit = false): Promise<string> {
+  const state = await readEnvironment(prefix);
+  return explicit ? `${JSON.stringify(state.lock, null, 2)}\n` : stringifyYaml(state.lock.recipe);
 }
 
-function environmentResourceKeys(environment: WomaEnvironment, packages: InstalledPackage[]): EnvironmentResourceKeys {
-  const result: EnvironmentResourceKeys = {
-    skills: new Map(),
-    mcpServers: new Map(),
-    hooks: new Map(),
-  };
-  for (const pkg of packages) {
-    for (const skill of pkg.manifest.spec.skills) {
-      for (const target of effectivePlatforms(environment, pkg)) {
-        result.skills.set(`${target}\0${skill.name}`, skill.name);
-      }
-    }
-    for (const server of pkg.manifest.spec.mcpServers) {
-      for (const target of effectivePlatforms(environment, pkg, server.platforms)) {
-        result.mcpServers.set(`${target}\0${server.name}`, server.name);
-      }
-    }
-    for (const hook of pkg.manifest.spec.hooks) {
-      const label = `${hook.event}${hook.matcher ? ` (${hook.matcher})` : ""}: ${hook.command}`;
-      const identity = JSON.stringify([hook.event, hook.matcher ?? null, hook.command, hook.timeout ?? null]);
-      for (const target of effectivePlatforms(environment, pkg, hook.platforms)) {
-        result.hooks.set(`${target}\0${identity}`, label);
-      }
-    }
+export async function doctorEnvironment(prefix: string): Promise<string[]> {
+  prefix = await canonicalPrefix(prefix);
+  const state = await readEnvironment(prefix);
+  const issues = await managedDrift(prefix, state);
+  try { await assertNoTransactions(prefix); } catch (error) { issues.push((error as Error).message); }
+  for (const record of Object.values(state.lock.packages)) {
+    try { await loadPackage(record); } catch (error) { issues.push((error as Error).message); }
+  }
+  try {
+    const file = path.join(prefix, nativeConfigPath(state.lock.recipe.harness));
+    const input = await readFile(file, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; return ""; });
+    const records = Object.values(state.lock.packages);
+    reconcileNativeConfig(state.lock.recipe.harness, prefix, input, records, records);
+  } catch (error) { issues.push((error as Error).message); }
+  return issues;
+}
+
+export async function listEnvironments(): Promise<{ name: string; prefix: string; format: "v2" | "legacy" | "invalid" }[]> {
+  const root = path.join(womaHome(), "environments");
+  const names = await readdir(root, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; return []; });
+  const known = await readJson<string[]>(path.join(womaHome(), "prefixes.json"), []);
+  const prefixes = new Set([...names.filter((n) => n.isDirectory() && !n.name.startsWith(".")).map((n) => path.join(root, n.name)), ...known]);
+  const result: { name: string; prefix: string; format: "v2" | "legacy" | "invalid" }[] = [];
+  for (const prefix of [...prefixes].sort()) {
+    if (!(await pathExists(prefix))) continue;
+    try { const state = await readEnvironment(prefix); result.push({ name: state.lock.recipe.name, prefix, format: "v2" }); }
+    catch { result.push({ name: path.basename(prefix), prefix, format: await pathExists(path.join(prefix, "environment.yaml")) ? "legacy" : "invalid" }); }
   }
   return result;
 }
 
-function removedResourceLabels(previous: Map<string, string>, desired: Map<string, string>): string[] {
-  return [...new Set([...previous].filter(([key]) => !desired.has(key)).map(([, label]) => label))].sort();
-}
-
-export async function uninstallFromEnvironment(
-  projectRoot: string,
-  environmentNameValue: string,
-  packageName: string,
-  options: EnvironmentUninstallOptions = {},
-): Promise<EnvironmentUninstallResult> {
-  if (options.dryRun && !(await pathExists(environmentPath(projectRoot, environmentNameValue)))) {
-    throw new Error(`Unknown environment: ${environmentNameValue}; create or initialize it before previewing uninstall`);
-  }
-  if (environmentNameValue === DEFAULT_ENVIRONMENT && !options.dryRun) await ensureBaseEnvironment(projectRoot);
-  return withEnvironmentLock(environmentNameValue, async () => {
-    const [environment, currentLock] = await Promise.all([
-      readEnvironmentFile(projectRoot, environmentNameValue),
-      readEnvironmentLockFile(projectRoot, environmentNameValue),
-    ]);
-    const currentNames = validateEnvironmentLockGraph(environment, currentLock);
-    if (!options.dryRun) {
-      for (const currentName of currentNames) await repairLockedPackage(currentLock.packages[currentName]!);
-    }
-    const previous = await loadEnvironmentSnapshot(environment, currentLock);
-    if (!currentLock.packages[packageName]) {
-      throw new Error(`Package ${packageName} is not installed in Environment ${environmentNameValue}`);
-    }
-    const root = environment.spec.roots.find((candidate) => candidate.name === packageName);
-    if (!root) {
-      const roots = requiringRoots(environment, currentLock, packageName);
-      throw new Error(
-        `Cannot uninstall ${packageName}: it is not a root Package in Environment ${environmentNameValue}; required by roots: ${roots.join(", ")}`,
-      );
-    }
-
-    const roots = environment.spec.roots.filter((candidate) => candidate.name !== packageName);
-    const updated: WomaEnvironment = { ...environment, spec: { ...environment.spec, roots } };
-    const pruned = reachableLock(currentLock, roots.map((candidate) => candidate.name));
-    const desired = await loadEnvironmentSnapshot(updated, pruned);
-    const removedNames = previous.names.filter((name) => !desired.packages.has(name));
-    const orderedRemovedNames = [packageName, ...removedNames.filter((name) => name !== packageName)];
-    const packages = orderedRemovedNames
-      .filter((name) => previous.packages.has(name))
-      .map((name) => previous.packages.get(name)!);
-    const rootPackage = previous.packages.get(packageName)!;
-    const previousResources = environmentResourceKeys(
-      environment,
-      previous.names.map((name) => previous.packages.get(name)!),
-    );
-    const desiredResources = environmentResourceKeys(
-      updated,
-      desired.names.map((name) => desired.packages.get(name)!),
-    );
-    const result: EnvironmentUninstallResult = {
-      environment: updated,
-      root: rootPackage,
-      packages,
-      dependencies: packages.filter((pkg) => pkg.lock.name !== packageName),
-      skills: removedResourceLabels(previousResources.skills, desiredResources.skills),
-      mcpServers: removedResourceLabels(previousResources.mcpServers, desiredResources.mcpServers),
-      hooks: removedResourceLabels(previousResources.hooks, desiredResources.hooks),
-      dryRun: options.dryRun ?? false,
-    };
-    if (result.dryRun) return result;
-    await publishEnvironmentUpdate(
-      projectRoot,
-      environmentNameValue,
-      environment,
-      currentLock,
-      previous,
-      updated,
-      pruned,
-      desired,
-      options,
-    );
-    return result;
+export async function removeEnvironment(prefix: string): Promise<void> {
+  await withPrefixLock(prefix, async () => {
+    await readEnvironment(prefix);
+    if (process.env.WOMA_PREFIX && await canonicalPrefix(process.env.WOMA_PREFIX) === await canonicalPrefix(prefix)) throw new Error("Deactivate the environment before removing it");
+    await assertNoTransactions(prefix);
+    await removeTree(prefix);
+    await registerPrefix(prefix, true);
   });
-}
-
-async function loadEnvironmentSnapshot(environment: WomaEnvironment, lock: LockFile): Promise<LoadedEnvironment> {
-  const names = await validateEnvironmentLock(environment, lock);
-  const packages = new Map<string, InstalledPackage>();
-  for (const packageName of names) packages.set(packageName, await loadCachedPackage(lock.packages[packageName]!));
-  for (const pkg of packages.values()) {
-    for (const target of environment.spec.targets) {
-      if (!pkg.manifest.spec.platforms.includes(target)) {
-        throw new Error(`${pkg.manifest.metadata.name} does not support environment target ${target}`);
-      }
-    }
-  }
-  return { environment, lock, names, packages };
-}
-
-async function loadOrderedPackages(projectRoot: string, name: string): Promise<LoadedEnvironment> {
-  const [environment, lock] = await Promise.all([readEnvironmentFile(projectRoot, name), readEnvironmentLockFile(projectRoot, name)]);
-  return loadEnvironmentSnapshot(environment, lock);
-}
-
-export async function environmentInfo(projectRoot: string): Promise<CurrentEnvironmentContext> {
-  const project = path.resolve(projectRoot);
-  const agentsPromise = detectAgentClis();
-  const selected = process.env.WOMA_ENV || DEFAULT_ENVIRONMENT;
-  if (selected === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(project);
-  const agentClis = await agentsPromise;
-  return withEnvironmentLock(selected, async () => {
-    const loaded = await loadOrderedPackages(project, selected);
-    const managedSkillNames = new Set<string>();
-    for (const pkg of loaded.packages.values()) {
-      for (const skill of pkg.manifest.spec.skills) managedSkillNames.add(skill.name);
-    }
-    const localSkills = await inspectEnvironmentLocalSkills(loaded.environment, managedSkillNames);
-    const installedPackages = loaded.names.map((name) => loaded.packages.get(name)!);
-    const discoveries = await discoverEnvironmentAgentCapabilities(loaded.environment, installedPackages);
-    return {
-      projectRoot: project,
-      environment: { name: loaded.environment.metadata.name, targets: loaded.environment.spec.targets },
-      agentClis,
-      packages: loaded.names.map((name) => {
-        const pkg = loaded.packages.get(name)!;
-        return {
-          name,
-          version: pkg.manifest.metadata.version,
-          source: pkg.lock.source,
-          skills: pkg.manifest.spec.skills.map((skill) => skill.name),
-          entrypoints: pkg.manifest.spec.entrypoints,
-        };
-      }),
-      environmentSkills: localSkills.skills,
-      environmentSkillIssues: localSkills.issues,
-      environmentMcpServers: discoveries.flatMap(({ platform, result }) =>
-        result.externalMcpServers.map((name) => ({ name, origin: "external" as const, platforms: [platform] }))),
-    };
-  });
-}
-
-export async function activateEnvironment(
-  projectRoot: string,
-  name: string,
-  hooks: EnvironmentActivationHooks = {},
-): Promise<EnvironmentActivationResult> {
-  if (name === DEFAULT_ENVIRONMENT) await ensureBaseEnvironment(projectRoot);
-  return withEnvironmentLock(name, async () => {
-    const loaded = await loadOrderedPackages(projectRoot, name);
-    const packages = loaded.names.map((packageName) => loaded.packages.get(packageName)!);
-    await validateEnvironmentView(loaded.environment, packages);
-    await hooks.onProjectApplied?.();
-    return { name, packages: loaded.names, targets: loaded.environment.spec.targets, actions: [] };
-  });
-}
-
-async function doctorEnvironmentUnlocked(projectRoot: string, name: string): Promise<EnvironmentCheck[]> {
-  const checks: EnvironmentCheck[] = [];
-  let environment: WomaEnvironment;
-  try {
-    environment = await readEnvironmentFile(projectRoot, name);
-    checks.push({ status: "ok", label: "recipe", detail: environmentPath(projectRoot, name) });
-  } catch (error) {
-    checks.push({ status: "fail", label: "recipe", detail: (error as Error).message });
-    return checks;
-  }
-  let lock: LockFile;
-  let names: string[];
-  try {
-    lock = await readEnvironmentLockFile(projectRoot, name);
-    names = validateEnvironmentLockGraph(environment, lock);
-    checks.push({ status: "ok", label: "lock", detail: `${Object.keys(lock.packages).length} packages` });
-  } catch (error) {
-    checks.push({ status: "fail", label: "lock", detail: (error as Error).message });
-    return checks;
-  }
-  checks.push({ status: "ok", label: "roots", detail: environment.spec.roots.map((root) => root.name).join(", ") || "none" });
-  const targetAgents = await Promise.all(
-    environment.spec.targets.map(async (target) => ({ target, agent: await detectAgentCli(target) })),
-  );
-  for (const { target, agent } of targetAgents) {
-    checks.push({
-      status: agent.available ? "ok" : "warn",
-      label: `agent-cli:${target}`,
-      detail: agent.path ?? `${agent.command} not found on PATH`,
-    });
-  }
-  const managedSkillNames = new Set<string>();
-  for (const packageName of names) {
-    let pkg: InstalledPackage;
-    try {
-      pkg = await loadCachedPackage(lock.packages[packageName]!);
-    } catch (error) {
-      checks.push({ status: "fail", label: `package:${packageName}`, detail: (error as Error).message });
-      continue;
-    }
-    checks.push({ status: "ok", label: `package:${packageName}`, detail: pkg.lock.version });
-    for (const skill of pkg.manifest.spec.skills) managedSkillNames.add(skill.name);
-    const unsupportedTargets = environment.spec.targets.filter((target) => !pkg.manifest.spec.platforms.includes(target));
-    checks.push({
-      status: unsupportedTargets.length === 0 ? "ok" : "fail",
-      label: `platforms:${packageName}`,
-      detail: unsupportedTargets.length === 0
-        ? environment.spec.targets.join(", ")
-        : `does not support ${unsupportedTargets.join(", ")}`,
-    });
-    const commands = new Set(pkg.manifest.spec.requirements.commands);
-    for (const server of pkg.manifest.spec.mcpServers) {
-      const appliesToEnvironment = environment.spec.targets.some(
-        (target) => !server.platforms || server.platforms.includes(target),
-      );
-      if (server.transport === "stdio" && appliesToEnvironment) commands.add(server.command);
-    }
-    for (const command of commands) {
-      const found = await findExecutable(command);
-      checks.push({ status: found ? "ok" : "fail", label: `command:${command}`, detail: found ? "found" : "not found on PATH" });
-    }
-    for (const requirement of pkg.manifest.spec.requirements.env) {
-      const present = Boolean(process.env[requirement.name]);
-      checks.push({
-        status: present ? "ok" : requirement.optional ? "warn" : "fail",
-        label: `env:${requirement.name}`,
-        detail: present ? "set" : requirement.optional ? "optional and not set" : "required and not set",
-      });
-    }
-  }
-  const localSkills = await inspectEnvironmentLocalSkills(environment, managedSkillNames);
-  for (const skill of localSkills.skills) {
-    checks.push({ status: "ok", label: `environment-skill:${skill.name}`, detail: `external at ${skill.path}` });
-  }
-  for (const issue of localSkills.issues) {
-    checks.push({
-      status: issue.kind === "conflict" ? "fail" : "warn",
-      label: `environment-skill:${issue.entry}`,
-      detail: issue.detail,
-    });
-  }
-  const active = (process.env.WOMA_ENV || DEFAULT_ENVIRONMENT) === name;
-  checks.push({ status: active ? "ok" : "warn", label: "activation", detail: active ? environment.spec.targets.join(", ") : "inactive" });
-  try {
-    const loaded = await loadEnvironmentSnapshot(environment, lock);
-    await validateEnvironmentView(environment, loaded.names.map((packageName) => loaded.packages.get(packageName)!));
-    checks.push({ status: "ok", label: "view", detail: environmentViewPath(name) });
-  } catch (error) {
-    checks.push({ status: "fail", label: "view", detail: (error as Error).message });
-  }
-  return checks;
-}
-
-export async function doctorEnvironment(projectRoot: string, name: string): Promise<EnvironmentCheck[]> {
-  if (name === DEFAULT_ENVIRONMENT && !(await pathExists(environmentPath(projectRoot, name)))) await ensureBaseEnvironment(projectRoot);
-  return withEnvironmentLock(name, () => doctorEnvironmentUnlocked(projectRoot, name));
 }

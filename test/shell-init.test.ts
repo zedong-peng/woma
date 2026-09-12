@@ -105,28 +105,22 @@ test("CLI init installs shell integration and supports reverse", { concurrency: 
   try {
     const initialized = await run(process.execPath, [cli, "init", "bash"], { cwd: root, env: environment });
     assert.match(initialized.stdout, /Initialized bash shell integration/);
-    assert.match(initialized.stdout, /Default Environment: base/);
+    assert.doesNotMatch(initialized.stdout, /Default Environment/);
     assert.match(await readFile(profilePath, "utf8"), /# >>> woma initialize >>>/);
     await access(path.join(stateHome, "shell", "woma.bash"));
-    await access(path.join(stateHome, "environments", "base", "environment.yaml"));
-    assert.equal(await readFile(path.join(stateHome, "default-environment"), "utf8"), "base\n");
+    await assert.rejects(access(path.join(stateHome, "environments")), { code: "ENOENT" });
 
     const reversed = await run(process.execPath, [cli, "init", "bash", "--reverse"], { cwd: root, env: environment });
     assert.match(reversed.stdout, /Reversed bash shell initialization/);
     assert.equal(await readFile(profilePath, "utf8"), "");
     await assert.rejects(access(path.join(stateHome, "shell", "woma.bash")), { code: "ENOENT" });
-    await access(path.join(stateHome, "environments", "base", "environment.yaml"));
-    assert.equal(await readFile(path.join(stateHome, "default-environment"), "utf8"), "base\n");
-    assert.equal(
-      (JSON.parse(await readFile(path.join(stateHome, "initialization.json"), "utf8")) as { status: string }).status,
-      "complete",
-    );
+    await assert.rejects(access(path.join(stateHome, "environments")), { code: "ENOENT" });
   } finally {
     await removeTestTree(root);
   }
 });
 
-test("CLI init automatically imports supported existing Codex state", { concurrency: false }, async () => {
+test("CLI init leaves existing native state untouched and creates no environment", { concurrency: false }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "woma-cli-init-codex-"));
   const stateHome = path.join(root, "state");
   const originalCodex = path.join(root, "original-codex");
@@ -147,17 +141,10 @@ test("CLI init automatically imports supported existing Codex state", { concurre
         SHELL: "/bin/bash",
       },
     });
-    assert.match(initialized.stdout, /Default Environment: codex/);
-    assert.match(initialized.stdout, /Imported 1 existing Codex Skill/);
-    assert.equal(await readFile(path.join(stateHome, "default-environment"), "utf8"), "codex\n");
-    assert.match(
-      await readFile(path.join(stateHome, "environments", "codex", "home", "codex", "config.toml"), "utf8"),
-      /existing/,
-    );
-    assert.equal(
-      await readFile(path.join(stateHome, "environments", "codex", "view", "codex", "skills", "existing-review", "SKILL.md"), "utf8"),
-      await readFile(skillDocument, "utf8"),
-    );
+    assert.doesNotMatch(initialized.stdout, /Imported|Default Environment/);
+    await assert.rejects(access(path.join(stateHome, "environments")), { code: "ENOENT" });
+    assert.equal(await readFile(path.join(originalCodex, "config.toml"), "utf8"), 'model = "existing"\n');
+    assert.match(await readFile(skillDocument, "utf8"), /Existing review/);
   } finally {
     await removeTestTree(root);
   }

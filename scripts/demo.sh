@@ -8,18 +8,13 @@ cleanup() {
   rm -rf "$demo_root"
 }
 trap cleanup EXIT
-
-mkdir -p "$demo_root/project"
-export WOMA_HOME="$demo_root/home"
+export WOMA_HOME="$demo_root/state"
 cd "$repo_root"
 npm run build >/dev/null
-node dist/src/cli.js --project "$demo_root/project" env create performance --target both
-node dist/src/cli.js --project "$demo_root/project" install -n performance ./examples/performance-engineering
-node dist/src/cli.js --project "$demo_root/project" activate performance
-export WOMA_ENV=performance
-node dist/src/cli.js --project "$demo_root/project" info
-node dist/src/cli.js --project "$demo_root/project" doctor -n performance
-node dist/src/cli.js --project "$demo_root/project" deactivate
-export WOMA_ENV=base
-
-echo "Demo completed in $demo_root/project"
+node dist/src/cli.js create -n performance codex@0.154.0
+node dist/src/cli.js install -n performance ./examples/performance-engineering
+node dist/src/cli.js list -n performance
+node dist/src/cli.js doctor -n performance
+node dist/src/cli.js export -n performance --explicit -f "$demo_root/woma.lock"
+node dist/src/cli.js create -n reproduced -f "$demo_root/woma.lock"
+node dist/src/cli.js run -n reproduced codex --version

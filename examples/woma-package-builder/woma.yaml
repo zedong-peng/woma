@@ -1,16 +1,2 @@
-apiVersion: woma.dev/v1
-kind: Woma
-metadata:
-  name: woma-package-builder
-  version: 1.0.0
-  description: Create and update valid Woma Packages from existing resources or natural-language requirements.
-  tags: [authoring, package]
-spec:
-  platforms: [codex, claude, pi, qoder, opencode]
-  entrypoints:
-    - name: create-package
-      skill: woma-package-builder
-      description: Create or update a validated Woma Package containing the requested resources and dependencies.
-  skills:
-    - name: woma-package-builder
-      path: ./skills/woma-package-builder
+name: woma-package-builder
+version: 1.0.0

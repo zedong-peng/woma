@@ -1,122 +1,56 @@
-export type Platform = "codex" | "claude" | "pi" | "qoder" | "opencode";
-export type CodexClaudePlatform = "codex" | "claude";
-export type ConfigurablePlatform = Exclude<Platform, "pi">;
+export type Harness = "codex" | "claude";
 
-export interface EnvironmentRequirement {
-  name: string;
-  description?: string | undefined;
-  optional: boolean;
-}
-
-export interface SkillSpec {
-  name: string;
-  path: string;
-}
-
-export interface PackageDependency {
+export interface Dependency {
   name: string;
   version: string;
   source: string;
 }
 
-export interface SkillEntrypoint {
+export interface RuntimeArtifact {
   name: string;
-  skill: string;
-  description: string;
-}
-
-export interface StdioMcpServer {
-  name: string;
-  transport: "stdio";
-  command: string;
-  args: string[];
-  env: string[];
-  platforms?: Platform[] | undefined;
-}
-
-export interface RemoteMcpServer {
-  name: string;
-  transport: "http" | "sse" | "ws";
+  version: string;
   url: string;
-  headers: Record<string, string>;
-  platforms?: Platform[] | undefined;
+  integrity: string;
+  directory: string;
 }
 
-export type McpServer = StdioMcpServer | RemoteMcpServer;
+export type PackageSource =
+  | { type: "local"; path: string }
+  | { type: "git"; url: string; commit: string; subdirectory?: string | undefined }
+  | { type: "runtime"; provider: "npm"; platform: string; artifacts: RuntimeArtifact[]; executable: string };
 
-export interface HookSpec {
-  event: string;
-  matcher?: string | undefined;
-  command: string;
-  timeout?: number | undefined;
-  platforms?: Platform[] | undefined;
-}
-
-export interface WomaManifest {
-  apiVersion: "woma.dev/v1";
-  kind: "Woma";
-  metadata: {
-    name: string;
-    version: string;
-    description: string;
-    tags: string[];
-  };
-  spec: {
-    platforms: Platform[];
-    requirements: {
-      env: EnvironmentRequirement[];
-      commands: string[];
-    };
-    dependencies: PackageDependency[];
-    entrypoints: SkillEntrypoint[];
-    skills: SkillSpec[];
-    mcpServers: McpServer[];
-    hooks: HookSpec[];
-  };
-}
-
-export interface LockedPackage {
+export interface PackageRecord {
   name: string;
   version: string;
-  source: string;
-  commit?: string | undefined;
-  subdirectory?: string | undefined;
-  /** Legacy lock compatibility. New locks use commit for Git Packages. */
-  resolved?: string | undefined;
-  /** Legacy lock compatibility. New locks do not preserve moving refs. */
-  requestedRef?: string | undefined;
+  kind: "runtime" | "skill" | "plugin" | "collection";
+  source: PackageSource;
   integrity: string;
-  cacheKey: string;
-  dependencies: string[];
-  installedAt: string;
+  dependencies: Dependency[];
+  harnesses: Partial<Record<Harness, string | undefined>>;
+  skills: { name: string; path: string }[];
+  plugin?: { harness: Harness; name: string; version: string } | undefined;
 }
 
-export interface LockFile {
-  lockfileVersion: 1;
-  packages: Record<string, LockedPackage>;
-}
+export interface RootRequirement { name: string; source: string }
 
-export interface EnvironmentRoot {
+export interface EnvironmentRecipe {
+  format: "woma.environment/v2";
   name: string;
-  source: string;
+  harness: Harness;
+  runtime: string;
+  packages: RootRequirement[];
 }
 
-export interface WomaEnvironment {
-  kind: "WomaEnvironment";
-  metadata: {
-    name: string;
-  };
-  spec: {
-    targets: Platform[];
-    roots: EnvironmentRoot[];
-  };
+export interface EnvironmentLock {
+  format: "woma.lock/v2";
+  platform: string;
+  recipe: EnvironmentRecipe;
+  packages: Record<string, PackageRecord>;
 }
 
-export interface InstalledPackage {
-  manifest: WomaManifest;
-  root: string;
-  lock: LockedPackage;
-}
+export interface InstalledPackage { record: PackageRecord; root: string }
+export interface ManagedPath { path: string; integrity: string; package: string }
+export interface EnvironmentState { format: "woma.state/v2"; lock: EnvironmentLock; paths: ManagedPath[] }
 
 export interface Action {
   verb: "create" | "merge" | "adopt" | "remove" | "keep";

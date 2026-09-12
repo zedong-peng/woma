@@ -1,763 +1,185 @@
-import { createHash, randomUUID } from "node:crypto";
-import { chmod, cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { readFile, readdir, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
-import { satisfies } from "semver";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { capabilitySupportIssues } from "./agents/adapter.js";
-import { manifestCapabilities } from "./agents/canonical.js";
-import { agentAdapter } from "./agents/registry.js";
-import { assertInside, EXCLUDED_PACKAGE_PATH_NAMES, womaHome, hashDirectory, pathExists } from "./fs.js";
-import { withPackageLock } from "./environment-lock.js";
-import { loadManifest } from "./schema.js";
-import type { WomaManifest, InstalledPackage, LockedPackage, PackageDependency } from "./types.js";
+import { isDeepStrictEqual } from "node:util";
+import { satisfies, valid } from "semver";
+import { cachePath, publishContent, validateTree, verifyContent } from "./content.js";
+import { pathExists } from "./fs.js";
+import { loadManifest, nameSchema, skillMetadata } from "./schema.js";
+import { canonicalSource, dependencySource, gitIntent, gitLocator, materializeSource } from "./source.js";
+import { verifyRuntimeIdentity } from "./runtime.js";
+import type { Dependency, EnvironmentLock, Harness, InstalledPackage, PackageRecord, PackageSource, RootRequirement } from "./types.js";
 
-interface MaterializedSource {
-  root: string;
-  source: string;
-  commit?: string;
-  subdirectory?: string;
-  cleanup?: () => Promise<void>;
-}
-
-export interface PackageSourceOptions {
-  commit?: string;
-  subdirectory?: string;
-}
-
-export interface SkillMetadata {
-  name: string;
-  description: string;
-}
-
-export interface PackageInstallPlan {
-  root: InstalledPackage;
-  packages: InstalledPackage[];
-}
-
-const builtinNames = new Set([
-  "reproducibility-core",
-  "performance-engineering",
-  "paper-search",
-  "idea-gen",
-  "exp-design",
-  "auto-research",
-  "woma-package-builder",
-  "woma-project-memory",
-]);
-
-function builtinPath(name: string): string {
-  if (!builtinNames.has(name)) throw new Error(`Unknown built-in Woma: ${name}`);
-  const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-  return path.join(packageRoot, "examples", name);
-}
-
-function run(command: string, args: string[], cwd?: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve(stdout.trim());
-      else reject(new Error(`${command} ${args[0] ?? ""} failed: ${stderr.trim() || `exit ${code}`}`));
-    });
-  });
-}
-
-function splitRef(source: string): { locator: string; ref?: string } {
-  const index = source.lastIndexOf("#");
-  if (index <= source.indexOf(":")) return { locator: source };
-  const locator = source.slice(0, index);
-  const ref = source.slice(index + 1);
-  return ref ? { locator, ref } : { locator };
-}
-
-function normalizeGitSource(source: string): { url: string; canonical: string; ref?: string } | undefined {
-  const { locator, ref } = splitRef(source);
-  if (/^[\s-]|[\u0000-\u001f\u007f]/.test(locator) || (ref !== undefined && /^[\s-]|[\u0000-\u001f\u007f]/.test(ref))) {
-    throw new Error(`Unsafe Git source or ref: ${source}`);
+export async function describePackage(root: string, source: Exclude<PackageSource, { type: "runtime" }>, integrity: string): Promise<PackageRecord> {
+  await validateTree(root);
+  const manifest = await loadManifest(root);
+  const plugins: { harness: Harness; file: string }[] = [];
+  for (const harness of ["codex", "claude"] as const) {
+    const file = path.join(root, `.${harness}-plugin`, "plugin.json");
+    if (await pathExists(file)) plugins.push({ harness, file });
   }
-  const shorthand = /^(?:gh|github):([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)$/.exec(locator);
-  if (shorthand?.[1]) {
-    const repo = shorthand[1].replace(/\.git$/, "");
-    return {
-      url: `https://github.com/${repo}.git`,
-      canonical: `gh:${repo}${ref ? `#${ref}` : ""}`,
-      ...(ref ? { ref } : {}),
-    };
-  }
-  if (/^(?:https?:\/\/|ssh:\/\/|git@)/.test(locator) || locator.endsWith(".git")) {
-    return {
-      url: locator,
-      canonical: `${locator}${ref ? `#${ref}` : ""}`,
-      ...(ref ? { ref } : {}),
-    };
-  }
-  return undefined;
-}
-
-function normalizedSubdirectory(input: string): string {
-  if (
-    input === "" ||
-    input.startsWith("-") ||
-    input.startsWith("/") ||
-    input.includes("\\") ||
-    /^[A-Za-z]:/.test(input) ||
-    path.posix.normalize(input) !== input ||
-    input.split("/").some((part) => part === "" || part === "." || part === "..")
-  ) throw new Error(`Unsafe Git subdirectory: ${input}`);
-  return input;
-}
-
-async function materializeSource(source: string, cwd: string, options: PackageSourceOptions = {}): Promise<MaterializedSource> {
-  if (source.startsWith("builtin:")) {
-    const name = source.slice("builtin:".length);
-    const root = builtinPath(name);
-    if (!(await pathExists(root))) throw new Error(`Built-in Woma is missing from this installation: ${name}`);
-    return { root, source: `builtin:${name}` };
-  }
-  const git = normalizeGitSource(source);
-  if ((options.commit || options.subdirectory) && !git) throw new Error("--commit and --subdir require a Git source");
-  if (!git) {
-    const root = path.resolve(cwd, source.replace(/^file:/, ""));
-    if (!(await pathExists(root))) throw new Error(`Local source does not exist: ${root}`);
-    return { root, source: `file:${root}` };
-  }
-
-  if (options.commit && !/^[a-f0-9]{40,64}$/.test(options.commit)) {
-    throw new Error("--commit must be a full lowercase hexadecimal commit SHA");
-  }
-  const requestedCommit = options.commit ?? git.ref;
-  if (options.commit && git.ref && options.commit !== git.ref) {
-    throw new Error("Specify the Git commit either in the source or with --commit, not both");
-  }
-  const subdirectory = options.subdirectory ? normalizedSubdirectory(options.subdirectory) : undefined;
-
-  const temp = await mkdtemp(path.join(os.tmpdir(), "woma-"));
-  try {
-    if (requestedCommit) {
-      await run("git", ["init", "--", temp]);
-      await run("git", ["fetch", "--filter=blob:none", "--depth", "1", "--", git.url, requestedCommit], temp);
-      await run("git", ["checkout", "--detach", "FETCH_HEAD"], temp);
-    } else {
-      await rm(temp, { recursive: true, force: true });
-      await run("git", ["clone", "--depth", "1", "--", git.url, temp]);
+  if (await pathExists(path.join(root, "plugin.json"))) throw new Error("Universal root plugin.json is not yet a verified adapter contract; provide an explicit .codex-plugin or .claude-plugin manifest");
+  if (plugins.length > 1) throw new Error("Ambiguous native plugin: select a package with exactly one harness manifest");
+  const native = plugins[0];
+  let plugin: PackageRecord["plugin"];
+  let nativeVersion: string | undefined;
+  if (native) {
+    const data = JSON.parse(await readFile(native.file, "utf8")) as Record<string, unknown>;
+    plugin = { harness: native.harness, name: nameSchema.parse(data.name), version: typeof data.version === "string" ? data.version : "local" };
+    if (data.version !== undefined) {
+      if (typeof data.version !== "string" || !valid(data.version)) throw new Error(`Invalid native plugin version: ${native.file}`);
+      nativeVersion = data.version;
     }
-    const commit = await run("git", ["rev-parse", "HEAD"], temp);
-    let root = temp;
-    if (subdirectory) {
-      const candidate = path.join(temp, ...subdirectory.split("/"));
-      const info = await lstat(candidate).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") throw new Error(`Git subdirectory does not exist: ${subdirectory}`);
-        throw error;
-      });
-      if (info.isSymbolicLink()) throw new Error(`Git subdirectory is an unsupported symlink: ${subdirectory}`);
-      if (!info.isDirectory()) throw new Error(`Git subdirectory is not a directory: ${subdirectory}`);
-      assertInside(await realpath(temp), await realpath(candidate), "Git subdirectory");
-      root = candidate;
-    }
-    return {
-      root,
-      source: splitRef(git.canonical).locator,
-      commit,
-      ...(subdirectory ? { subdirectory } : {}),
-      cleanup: () => rm(temp, { recursive: true, force: true }),
-    };
-  } catch (error) {
-    await rm(temp, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-function sourceDirectoryName(materialized: MaterializedSource): string {
-  if (materialized.subdirectory) return path.posix.basename(materialized.subdirectory);
-  if (materialized.source.startsWith("file:") || materialized.source.startsWith("builtin:")) {
-    return path.basename(materialized.root);
-  }
-  const { locator } = splitRef(materialized.source);
-  return path.basename(locator.replaceAll("\\", "/")).replace(/\.git$/i, "");
-}
-
-function implicitPackageName(input: string): string {
-  const normalized = input
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^[^a-z0-9]+/, "")
-    .slice(0, 80);
-  if (!normalized) throw new Error(`Cannot derive an implicit Package name from source directory: ${input}`);
-  return normalized;
-}
-
-export function parseSkillMetadata(input: string, label: string): SkillMetadata {
-  const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(input);
-  if (!frontmatter?.[1]) throw new Error(`${label} has invalid or missing YAML frontmatter`);
-  let document: unknown;
-  try {
-    document = parseYaml(frontmatter[1]);
-  } catch (error) {
-    throw new Error(`${label} has invalid YAML frontmatter: ${(error as Error).message}`);
-  }
-  if (!document || typeof document !== "object" || Array.isArray(document)) {
-    throw new Error(`${label} frontmatter must be an object`);
-  }
-  const metadata = document as Record<string, unknown>;
-  if (typeof metadata.name !== "string" || metadata.name.trim() === "") {
-    throw new Error(`${label} frontmatter needs a non-empty name`);
-  }
-  if (typeof metadata.description !== "string" || metadata.description.trim() === "") {
-    throw new Error(`${label} frontmatter needs a non-empty description`);
-  }
-  return { name: metadata.name, description: metadata.description.trim() };
-}
-
-async function copyImplicitSkill(sourceRoot: string, destinationRoot: string): Promise<void> {
-  await cp(sourceRoot, destinationRoot, {
-    recursive: true,
-    errorOnExist: true,
-    verbatimSymlinks: true,
-    filter: (candidate) => candidate === sourceRoot || copyFilter(candidate),
-  });
-}
-
-function shellArgument(input: string): string {
-  if (/^[A-Za-z0-9_./:@+-]+$/.test(input)) return input;
-  return `'${input.replaceAll("'", `'\\''`)}'`;
-}
-
-async function directPackageCandidates(materialized: MaterializedSource): Promise<string[]> {
-  if (!materialized.commit || materialized.subdirectory) return [];
-  const candidates: string[] = [];
-  for (const entry of (await readdir(materialized.root, { withFileTypes: true })).sort((left, right) =>
-    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-  )) {
-    if (!entry.isDirectory() || entry.name.startsWith("-") || /[\u0000-\u001f\u007f]/.test(entry.name)) continue;
-    const candidateRoot = path.join(materialized.root, entry.name);
-    if (await pathExists(path.join(candidateRoot, "woma.yaml")) || await pathExists(path.join(candidateRoot, "SKILL.md"))) {
-      candidates.push(entry.name);
-      continue;
-    }
-    const skillsRoot = path.join(candidateRoot, "skills");
-    const skillsInfo = await lstat(skillsRoot).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-    if (!skillsInfo?.isDirectory()) continue;
-    for (const skill of await readdir(skillsRoot, { withFileTypes: true })) {
-      if (!(skill.isDirectory() || skill.isSymbolicLink())) continue;
-      if (!(await pathExists(path.join(skillsRoot, skill.name, "SKILL.md")))) continue;
-      candidates.push(entry.name);
-      break;
+    for (const key of ["dependencies", "optionalDependencies", "requiresPlugins"]) {
+      const value = data[key];
+      if (value !== undefined && (!Array.isArray(value) || value.length > 0)) throw new Error(`Native plugin ${plugin.name} declares ${key}; this adapter cannot prevent unlocked native dependency resolution`);
     }
   }
-  return candidates;
-}
-
-async function unsupportedPackageLayout(materialized: MaterializedSource): Promise<Error> {
-  const message = `Unsupported Package source layout at ${materialized.root}: expected woma.yaml, SKILL.md, or skills/*/SKILL.md`;
-  const candidates = await directPackageCandidates(materialized);
-  if (candidates.length < 2) return new Error(message);
-  return new Error(
-    `${message}\n\nDetected multiple Package candidates:\n${candidates.map((candidate) => `  ${candidate}`).join("\n")}`
-      + `\n\nInstall one explicitly with --subdir, for example:\n  woma install ${shellArgument(materialized.source)} --subdir ${shellArgument(candidates[0]!)}`,
-  );
-}
-
-async function normalizeMaterializedSource(materialized: MaterializedSource): Promise<MaterializedSource> {
-  if (await pathExists(path.join(materialized.root, "woma.yaml"))) return materialized;
-  const sourceInfo = await lstat(materialized.root);
-  if (sourceInfo.isSymbolicLink()) throw new Error(`Implicit Package source is an unsupported symlink: ${materialized.root}`);
-  if (!sourceInfo.isDirectory()) throw new Error(`Package source is not a directory: ${materialized.root}`);
-
-  const standaloneDocument = path.join(materialized.root, "SKILL.md");
-  let packageName: string;
-  let description: string;
-  let selected: { sourceRoot: string; targetName: string; metadata: SkillMetadata }[];
-  if (await pathExists(standaloneDocument)) {
-    const metadata = parseSkillMetadata(await readFile(standaloneDocument, "utf8"), standaloneDocument);
-    packageName = metadata.name;
-    description = metadata.description.slice(0, 300);
-    selected = [{ sourceRoot: materialized.root, targetName: "standalone", metadata }];
-  } else {
-    const skillsRoot = path.join(materialized.root, "skills");
-    const skillsInfo = await lstat(skillsRoot).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return undefined;
-      throw error;
-    });
-    if (!skillsInfo) {
-      throw await unsupportedPackageLayout(materialized);
-    }
-    if (skillsInfo.isSymbolicLink()) throw new Error(`Implicit Package skills directory is an unsupported symlink: ${skillsRoot}`);
-    if (!skillsInfo.isDirectory()) {
-      throw new Error(
-        `Unsupported Package source layout at ${materialized.root}: expected woma.yaml, SKILL.md, or skills/*/SKILL.md`,
-      );
-    }
-    selected = [];
-    for (const entry of (await readdir(skillsRoot, { withFileTypes: true })).sort((left, right) =>
-      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-    )) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-      const sourceRoot = path.join(skillsRoot, entry.name);
-      const document = path.join(sourceRoot, "SKILL.md");
-      if (!(await pathExists(document))) continue;
-      selected.push({
-        sourceRoot,
-        targetName: entry.name,
-        metadata: parseSkillMetadata(await readFile(document, "utf8"), document),
-      });
-    }
-    if (selected.length === 0) {
-      throw await unsupportedPackageLayout(materialized);
-    }
-    packageName = implicitPackageName(sourceDirectoryName(materialized));
-    description = `Implicit Woma Package containing ${selected.length} Skills from ${sourceDirectoryName(materialized)}.`.slice(0, 300);
-  }
-
-  const stagingRoot = await mkdtemp(path.join(os.tmpdir(), "woma-normalized-"));
-  try {
-    const skillNames = new Set<string>();
-    for (const skill of selected) {
-      if (skillNames.has(skill.metadata.name)) throw new Error(`Duplicate skill name: ${skill.metadata.name}`);
-      skillNames.add(skill.metadata.name);
-      await copyImplicitSkill(skill.sourceRoot, path.join(stagingRoot, "skills", skill.targetName));
-    }
-    const contentHash = (await hashDirectory(stagingRoot)).slice("sha256-".length);
-    const versionIdentity = materialized.commit ? `git.${materialized.commit.slice(0, 12)}` : `local.${contentHash.slice(0, 12)}`;
-    const manifest: WomaManifest = {
-      apiVersion: "woma.dev/v1",
-      kind: "Woma",
-      metadata: {
-        name: packageName,
-        version: `0.0.0+${versionIdentity}`,
-        description,
-        tags: [],
-      },
-      spec: {
-        platforms: ["codex", "claude", "pi", "qoder", "opencode"],
-        requirements: { env: [], commands: [] },
-        dependencies: [],
-        entrypoints: [],
-        skills: selected.map((skill) => ({ name: skill.metadata.name, path: `./skills/${skill.targetName}` })),
-        mcpServers: [],
-        hooks: [],
-      },
-    };
-    await writeFile(path.join(stagingRoot, "woma.yaml"), stringifyYaml(manifest), "utf8");
-    return {
-      ...materialized,
-      root: stagingRoot,
-      cleanup: async () => {
-        await rm(stagingRoot, { recursive: true, force: true });
-        await materialized.cleanup?.();
-      },
-    };
-  } catch (error) {
-    await rm(stagingRoot, { recursive: true, force: true });
-    throw error;
-  }
-}
-
-async function materializePackageSource(source: string, cwd: string, options: PackageSourceOptions = {}): Promise<MaterializedSource> {
-  const materialized = await materializeSource(source, cwd, options);
-  try {
-    return await normalizeMaterializedSource(materialized);
-  } catch (error) {
-    await materialized.cleanup?.();
-    throw error;
-  }
-}
-
-export async function validatePackage(root: string, manifest: WomaManifest): Promise<void> {
-  const realRoot = await realpath(root);
-  const names = new Set<string>();
-  for (const skill of manifest.spec.skills) {
-    if (names.has(`skill:${skill.name}`)) throw new Error(`Duplicate skill name: ${skill.name}`);
-    names.add(`skill:${skill.name}`);
-    const skillRoot = path.resolve(root, skill.path);
-    assertInside(root, skillRoot, `Skill ${skill.name}`);
-    const rootInfo = await lstat(skillRoot).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") throw new Error(`Skill ${skill.name} does not exist at ${skill.path}`);
-      throw error;
-    });
-    if (rootInfo.isSymbolicLink()) throw new Error(`Skill ${skill.name} root is an unsupported symlink: ${skill.path}`);
-    if (!rootInfo.isDirectory()) throw new Error(`Skill ${skill.name} root is not a directory: ${skill.path}`);
-    assertInside(realRoot, await realpath(skillRoot), `Skill ${skill.name}`);
-    const skillDocument = path.join(skillRoot, "SKILL.md");
-    if (!(await pathExists(skillDocument))) {
-      throw new Error(`Skill ${skill.name} has no SKILL.md at ${skill.path}`);
-    }
-    const metadata = parseSkillMetadata(await readFile(skillDocument, "utf8"), `Skill ${skill.name}`);
-    if (metadata.name !== skill.name) {
-      throw new Error(`Skill ${skill.name} frontmatter name must match the manifest name`);
-    }
-    const pending = [skillRoot];
-    while (pending.length > 0) {
-      const current = pending.pop()!;
-      for (const entry of await readdir(current)) {
-        const candidate = path.join(current, entry);
-        const info = await lstat(candidate);
-        if (info.isSymbolicLink()) throw new Error(`Skill ${skill.name} contains unsupported symlink: ${path.relative(root, candidate)}`);
-        if (info.isDirectory()) pending.push(candidate);
+  const skills: PackageRecord["skills"] = [];
+  if (!plugin) {
+    if (await pathExists(path.join(root, "SKILL.md"))) {
+      const metadata = skillMetadata(await readFile(path.join(root, "SKILL.md"), "utf8"), root);
+      skills.push({ name: metadata.name, path: "." });
+    } else if (await pathExists(path.join(root, "skills"))) {
+      for (const entry of (await readdir(path.join(root, "skills"), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+        const skillPath = `skills/${entry.name}`;
+        const file = path.join(root, skillPath, "SKILL.md");
+        if (!(await pathExists(file))) throw new Error(`Skill directory has no SKILL.md: ${file}`);
+        const metadata = skillMetadata(await readFile(file, "utf8"), file);
+        skills.push({ name: metadata.name, path: skillPath });
       }
     }
   }
-
-  const dependencyNames = new Set<string>();
-  for (const dependency of manifest.spec.dependencies) {
-    if (dependencyNames.has(dependency.name)) throw new Error(`Duplicate package dependency: ${dependency.name}`);
-    dependencyNames.add(dependency.name);
-  }
-
-  const skillNames = new Set(manifest.spec.skills.map((skill) => skill.name));
-  const entrypointNames = new Set<string>();
-  for (const entrypoint of manifest.spec.entrypoints) {
-    if (entrypointNames.has(entrypoint.name)) throw new Error(`Duplicate entrypoint name: ${entrypoint.name}`);
-    entrypointNames.add(entrypoint.name);
-    if (!skillNames.has(entrypoint.skill)) {
-      throw new Error(`Entrypoint ${entrypoint.name} references unknown skill ${entrypoint.skill}`);
-    }
-  }
-
-  const declaredEnv = new Set(manifest.spec.requirements.env.map((item) => item.name));
-  for (const server of manifest.spec.mcpServers) {
-    if (names.has(`mcp:${server.name}`)) throw new Error(`Duplicate MCP server name: ${server.name}`);
-    names.add(`mcp:${server.name}`);
-    const usedEnv = server.transport === "stdio" ? server.env : Object.values(server.headers);
-    for (const variable of usedEnv) {
-      if (!declaredEnv.has(variable)) {
-        throw new Error(`MCP server ${server.name} uses undeclared environment variable ${variable}`);
-      }
-    }
-    for (const platform of server.platforms ?? manifest.spec.platforms) {
-      if (!manifest.spec.platforms.includes(platform)) {
-        throw new Error(`MCP server ${server.name} targets ${platform}, which is not listed in spec.platforms`);
-      }
-    }
-  }
-
-  for (const hook of manifest.spec.hooks) {
-    for (const platform of hook.platforms ?? manifest.spec.platforms) {
-      if (!manifest.spec.platforms.includes(platform)) {
-        throw new Error(`Hook ${hook.event} targets ${platform}, which is not listed in spec.platforms`);
-      }
-    }
-  }
-
-  for (const platform of manifest.spec.platforms) {
-    const adapter = agentAdapter(platform);
-    const errors = capabilitySupportIssues(adapter, manifestCapabilities(manifest, root, platform))
-      .filter((issue) => issue.severity === "error");
-    if (errors.length > 0) {
-      throw new Error(errors.map((issue) => issue.message).join("\n"));
-    }
-  }
-}
-
-export function packageCacheKey(source: string, identity: string, integrity: string): string {
-  return createHash("sha256").update(`${source}\0${identity}\0${integrity}`).digest("hex").slice(0, 20);
-}
-
-function lockedIdentity(lock: LockedPackage): string {
-  return lock.commit ?? lock.resolved ?? lock.integrity;
-}
-
-function copyFilter(source: string): boolean {
-  const name = path.basename(source);
-  return !EXCLUDED_PACKAGE_PATH_NAMES.has(name);
-}
-
-async function verifyCache(root: string, manifest: WomaManifest, integrity: string): Promise<void> {
-  await assertTreeReadonly(await realpath(root));
-  const cachedIntegrity = await hashDirectory(root);
-  if (cachedIntegrity !== integrity) {
-    throw new Error(`Cached package is corrupt at ${root}: expected ${integrity}, got ${cachedIntegrity}`);
-  }
-  const cachedManifest = await loadManifest(root);
-  await validatePackage(root, cachedManifest);
-  if (
-    cachedManifest.metadata.name !== manifest.metadata.name ||
-    cachedManifest.metadata.version !== manifest.metadata.version
-  ) {
-    throw new Error(
-      `Cached package identity mismatch: expected ${manifest.metadata.name}@${manifest.metadata.version}, got ${cachedManifest.metadata.name}@${cachedManifest.metadata.version}`,
-    );
-  }
-}
-
-async function assertTreeReadonly(root: string): Promise<void> {
-  const info = await lstat(root);
-  if (info.isSymbolicLink()) return;
-  if ((info.mode & 0o222) !== 0) throw new Error(`Cached package is writable at ${root}`);
-  if (info.isDirectory()) {
-    for (const entry of await readdir(root)) await assertTreeReadonly(path.join(root, entry));
-  }
-}
-
-async function populateCache(
-  sourceRoot: string,
-  cacheRoot: string,
-  expectedManifest: WomaManifest,
-  expectedIntegrity: string,
-): Promise<void> {
-  await mkdir(path.dirname(cacheRoot), { recursive: true });
-  const generation = path.join(path.dirname(cacheRoot), `.${path.basename(cacheRoot)}.gen-${randomUUID()}`);
-  const nextLink = path.join(path.dirname(cacheRoot), `.${path.basename(cacheRoot)}.link-${randomUUID()}`);
-  try {
-    await cp(sourceRoot, generation, { recursive: true, errorOnExist: true, filter: copyFilter });
-    await setTreeWritable(generation, false);
-    const manifest = await loadManifest(generation);
-    await validatePackage(generation, manifest);
-    await verifyCache(generation, expectedManifest, expectedIntegrity);
-    await symlink(path.basename(generation), nextLink, process.platform === "win32" ? "junction" : undefined);
-    await rename(nextLink, cacheRoot);
-  } catch (error) {
-    await rm(nextLink, { force: true });
-    await removeCacheEntry(generation);
-    throw error;
-  }
-}
-
-async function setTreeWritable(root: string, writable: boolean): Promise<void> {
-  const info = await lstat(root);
-  if (info.isSymbolicLink()) return;
-  if (info.isDirectory()) {
-    if (writable) await chmod(root, (info.mode & 0o777) | 0o700);
-    for (const entry of await readdir(root)) await setTreeWritable(path.join(root, entry), writable);
-    if (!writable) await chmod(root, (info.mode & 0o555) & ~0o222);
-    return;
-  }
-  if (info.isFile()) await chmod(root, writable ? (info.mode & 0o777) | 0o600 : (info.mode & 0o555) & ~0o222);
-}
-
-async function removeCacheEntry(root: string): Promise<void> {
-  if (!(await pathExists(root))) return;
-  await setTreeWritable(root, true);
-  await rm(root, { recursive: true, force: true });
-}
-
-async function cacheMaterializedPackage(materialized: MaterializedSource): Promise<InstalledPackage> {
-  const manifest = await loadManifest(materialized.root);
-  await validatePackage(materialized.root, manifest);
-  const integrity = await hashDirectory(materialized.root);
-  const key = packageCacheKey(materialized.source, materialized.commit ?? integrity, integrity);
-  const cacheRoot = path.join(womaHome(), "packages", manifest.metadata.name, key);
-  await withPackageLock(manifest.metadata.name, key, async () => {
-    if (await pathExists(cacheRoot)) {
-      try {
-        await verifyCache(cacheRoot, manifest, integrity);
-        return;
-      } catch {
-        // A replacement is staged before the cache pointer is changed.
-      }
-    }
-    await populateCache(materialized.root, cacheRoot, manifest, integrity);
-    await verifyCache(cacheRoot, manifest, integrity);
-  });
-  const lock: LockedPackage = {
-    name: manifest.metadata.name,
-    version: manifest.metadata.version,
-    source: materialized.source,
-    ...(materialized.commit ? { commit: materialized.commit } : {}),
-    ...(materialized.subdirectory ? { subdirectory: materialized.subdirectory } : {}),
-    integrity,
-    cacheKey: key,
-    dependencies: manifest.spec.dependencies.map((dependency) => dependency.name),
-    installedAt: new Date().toISOString(),
+  const sourceName = source.type === "local" ? path.basename(source.path) : path.posix.basename(source.subdirectory ?? source.url.replace(/\.git$/, ""));
+  const name = nameSchema.parse(manifest.name ?? plugin?.name ?? (skills.length === 1 && skills[0]?.path === "." ? skills[0].name : sourceName.toLowerCase().replace(/[^a-z0-9._-]/g, "-")));
+  if (name === "codex" || name === "claude") throw new Error(`Package name ${name} is reserved for a runtime`);
+  if (manifest.name && plugin && manifest.name !== plugin.name) throw new Error("woma.yaml and the native plugin name must agree");
+  if (manifest.version && nativeVersion && manifest.version !== nativeVersion) throw new Error("woma.yaml and the native plugin version must agree");
+  const version = manifest.version ?? nativeVersion ?? `0.0.0+${integrity.slice(7, 19)}`;
+  if (!plugin && skills.length === 0 && manifest.dependencies.length === 0) throw new Error(`Unsupported package layout at ${root}: expected SKILL.md, skills/, a native plugin, or a dependency collection`);
+  if (new Set(skills.map((s) => s.name)).size !== skills.length) throw new Error(`Duplicate Skill names in ${name}`);
+  if (new Set(manifest.dependencies.map((d) => d.name)).size !== manifest.dependencies.length) throw new Error(`Duplicate dependencies in ${name}`);
+  const harnesses = manifest.harnesses ?? (plugin ? { [plugin.harness]: "*" } : { codex: "*", claude: "*" });
+  if (plugin && Object.keys(harnesses).some((h) => h !== plugin.harness)) throw new Error(`Native ${plugin.harness} plugin cannot target another harness`);
+  return { name, version, kind: plugin ? "plugin" : skills.length ? "skill" : "collection", source, integrity,
+    dependencies: manifest.dependencies.map((d) => ({ ...d, source: dependencySource(d.source, source) })), harnesses, skills, ...(plugin ? { plugin } : {}),
   };
-  return { manifest, root: cacheRoot, lock };
 }
 
-export async function installPackageSource(source: string, cwd = process.cwd(), options: PackageSourceOptions = {}): Promise<InstalledPackage> {
-  const materialized = await materializePackageSource(source, cwd, options);
+export async function resolvePackage(input: string, cwd = process.cwd()): Promise<InstalledPackage & { intent: string }> {
+  const source = await materializeSource(input, cwd);
   try {
-    return await cacheMaterializedPackage(materialized);
-  } finally {
-    await materialized.cleanup?.();
-  }
-}
-
-function assertDependency(dependency: PackageDependency, pkg: InstalledPackage): void {
-  if (pkg.manifest.metadata.name !== dependency.name) {
-    throw new Error(
-      `Dependency ${dependency.name} resolved to package ${pkg.manifest.metadata.name} from ${dependency.source}`,
-    );
-  }
-  if (!satisfies(pkg.manifest.metadata.version, dependency.version, { includePrerelease: true })) {
-    throw new Error(
-      `Dependency ${dependency.name} requires ${dependency.version}, but ${dependency.source} resolved to ${pkg.manifest.metadata.version}`,
-    );
-  }
-}
-
-export async function installPackageTree(source: string, cwd = process.cwd(), options: PackageSourceOptions = {}): Promise<PackageInstallPlan> {
-  const resolved = new Map<string, InstalledPackage>();
-  const visiting: string[] = [];
-  const ordered: InstalledPackage[] = [];
-
-  async function visit(candidateSource: string, candidateCwd: string, dependency?: PackageDependency): Promise<InstalledPackage> {
-    const materialized = await materializePackageSource(candidateSource, candidateCwd, candidateSource === source ? options : {});
-    try {
-      const pkg = await cacheMaterializedPackage(materialized);
-      if (dependency) assertDependency(dependency, pkg);
-
-      const name = pkg.manifest.metadata.name;
-      const cycleAt = visiting.indexOf(name);
-      if (cycleAt !== -1) {
-        throw new Error(`Package dependency cycle: ${[...visiting.slice(cycleAt), name].join(" -> ")}`);
-      }
-
-      const existing = resolved.get(name);
-      if (existing) {
-        const sameResolution =
-          existing.lock.version === pkg.lock.version &&
-          existing.lock.source === pkg.lock.source &&
-          existing.lock.commit === pkg.lock.commit &&
-          existing.lock.integrity === pkg.lock.integrity;
-        if (!sameResolution) {
-          throw new Error(
-            `Conflicting resolutions for ${name}: ${existing.lock.source}@${existing.lock.version} and ${pkg.lock.source}@${pkg.lock.version}`,
-          );
-        }
-        return existing;
-      }
-
-      visiting.push(name);
-      try {
-        for (const child of pkg.manifest.spec.dependencies) {
-          const childIsPortable = child.source.startsWith("builtin:") || normalizeGitSource(child.source) !== undefined;
-          if (!materialized.source.startsWith("file:") && !childIsPortable) {
-            throw new Error(
-              `Package ${name} from ${materialized.source} cannot use local dependency source ${child.source}; use a Git or built-in source`,
-            );
-          }
-          await visit(child.source, materialized.root, child);
-        }
-      } finally {
-        visiting.pop();
-      }
-      resolved.set(name, pkg);
-      ordered.push(pkg);
-      return pkg;
-    } finally {
-      await materialized.cleanup?.();
+    if (await pathExists(path.join(source.root, ".woma/state.json")) || path.basename(source.root) === "home" && await pathExists(path.join(source.root, "../.woma/state.json"))) {
+      throw new Error("An environment or native home is not a package source; install an individual Skill or Plugin directory");
     }
-  }
-
-  const root = await visit(source, cwd);
-  return { root, packages: ordered };
+    const nativeHomes = [process.env.CODEX_HOME, process.env.CLAUDE_CONFIG_DIR, process.env.WOMA_PREFIX ? path.join(process.env.WOMA_PREFIX, "home") : undefined,
+      path.join(os.homedir(), ".codex"), path.join(os.homedir(), ".claude")].filter((v): v is string => Boolean(v));
+    for (const home of nativeHomes) {
+      if (source.root === await realpath(home).catch(() => path.resolve(home))) throw new Error("A native home is not a package source; install an individual Skill or Plugin directory");
+    }
+    for (const file of ["auth.json", ".credentials.json", "history.jsonl", "session_index.jsonl"]) {
+      if (await pathExists(path.join(source.root, file))) throw new Error(`Native state cannot enter a package snapshot (${file}); install an individual Skill or Plugin directory`);
+    }
+    const layouts = ["SKILL.md", "skills", "woma.yaml", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json"];
+    if (!(await Promise.all(layouts.map((file) => pathExists(path.join(source.root, file))))).some(Boolean)) throw new Error(`Unsupported package layout at ${source.root}: expected SKILL.md, skills/, a native plugin, or a dependency collection`);
+    // Describe the immutable snapshot so changes to a local source cannot race metadata validation.
+    const cached = await publishContent(source.root);
+    return { root: cached.root, record: await describePackage(cached.root, source.source, cached.integrity), intent: source.intent };
+  } finally { await source.cleanup(); }
 }
 
-async function loadCachedPackageUnlocked(lock: LockedPackage): Promise<InstalledPackage> {
-  const root = path.join(womaHome(), "packages", lock.name, lock.cacheKey);
+export async function loadPackage(record: PackageRecord, restore = false): Promise<InstalledPackage> {
+  const root = cachePath(record.integrity);
   if (!(await pathExists(root))) {
-    throw new Error(`Package ${lock.name}@${lock.version} is not cached; run woma install ${lock.source}`);
+    if (!restore || record.source.type !== "git") throw new Error(`Missing snapshot for ${record.name}@${record.version}: ${root}. Local snapshots cannot be reconstructed from a changed source.`);
+    const restored = await resolvePackage(gitIntent({ url: record.source.url, ref: record.source.commit, subdirectory: record.source.subdirectory }));
+    if (restored.record.integrity !== record.integrity) throw new Error(`Source integrity mismatch for ${record.name}`);
   }
-  await assertTreeReadonly(await realpath(root));
-  const integrity = await hashDirectory(root);
-  if (integrity !== lock.integrity) {
-    throw new Error(`Integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
+  await verifyContent(root, record.integrity, true);
+  if (record.source.type === "runtime") await verifyRuntimeIdentity(record, root);
+  else {
+    const actual = await describePackage(root, record.source, record.integrity);
+    if (!isDeepStrictEqual(actual, record)) throw new Error(`Locked package metadata does not match its snapshot: ${record.name}`);
   }
-  const manifest = await loadManifest(root);
-  await validatePackage(root, manifest);
-  if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
-    throw new Error(
-      `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
-    );
-  }
-  return { manifest, root, lock };
+  return { root, record };
 }
 
-export function loadCachedPackage(lock: LockedPackage): Promise<InstalledPackage> {
-  return withPackageLock(lock.name, lock.cacheKey, () => loadCachedPackageUnlocked(lock));
+export function assertCompatible(record: PackageRecord, harness: Harness, runtimeVersion: string): void {
+  const constraint = record.harnesses[harness];
+  if (!constraint || !satisfies(runtimeVersion, constraint, { includePrerelease: true })) throw new Error(`Package ${record.name} is incompatible with ${harness}@${runtimeVersion}`);
 }
 
-export async function validateLockedPackageDirectory(lock: LockedPackage, root: string): Promise<WomaManifest> {
-  if (packageCacheKey(lock.source, lockedIdentity(lock), lock.integrity) !== lock.cacheKey) {
-    throw new Error(`Package ${lock.name} has a cache key that does not match its locked source and integrity`);
-  }
-  const integrity = await hashDirectory(root);
-  if (integrity !== lock.integrity) {
-    throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
-  }
-  const manifest = await loadManifest(root);
-  await validatePackage(root, manifest);
-  if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
-    throw new Error(
-      `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
-    );
-  }
-  const dependencies = manifest.spec.dependencies.map((dependency) => dependency.name);
-  if (JSON.stringify(dependencies) !== JSON.stringify(lock.dependencies)) {
-    throw new Error(`Locked dependency edges for ${lock.name} do not match its bundled manifest`);
-  }
-  return manifest;
+function checkDependency(dependency: Dependency, record: PackageRecord): void {
+  if (record.name !== dependency.name || !satisfies(record.version, dependency.version, { includePrerelease: true })) throw new Error(`Dependency conflict: ${dependency.name} requires ${dependency.version}, resolved ${record.name}@${record.version}`);
+  assertSourceIdentity(record, dependency.source);
 }
 
-export async function importLockedPackage(lock: LockedPackage, sourceRoot: string): Promise<InstalledPackage> {
-  const manifest = await validateLockedPackageDirectory(lock, sourceRoot);
-  const cacheRoot = path.join(womaHome(), "packages", lock.name, lock.cacheKey);
-  await withPackageLock(lock.name, lock.cacheKey, async () => {
-    if (await pathExists(cacheRoot)) {
-      try {
-        return await loadCachedPackageUnlocked(lock);
-      } catch {}
+export function assertSourceIdentity(record: PackageRecord, intent: string): void {
+  const canonical = canonicalSource(intent);
+  const git = gitLocator(canonical);
+  const source = record.source;
+  const matches = git
+    ? source.type === "git" && source.url === git.url && (source.subdirectory ?? ".") === (git.subdirectory ?? ".") && (!/^[a-f0-9]{40,64}$/.test(git.ref ?? "") || git.ref === source.commit)
+    : source.type === "local" && source.path === canonical.slice(5);
+  if (!matches) throw new Error(`Locked source mismatch for ${record.name}: ${intent}`);
+}
+
+export function dependencyOrder(lock: EnvironmentLock): string[] {
+  const ordered: string[] = [];
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  function visit(name: string) {
+    if (visiting.has(name)) throw new Error(`Dependency cycle at ${name}`);
+    if (visited.has(name)) return;
+    const record = lock.packages[name];
+    if (!record || record.name !== name) throw new Error(`Missing or invalid locked package: ${name}`);
+    visiting.add(name);
+    for (const dep of record.dependencies) {
+      const child = lock.packages[dep.name];
+      if (!child) throw new Error(`Missing dependency ${dep.name} of ${name}`);
+      checkDependency(dep, child);
+      visit(dep.name);
     }
-    await populateCache(sourceRoot, cacheRoot, manifest, lock.integrity);
-    await verifyCache(cacheRoot, manifest, lock.integrity);
-  });
-  return { manifest, root: cacheRoot, lock };
+    visiting.delete(name); visited.add(name); ordered.push(name);
+  }
+  visit(lock.recipe.harness);
+  for (const root of lock.recipe.packages) {
+    visit(root.name);
+    assertSourceIdentity(lock.packages[root.name]!, root.source);
+  }
+  return ordered;
 }
 
-function sourceAtCommit(source: string, commit?: string): string {
-  if (source.startsWith("file:") || source.startsWith("builtin:")) return source;
-  if (!commit) throw new Error("Locked Git Package has no commit");
-  const { locator } = splitRef(source);
-  return `${locator}#${commit}`;
-}
-
-export async function repairLockedPackage(lock: LockedPackage): Promise<InstalledPackage> {
-  return withPackageLock(lock.name, lock.cacheKey, async () => {
-    const expectedRoot = path.join(womaHome(), "packages", lock.name, lock.cacheKey);
-    if (await pathExists(expectedRoot)) {
-      try {
-        return await loadCachedPackageUnlocked(lock);
-      } catch {}
-    }
-
-    const commit = lock.commit ?? lock.resolved;
-    const materialized = await materializePackageSource(sourceAtCommit(lock.source, commit), process.cwd(), {
-      ...(lock.subdirectory ? { subdirectory: lock.subdirectory } : {}),
-    });
-    try {
-      const manifest = await loadManifest(materialized.root);
-      await validatePackage(materialized.root, manifest);
-      const integrity = await hashDirectory(materialized.root);
-      if (manifest.metadata.name !== lock.name || manifest.metadata.version !== lock.version) {
-        throw new Error(
-          `Locked identity mismatch: expected ${lock.name}@${lock.version}, got ${manifest.metadata.name}@${manifest.metadata.version}`,
-        );
-      }
-      if (integrity !== lock.integrity) {
-        throw new Error(`Locked integrity mismatch for ${lock.name}: expected ${lock.integrity}, got ${integrity}`);
-      }
-      if (commit && materialized.commit !== commit) {
-        throw new Error(`Locked commit mismatch for ${lock.name}: expected ${commit}, got ${materialized.commit}`);
-      }
-      await populateCache(materialized.root, expectedRoot, manifest, integrity);
-      await verifyCache(expectedRoot, manifest, integrity);
-      return { manifest, root: expectedRoot, lock };
-    } catch (error) {
-      throw error;
-    } finally {
-      await materialized.cleanup?.();
-    }
-  });
+export async function resolveClosure(options: {
+  roots: RootRequirement[];
+  previous?: EnvironmentLock;
+  refresh?: Set<string>;
+  additions?: (InstalledPackage & { intent: string })[];
+}): Promise<Record<string, PackageRecord>> {
+  const resolved = new Map<string, PackageRecord>();
+  const visiting = new Set<string>();
+  const additions = new Map(options.additions?.map((p) => [p.record.name, p]));
+  const intents = new Map<string, string>();
+  async function visit(requirement: RootRequirement, dependency?: Dependency): Promise<void> {
+    const intent = canonicalSource(requirement.source);
+    const priorIntent = intents.get(requirement.name);
+    if (priorIntent && priorIntent !== intent) throw new Error(`Conflicting sources for ${requirement.name}: ${priorIntent} and ${intent}`);
+    intents.set(requirement.name, intent);
+    if (visiting.has(requirement.name)) throw new Error(`Dependency cycle at ${requirement.name}`);
+    const existing = resolved.get(requirement.name);
+    if (existing) { if (dependency) checkDependency(dependency, existing); return; }
+    const previous = options.previous?.packages[requirement.name];
+    let record: PackageRecord;
+    if (additions.has(requirement.name)) record = additions.get(requirement.name)!.record;
+    else if (previous && !options.refresh?.has(requirement.name)) record = previous;
+    else record = (await resolvePackage(intent)).record;
+    if (record.name !== requirement.name) throw new Error(`Source identity changed: expected ${requirement.name}, got ${record.name}`);
+    if (dependency) checkDependency(dependency, record);
+    visiting.add(record.name);
+    for (const child of record.dependencies) await visit(child, child);
+    visiting.delete(record.name); resolved.set(record.name, record);
+  }
+  for (const root of options.roots) await visit(root);
+  return Object.fromEntries(resolved);
 }
