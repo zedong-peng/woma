@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Breaking: remove the optional `woma-project-memory` example Package and `docs/project-memory.md`. Woma does not manage Memory; project knowledge, if needed, remains user-owned outside Woma.
+
 ## 0.7.0 - 2026-09-12
 
 First release of the v2 environment contract. Breaking: v1 environments, commands, and

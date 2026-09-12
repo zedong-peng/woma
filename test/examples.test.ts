@@ -8,7 +8,7 @@ import { fixture } from "./helpers.js";
 test("shipped examples use the minimal format and install through native layouts", async (t) => {
   const f = await fixture(t);
   await createEnvironment({ prefix: f.prefix }, { harness: "codex", provider: f.provider });
-  for (const name of ["auto-research", "performance-engineering", "reproducibility-core", "woma-package-builder", "woma-project-memory", "native-codex-review"]) {
+  for (const name of ["auto-research", "performance-engineering", "reproducibility-core", "woma-package-builder", "native-codex-review"]) {
     await installPackages(f.prefix, [path.resolve("examples", name)]);
   }
   assert.ok((await readEnvironment(f.prefix)).lock.packages["paper-search"]);

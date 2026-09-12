@@ -16,7 +16,6 @@
     "examples/exp-design",
     "examples/auto-research",
     "examples/woma-package-builder",
-    "examples/woma-project-memory",
     "examples/native-codex-review",
     "examples/native-claude-review",
     "scripts/postinstall.mjs",
