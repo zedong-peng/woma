@@ -7,7 +7,7 @@ An **Environment** is a directory containing one harness, its installed **Packag
 ## Daily use
 
 ```bash
-npm install -g woma
+npm install -g https://github.com/zedong-peng/woma/releases/download/v0.7.0/woma-0.7.0.tgz
 woma init
 # Open a new shell after initialization.
 woma create -n research codex
@@ -21,6 +21,8 @@ woma create -n reproduced -f woma.lock
 woma run -n reproduced codex
 woma deactivate
 ```
+
+Official releases include a prebuilt npm package and SHA-256 checksum on [GitHub Releases](https://github.com/zedong-peng/woma/releases). The package is not currently published to the npm registry.
 
 Use `claude` instead of `codex` for a Claude Code environment. `codex@0.154.0` or `claude@2.1.269` selects an exact runtime release. Omitting the version resolves the official latest release once, then locks it. Only an explicit install/update changes that choice. System harness installations are never used as fallback.
 
