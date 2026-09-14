@@ -1,5 +1,5 @@
 {
-  "name": "woma",
+  "name": "@x19-507/woma",
   "version": "0.7.0",
   "description": "Reproducible environments and packages for coding agents.",
   "type": "module",
@@ -47,6 +47,9 @@
     "reproducibility"
   ],
   "license": "UNLICENSED",
+  "publishConfig": {
+    "access": "public"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zedong-peng/woma.git"

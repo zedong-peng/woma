@@ -1,13 +1,15 @@
 # Woma
 
-Woma manages a harness installation environment: pin its executable version, install native extensions, switch environments, and recreate managed content.
+Woma is a Conda-like environment manager for AI agent harnesses. It pins the CLI version, installs native extensions, switches environments, and recreates managed content.
+
+For a concrete walkthrough of the current workflow and its limitations, see the [user journey (中文)](docs/user-journey.md).
 
 An **Environment** is a directory containing one harness, its installed **Packages**, and an independent native home. Environment names locate directories. Codex and Claude Code are supported; Node.js (20.19+, 22.13+, or 24+), Git, and Bash or Zsh are prerequisites. Runtime availability depends on the official release and platform (macOS/Linux, x64/arm64).
 
 ## Daily use
 
 ```bash
-npm install -g https://github.com/zedong-peng/woma/releases/download/v0.7.0/woma-0.7.0.tgz
+npm install -g @x19-507/woma
 woma init
 # Open a new shell after initialization.
 woma create -n research codex
@@ -22,7 +24,7 @@ woma run -n reproduced codex
 woma deactivate
 ```
 
-Official releases include a prebuilt npm package and SHA-256 checksum on [GitHub Releases](https://github.com/zedong-peng/woma/releases). The package is not currently published to the npm registry.
+Published to the npm registry as `@x19-507/woma`. Official releases also include a prebuilt npm package and SHA-256 checksum on [GitHub Releases](https://github.com/zedong-peng/woma/releases).
 
 Use `claude` instead of `codex` for a Claude Code environment. `codex@0.154.0` or `claude@2.1.269` selects an exact runtime release. Omitting the version resolves the official latest release once, then locks it. Only an explicit install/update changes that choice. System harness installations are never used as fallback.
 
@@ -71,6 +73,8 @@ Package files are independent environment copies, backed by a shared immutable c
 `environment.yaml` records direct installation intent. `woma.lock` records exact runtime artifacts, platform, package contents, sources, and the complete dependency graph. Recreating a lock on the same platform verifies its digests and does not upgrade anything. Missing Git/runtime content can be fetched at the locked identity. A missing local snapshot is an error, even if the original source still exists.
 
 Exports read Woma metadata only. They never scan or archive native homes. Credentials, configuration, sessions, external commands, remote services, project settings, and model behavior are outside the reproduction guarantee. This version provides no offline bundle.
+
+The [agreed design](docs/design.md#agreed-configuration-scope) extends export and restoration to non-sensitive MCP connection configuration, launch arguments, and plugin enablement state. This extension is pending implementation.
 
 **Deleting an environment deletes all its local native state.** The deletion prompt names that state explicitly; a recipe or lock cannot restore it.
 
