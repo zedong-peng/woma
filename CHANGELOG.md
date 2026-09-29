@@ -1,8 +1,23 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 - 2026-09-29
 
-- Breaking: remove the optional `woma-project-memory` example Package and `docs/project-memory.md`. Woma does not manage Memory; project knowledge, if needed, remains user-owned outside Woma.
+First stable release. Woma manages the harness of your Claude Code and Codex (Skills, plugins and MCP servers) as one named, shareable, reproducible environment.
+
+- **Multi-agent environments.** One environment can hold Claude Code and Codex together (`woma create -n NAME claude codex`). Skills and MCP servers are installed once for every agent; native plugins go only to their own agent. Agents can be added (`woma install codex`) and removed (`woma remove codex`, which keeps that agent's sign-in and sessions on disk).
+- **Breaking: Woma uses your installed agents.** Woma no longer downloads, pins or wraps Claude Code and Codex. Every environment runs the `claude` and `codex` on your PATH; activation only sets `CLAUDE_CONFIG_DIR` and `CODEX_HOME` and leaves `PATH` alone. `codex@VERSION` and `woma update codex` are refused with a pointer to your own installer. `list` shows the installed version and location, and `create`, `activate` and `doctor` report a missing agent with its install command. Environment files list agents as `agents: [claude, codex]`.
+- **Locks and packs work across operating systems.** With no agent binaries in them, a lock or pack made on Linux recreates the environment on macOS, and vice versa.
+- **Skills as versioned packages.** New sources: `gh:owner/repo/path#ref`, GitHub browser URLs, and `NAME@owner/repo[#ref]`. Named sources are resolved through Claude Code plugin marketplaces, Codex plugin marketplaces and `SKILL.md` names, so `pdf@anthropics/skills`, `yeet@openai/skills` and `skill-creator@anthropics/claude-plugins-official` all work. Every source is locked to a commit and a content hash.
+- **Search.** `woma search QUERY` searches the skills.sh directory.
+- **Folders of Skills.** A directory whose child directories contain `SKILL.md` installs as one Skill collection.
+- **MCP servers.** `woma mcp add/remove/list` manages MCP servers, written natively to Codex `config.toml` and Claude Code `.claude.json`. Secrets are referenced by variable name (`env_vars`, `bearer_token_env_var`) and never stored. Native edits to Woma-owned entries are reported and never overwritten.
+- **Portable exports.** `woma export` writes a hand-editable `environment.yaml` with portable sources, and local paths relative to the output file. A local package that is a clean checkout of a pushed commit is exported as that Git commit. `woma export --pack FILE` writes a single `.tgz` including local-only packages. `woma create -f` accepts environment files, locks and packs; environment files may list bare sources.
+- **Plugins enabled on install.** Installing a native plugin now enables it. Later native enable/disable choices are preserved.
+- **Sign-in guidance.** `create` and `doctor` show how each agent will authenticate, and recommend tokens exported in the shell (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`) to share one sign-in across environments. Woma still never reads or copies credentials.
+- **Friendlier CLI output.** `list`, `install`, `update` and `env list` are clearer.
+- **License.** MIT.
+- **Breaking: new layout.** Environment format v3: agent homes move to `home/claude` and `home/codex`, and recipes use `agents:` instead of `harness:`/`runtime:`. Woma 0.7 environments are listed and can still be exported; recreate them with `woma export -p OLD --explicit -f old.lock && woma create -n NEW -f old.lock`. Woma 0.7 locks and recipes are accepted by `create -f`; their pinned agent release is ignored.
+- **Breaking: removed files.** The `woma-project-memory` example package, `docs/project-memory.md`, and the v1 `.woma/` project files in this repository are gone. Woma does not manage Memory.
 
 ## 0.7.0 - 2026-09-12
 

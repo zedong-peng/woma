@@ -2,10 +2,11 @@ if (!process.env.CI) {
   process.stdout.write(`
 Woma installed.
 
-Initialize shell integration:
+Enable woma activate/deactivate in your shell:
   woma init
 
-Then restart your shell.
+Then open a new shell and create an environment:
+  woma create -n research claude codex
 
 `);
 }

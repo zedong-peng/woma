@@ -1,8 +1,10 @@
 import path from "node:path";
+import { agentHome } from "./native.js";
 import { shellQuote } from "./shell.js";
 import type { EnvironmentState } from "./types.js";
 
-const variables = ["PATH", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "DISABLE_AUTOUPDATER", "CODEX_MANAGED_BY_NPM", "WOMA_PREFIX", "WOMA_ENV"] as const;
+// Selecting an environment only points the installed agents at its homes; PATH and the agents themselves are untouched.
+const variables = ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "WOMA_PREFIX", "WOMA_ENV"] as const;
 const saved = (key: string) => `WOMA_SAVED_${key}`;
 
 export function originalEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -27,14 +29,8 @@ export function selectedEnvironment(prefix: string, state: EnvironmentState, env
   result.WOMA_SHELL_ACTIVE = "1";
   result.WOMA_PREFIX = prefix;
   result.WOMA_ENV = state.lock.recipe.name;
-  result.PATH = `${path.join(prefix, "bin")}${result.PATH === undefined ? "" : `${path.delimiter}${result.PATH}`}`;
-  if (state.lock.recipe.harness === "codex") {
-    result.CODEX_HOME = path.join(prefix, "home");
-    result.CODEX_MANAGED_BY_NPM = "1";
-  } else {
-    result.CLAUDE_CONFIG_DIR = path.join(prefix, "home");
-    result.DISABLE_AUTOUPDATER = "1";
-  }
+  if (state.lock.recipe.agents.includes("codex")) result.CODEX_HOME = path.join(prefix, agentHome("codex"));
+  if (state.lock.recipe.agents.includes("claude")) result.CLAUDE_CONFIG_DIR = path.join(prefix, agentHome("claude"));
   return result;
 }
 

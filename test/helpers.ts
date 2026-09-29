@@ -2,10 +2,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "
 import os from "node:os";
 import path from "node:path";
 import type { TestContext } from "node:test";
-import { publishContent } from "../src/content.js";
-import { loadPackage } from "../src/package.js";
-import { runtimePlatform, type RuntimeProvider } from "../src/runtime.js";
-import type { Harness } from "../src/types.js";
+import type { Agent as Harness } from "../src/types.js";
 
 async function makeWritable(root: string): Promise<void> {
   const info = await lstat(root).catch(() => undefined);
@@ -23,7 +20,8 @@ export async function removeTestTree(root: string): Promise<void> {
   await rm(root, { recursive: true, force: true });
 }
 
-export async function fixture(t: TestContext) {
+/** A temporary Woma home. Unless `realAgents` is set, stand-in claude and codex executables come first on PATH. */
+export async function fixture(t: TestContext, options: { realAgents?: boolean } = {}) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "woma-v2-")));
   const previous = process.env.WOMA_HOME;
   process.env.WOMA_HOME = path.join(root, "state");
@@ -31,23 +29,17 @@ export async function fixture(t: TestContext) {
     if (previous === undefined) delete process.env.WOMA_HOME; else process.env.WOMA_HOME = previous;
     await removeTestTree(root);
   });
-  const provider: RuntimeProvider = {
-    async resolve(harness, requested) {
-      const version = requested === "latest" ? harness === "codex" ? "0.154.0" : "2.1.269" : requested;
-      const source = path.join(root, `runtime-${harness}-${version}`);
-      await mkdir(path.join(source, "platform"), { recursive: true });
-      await writeFile(path.join(source, "platform/runner"), `#!/bin/sh\nprintf '%s\\n' '${harness} ${version}'\n`, { mode: 0o755 });
-      const name = harness === "codex" ? "@openai/codex" : "@anthropic-ai/claude-code";
-      await writeFile(path.join(source, "platform/package.json"), JSON.stringify({ name, version }));
-      const cached = await publishContent(source);
-      return { root: cached.root, record: { name: harness, kind: "runtime", version, integrity: cached.integrity,
-        source: { type: "runtime", provider: "npm", platform: runtimePlatform(), executable: "platform/runner", artifacts: [{ name, version, url: `https://registry.npmjs.org/${name}/-/fixture.tgz`, integrity: `sha512-${Buffer.alloc(64).toString("base64")}`, directory: "platform" }] },
-        dependencies: [], harnesses: { [harness]: "*" }, skills: [],
-      } };
-    },
-    restore: (record) => loadPackage(record),
-  };
-  return { root, provider, prefix: path.join(root, "env") };
+  const agents = path.join(root, "agents");
+  if (!options.realAgents) {
+    await mkdir(agents);
+    for (const [agent, version] of [["claude", "2.1.269 (Claude Code)"], ["codex", "codex-cli 0.154.0"]] as const) {
+      await writeFile(path.join(agents, agent), `#!/bin/sh\nprintf '%s\\n' '${version}'\n`, { mode: 0o755 });
+    }
+    const previousPath = process.env.PATH ?? "";
+    process.env.PATH = `${agents}${path.delimiter}${previousPath}`;
+    t.after(() => { process.env.PATH = previousPath; });
+  }
+  return { root, agents, prefix: path.join(root, "env") };
 }
 
 export async function skill(root: string, name = path.basename(root), body = "Original content"): Promise<string> {

@@ -1,7 +1,7 @@
 {
   "name": "@x19-507/woma",
-  "version": "0.7.0",
-  "description": "Reproducible environments and packages for coding agents.",
+  "version": "1.0.0",
+  "description": "Conda for AI coding agents: give your Claude Code and Codex named, isolated sets of Skills, plugins and MCP servers, and recreate the whole harness from one file.",
   "type": "module",
   "bin": {
     "woma": "dist/src/cli.js"
@@ -9,18 +9,12 @@
   "files": [
     "dist/src",
     "docs",
-    "examples/performance-engineering",
-    "examples/reproducibility-core",
-    "examples/paper-search",
-    "examples/idea-gen",
-    "examples/exp-design",
-    "examples/auto-research",
-    "examples/woma-package-builder",
-    "examples/native-codex-review",
-    "examples/native-claude-review",
+    "examples",
     "scripts/postinstall.mjs",
     "CHANGELOG.md",
     "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
     "SECURITY.md"
   ],
   "scripts": {
@@ -37,16 +31,20 @@
   },
   "keywords": [
     "agent",
+    "ai-agent",
+    "harness",
     "skills",
+    "agent-skills",
     "mcp",
-    "codex",
     "claude-code",
-    "woma",
+    "codex",
+    "conda",
     "environment",
     "package-manager",
-    "reproducibility"
+    "reproducibility",
+    "plugins"
   ],
-  "license": "UNLICENSED",
+  "license": "MIT",
   "publishConfig": {
     "access": "public"
   },

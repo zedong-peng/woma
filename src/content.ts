@@ -32,9 +32,17 @@ export async function setTreeWritable(root: string, writable: boolean): Promise<
   }
 }
 
+async function setDirectoriesWritable(root: string): Promise<void> {
+  const info = await lstat(root);
+  if (!info.isDirectory()) return;
+  await chmod(root, (info.mode & 0o777) | 0o700);
+  for (const name of await readdir(root)) await setDirectoriesWritable(path.join(root, name));
+}
+
+/** Delete a tree. Only directory modes change, so read-only files are removed without being made writable. */
 export async function removeTree(root: string): Promise<void> {
-  if (!(await pathExists(root))) return;
-  await setTreeWritable(root, true);
+  if (!(await lstat(root).catch(() => undefined))) return;
+  await setDirectoriesWritable(root);
   await rm(root, { recursive: true, force: true });
 }
 

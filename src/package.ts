@@ -1,20 +1,47 @@
-import { readFile, readdir, realpath } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { satisfies, valid } from "semver";
-import { cachePath, publishContent, validateTree, verifyContent } from "./content.js";
-import { pathExists } from "./fs.js";
+import { extract } from "tar";
+import { cachePath, publishContent, removeTree, validateTree, verifyContent } from "./content.js";
+import { hashDirectory, pathExists } from "./fs.js";
+import { commandOutput } from "./process.js";
+import { resolveSelection } from "./registry.js";
 import { loadManifest, nameSchema, skillMetadata } from "./schema.js";
-import { canonicalSource, dependencySource, gitIntent, gitLocator, materializeSource } from "./source.js";
-import { verifyRuntimeIdentity } from "./runtime.js";
-import type { Dependency, EnvironmentLock, Harness, InstalledPackage, PackageRecord, PackageSource, RootRequirement } from "./types.js";
+import { canonicalSource, dependencySource, gitIntent, gitLocator, materializeSource, portableRemote } from "./source.js";
+import { AGENTS, type Agent, type Dependency, type EnvironmentLock, type GitOrigin, type InstalledPackage, type PackageRecord, type PackageSource, type RootRequirement } from "./types.js";
 
-export async function describePackage(root: string, source: Exclude<PackageSource, { type: "runtime" }>, integrity: string): Promise<PackageRecord> {
+async function skillSubdirectories(root: string): Promise<{ directories: string[]; missing: string[] }> {
+  const directories: string[] = [];
+  const missing: string[] = [];
+  for (const entry of (await readdir(root, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    if (await pathExists(path.join(root, entry.name, "SKILL.md"))) directories.push(entry.name);
+    else missing.push(entry.name);
+  }
+  return { directories, missing };
+}
+
+async function layoutHint(root: string): Promise<string> {
+  const found: string[] = [];
+  async function walk(relative: string, depth: number) {
+    if (found.length >= 5 || depth > 4) return;
+    for (const entry of await readdir(path.join(root, relative), { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const child = relative ? `${relative}/${entry.name}` : entry.name;
+      if (await pathExists(path.join(root, child, "SKILL.md"))) found.push(child); else await walk(child, depth + 1);
+    }
+  }
+  await walk("", 0);
+  return found.length ? ` Skills were found in subdirectories: ${found.join(", ")}. Install one of those directories instead.` : "";
+}
+
+export async function describePackage(root: string, source: PackageSource, integrity: string): Promise<PackageRecord> {
   await validateTree(root);
   const manifest = await loadManifest(root);
-  const plugins: { harness: Harness; file: string }[] = [];
-  for (const harness of ["codex", "claude"] as const) {
+  const plugins: { harness: Agent; file: string }[] = [];
+  for (const harness of AGENTS) {
     const file = path.join(root, `.${harness}-plugin`, "plugin.json");
     if (await pathExists(file)) plugins.push({ harness, file });
   }
@@ -37,77 +64,116 @@ export async function describePackage(root: string, source: Exclude<PackageSourc
   }
   const skills: PackageRecord["skills"] = [];
   if (!plugin) {
-    if (await pathExists(path.join(root, "SKILL.md"))) {
-      const metadata = skillMetadata(await readFile(path.join(root, "SKILL.md"), "utf8"), root);
-      skills.push({ name: metadata.name, path: "." });
-    } else if (await pathExists(path.join(root, "skills"))) {
-      for (const entry of (await readdir(path.join(root, "skills"), { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-        if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-        const skillPath = `skills/${entry.name}`;
-        const file = path.join(root, skillPath, "SKILL.md");
-        if (!(await pathExists(file))) throw new Error(`Skill directory has no SKILL.md: ${file}`);
-        const metadata = skillMetadata(await readFile(file, "utf8"), file);
-        skills.push({ name: metadata.name, path: skillPath });
-      }
+    async function addSkill(skillPath: string) {
+      const file = path.join(root, skillPath, "SKILL.md");
+      skills.push({ name: skillMetadata(await readFile(file, "utf8"), file).name, path: skillPath });
+    }
+    if (await pathExists(path.join(root, "SKILL.md"))) await addSkill(".");
+    else if (await pathExists(path.join(root, "skills"))) {
+      const { directories, missing } = await skillSubdirectories(path.join(root, "skills"));
+      if (missing.length) throw new Error(`Skill directory has no SKILL.md: ${path.join(root, "skills", missing[0]!, "SKILL.md")}`);
+      for (const directory of directories) await addSkill(`skills/${directory}`);
+    } else if (!manifest.dependencies.length) {
+      // A directory whose children are Skills, e.g. a folder collected from several sources.
+      const { directories, missing } = await skillSubdirectories(root);
+      if (directories.length && !missing.length) for (const directory of directories) await addSkill(directory);
     }
   }
   const sourceName = source.type === "local" ? path.basename(source.path) : path.posix.basename(source.subdirectory ?? source.url.replace(/\.git$/, ""));
-  const name = nameSchema.parse(manifest.name ?? plugin?.name ?? (skills.length === 1 && skills[0]?.path === "." ? skills[0].name : sourceName.toLowerCase().replace(/[^a-z0-9._-]/g, "-")));
-  if (name === "codex" || name === "claude") throw new Error(`Package name ${name} is reserved for a runtime`);
+  const name = nameSchema.parse(manifest.name ?? plugin?.name ?? (skills.length === 1 && skills[0]?.path === "." ? skills[0].name : sourceName.toLowerCase().replace(/[^a-z0-9._-]/g, "-").replace(/^[^a-z0-9]+/, "")));
+  if ((AGENTS as readonly string[]).includes(name)) throw new Error(`Package name ${name} is reserved for an agent`);
   if (manifest.name && plugin && manifest.name !== plugin.name) throw new Error("woma.yaml and the native plugin name must agree");
   if (manifest.version && nativeVersion && manifest.version !== nativeVersion) throw new Error("woma.yaml and the native plugin version must agree");
   const version = manifest.version ?? nativeVersion ?? `0.0.0+${integrity.slice(7, 19)}`;
-  if (!plugin && skills.length === 0 && manifest.dependencies.length === 0) throw new Error(`Unsupported package layout at ${root}: expected SKILL.md, skills/, a native plugin, or a dependency collection`);
+  if (!plugin && skills.length === 0 && manifest.dependencies.length === 0) throw new Error(`Unsupported package layout at ${root}: expected SKILL.md, skills/, directories of Skills, a native plugin, or a dependency collection.${await layoutHint(root)}`);
   if (new Set(skills.map((s) => s.name)).size !== skills.length) throw new Error(`Duplicate Skill names in ${name}`);
   if (new Set(manifest.dependencies.map((d) => d.name)).size !== manifest.dependencies.length) throw new Error(`Duplicate dependencies in ${name}`);
   const harnesses = manifest.harnesses ?? (plugin ? { [plugin.harness]: "*" } : { codex: "*", claude: "*" });
-  if (plugin && Object.keys(harnesses).some((h) => h !== plugin.harness)) throw new Error(`Native ${plugin.harness} plugin cannot target another harness`);
+  if (plugin && Object.keys(harnesses).some((h) => h !== plugin.harness)) throw new Error(`Native ${plugin.harness} plugin cannot target another agent`);
   return { name, version, kind: plugin ? "plugin" : skills.length ? "skill" : "collection", source, integrity,
     dependencies: manifest.dependencies.map((d) => ({ ...d, source: dependencySource(d.source, source) })), harnesses, skills, ...(plugin ? { plugin } : {}),
   };
 }
 
-export async function resolvePackage(input: string, cwd = process.cwd()): Promise<InstalledPackage & { intent: string }> {
-  const source = await materializeSource(input, cwd);
+async function git(cwd: string, ...args: string[]): Promise<string> { return commandOutput("git", args, { cwd, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }); }
+
+/**
+ * Find a pushed commit whose tree at this directory is byte-identical to the snapshot.
+ * Such local packages can be exported as Git sources that others can fetch.
+ */
+export async function detectOrigin(root: string, integrity: string): Promise<GitOrigin | undefined> {
+  let top: string;
+  try { top = await realpath(await git(root, "rev-parse", "--show-toplevel")); } catch { return undefined; }
   try {
-    if (await pathExists(path.join(source.root, ".woma/state.json")) || path.basename(source.root) === "home" && await pathExists(path.join(source.root, "../.woma/state.json"))) {
+    const subdirectory = path.relative(top, root).split(path.sep).join("/");
+    if (subdirectory.startsWith("..")) return undefined;
+    const scope = subdirectory || ".";
+    if (await git(top, "status", "--porcelain", "--untracked-files=all", "--", scope)) return undefined;
+    const commit = await git(top, "rev-parse", "HEAD");
+    if (!(await git(top, "branch", "-r", "--contains", commit))) return undefined;
+    const upstream = await git(top, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").catch(() => "origin/");
+    const remote = upstream.split("/")[0] || "origin";
+    const url = portableRemote(await git(top, "remote", "get-url", remote));
+    if (!url) return undefined;
+    const temp = await mkdtemp(path.join(os.tmpdir(), "woma-origin-"));
+    try {
+      const archive = path.join(temp, "tree.tar");
+      await git(top, "archive", "--format=tar", "-o", archive, subdirectory ? `${commit}:${subdirectory}` : commit);
+      const tree = path.join(temp, "tree");
+      await mkdir(tree);
+      await extract({ file: archive, cwd: tree, strict: true, preserveOwner: false });
+      if (await hashDirectory(tree) !== integrity) return undefined;
+    } finally { await removeTree(temp); }
+    return { url, commit, ...(subdirectory ? { subdirectory } : {}) };
+  } catch { return undefined; }
+}
+
+export async function resolvePackage(input: string, cwd = process.cwd()): Promise<InstalledPackage & { intent: string }> {
+  const source = await materializeSource(input, cwd, resolveSelection);
+  try {
+    const insideEnvironment = await pathExists(path.join(source.root, "../.woma/state.json")) || path.basename(path.dirname(source.root)) === "home" && await pathExists(path.join(source.root, "../../.woma/state.json"));
+    if (await pathExists(path.join(source.root, ".woma/state.json")) || insideEnvironment) {
       throw new Error("An environment or native home is not a package source; install an individual Skill or Plugin directory");
     }
-    const nativeHomes = [process.env.CODEX_HOME, process.env.CLAUDE_CONFIG_DIR, process.env.WOMA_PREFIX ? path.join(process.env.WOMA_PREFIX, "home") : undefined,
-      path.join(os.homedir(), ".codex"), path.join(os.homedir(), ".claude")].filter((v): v is string => Boolean(v));
+    const nativeHomes = [process.env.CODEX_HOME, process.env.CLAUDE_CONFIG_DIR, path.join(os.homedir(), ".codex"), path.join(os.homedir(), ".claude")].filter((v): v is string => Boolean(v));
     for (const home of nativeHomes) {
       if (source.root === await realpath(home).catch(() => path.resolve(home))) throw new Error("A native home is not a package source; install an individual Skill or Plugin directory");
     }
-    for (const file of ["auth.json", ".credentials.json", "history.jsonl", "session_index.jsonl"]) {
+    for (const file of ["auth.json", ".credentials.json", "history.jsonl", "session_index.jsonl", ".claude.json"]) {
       if (await pathExists(path.join(source.root, file))) throw new Error(`Native state cannot enter a package snapshot (${file}); install an individual Skill or Plugin directory`);
     }
-    const layouts = ["SKILL.md", "skills", "woma.yaml", ".codex-plugin/plugin.json", ".claude-plugin/plugin.json"];
-    if (!(await Promise.all(layouts.map((file) => pathExists(path.join(source.root, file))))).some(Boolean)) throw new Error(`Unsupported package layout at ${source.root}: expected SKILL.md, skills/, a native plugin, or a dependency collection`);
     // Describe the immutable snapshot so changes to a local source cannot race metadata validation.
     const cached = await publishContent(source.root);
-    return { root: cached.root, record: await describePackage(cached.root, source.source, cached.integrity), intent: source.intent };
+    const record = await describePackage(cached.root, source.source, cached.integrity);
+    const origin = source.source.type === "local" ? await detectOrigin(source.root, cached.integrity) : undefined;
+    return { root: cached.root, record: { ...record, ...(origin ? { origin } : {}) }, intent: source.intent };
   } finally { await source.cleanup(); }
 }
 
 export async function loadPackage(record: PackageRecord, restore = false): Promise<InstalledPackage> {
   const root = cachePath(record.integrity);
   if (!(await pathExists(root))) {
-    if (!restore || record.source.type !== "git") throw new Error(`Missing snapshot for ${record.name}@${record.version}: ${root}. Local snapshots cannot be reconstructed from a changed source.`);
-    const restored = await resolvePackage(gitIntent({ url: record.source.url, ref: record.source.commit, subdirectory: record.source.subdirectory }));
+    const location = record.source.type === "git" ? record.source : record.origin;
+    if (!restore || !location) throw new Error(`Missing snapshot for ${record.name}@${record.version}: ${root}. Local snapshots cannot be reconstructed from a changed source; share local packages with woma export --pack.`);
+    const restored = await resolvePackage(gitIntent({ url: location.url, ref: location.commit, subdirectory: location.subdirectory }));
     if (restored.record.integrity !== record.integrity) throw new Error(`Source integrity mismatch for ${record.name}`);
   }
   await verifyContent(root, record.integrity, true);
-  if (record.source.type === "runtime") await verifyRuntimeIdentity(record, root);
-  else {
-    const actual = await describePackage(root, record.source, record.integrity);
-    if (!isDeepStrictEqual(actual, record)) throw new Error(`Locked package metadata does not match its snapshot: ${record.name}`);
-  }
+  const { origin: _origin, ...expected } = record;
+  const actual = await describePackage(root, record.source, record.integrity);
+  if (!isDeepStrictEqual(actual, expected)) throw new Error(`Locked package metadata does not match its snapshot: ${record.name}`);
   return { root, record };
 }
 
-export function assertCompatible(record: PackageRecord, harness: Harness, runtimeVersion: string): void {
-  const constraint = record.harnesses[harness];
-  if (!constraint || !satisfies(runtimeVersion, constraint, { includePrerelease: true })) throw new Error(`Package ${record.name} is incompatible with ${harness}@${runtimeVersion}`);
+/** The agents that receive a package: those it supports that are in the environment. A package no agent can use is an error. */
+export function packageTargets(record: PackageRecord, agents: readonly Agent[]): Agent[] {
+  if (record.plugin) {
+    if (!agents.includes(record.plugin.harness)) throw new Error(`Package ${record.name} is a ${record.plugin.harness} plugin; this environment has no ${record.plugin.harness}. Add it with woma install ${record.plugin.harness}`);
+    return [record.plugin.harness];
+  }
+  const targets = AGENTS.filter((agent) => agents.includes(agent) && record.harnesses[agent] !== undefined);
+  if (record.kind === "skill" && !targets.length) throw new Error(`Package ${record.name} supports ${Object.keys(record.harnesses).join(", ")}, none of which is in this environment`);
+  return targets;
 }
 
 function checkDependency(dependency: Dependency, record: PackageRecord): void {
@@ -119,6 +185,11 @@ export function assertSourceIdentity(record: PackageRecord, intent: string): voi
   const canonical = canonicalSource(intent);
   const git = gitLocator(canonical);
   const source = record.source;
+  // A named source resolves through a marketplace or Skill search; the lock records where it led.
+  if (git?.select) {
+    if (source.type !== "git") throw new Error(`Locked source mismatch for ${record.name}: ${intent}`);
+    return;
+  }
   const matches = git
     ? source.type === "git" && source.url === git.url && (source.subdirectory ?? ".") === (git.subdirectory ?? ".") && (!/^[a-f0-9]{40,64}$/.test(git.ref ?? "") || git.ref === source.commit)
     : source.type === "local" && source.path === canonical.slice(5);
@@ -143,7 +214,6 @@ export function dependencyOrder(lock: EnvironmentLock): string[] {
     }
     visiting.delete(name); visited.add(name); ordered.push(name);
   }
-  visit(lock.recipe.harness);
   for (const root of lock.recipe.packages) {
     visit(root.name);
     assertSourceIdentity(lock.packages[root.name]!, root.source);
