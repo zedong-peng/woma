@@ -1,31 +1,43 @@
-# Minimal v2 Package Format
+# Woma Package Format
 
-Accepted sources are a local directory (or standalone SKILL.md path) and Git. A Skill package contains `SKILL.md` with `name` and `description` frontmatter, or direct `skills/*/SKILL.md` entries. Native Plugins use exactly one explicit `.codex-plugin/plugin.json` or `.claude-plugin/plugin.json`. Preserve their original contents. Woma does not support dual/universal overlays or native dependency resolution in the initial adapters.
+A package is an ordinary directory in any of these native layouts. Woma never rewrites it.
 
-Optional metadata:
+| Layout | Installs as |
+| --- | --- |
+| `SKILL.md` with `name` and `description` frontmatter, plus companion files | one Skill, for every agent in the environment |
+| `skills/*/SKILL.md` | a Skill collection |
+| a directory whose child directories each contain `SKILL.md` | a Skill collection |
+| `.claude-plugin/plugin.json` | a native Claude Code plugin (Claude only) |
+| `.codex-plugin/plugin.json` | a native Codex plugin (Codex only) |
+| `woma.yaml` with only `dependencies` | a collection of other packages |
+
+Sources are local paths, `gh:OWNER/REPO[/PATH][#REF]`, GitHub browser URLs, `NAME@OWNER/REPO[#REF]` (a Skill or marketplace plugin by name), and Git URLs. Git refs lock to exact commits.
+
+Optional `woma.yaml`:
 
 ```yaml
 name: research
 version: 1.0.0
-harnesses:
-  codex: '>=0.154.0'
+harnesses:          # agents that may use the package; omit to allow both
+  claude: '*'
+  codex: '*'
 dependencies:
   - name: review
     version: ^1.0.0
     source: ../review
 ```
 
-Only `name`, `version`, `harnesses`, and `dependencies` are accepted. Do not add `apiVersion`, `kind`, `metadata`, `spec`, `skills`, `mcpServers`, `hooks`, `entrypoints`, or `requirements`. Existing native packages need no Woma manifest. Names/versions must agree with native metadata when both are provided.
+Only `name`, `version`, `harnesses`, and `dependencies` are accepted. MCP servers and Hooks belong in a native plugin, or in the environment (`woma mcp add`). Names/versions must agree with native plugin metadata when both are present.
 
-Names use lowercase letters, digits, dots, underscores, and hyphens, beginning with a letter or digit, up to 80 characters. Runtime names `codex` and `claude` are reserved. Versions are semantic versions. Each dependency provides name/source and an optional semver constraint (default `*`). Local relative dependencies resolve beside the declaring package; Git relative dependencies stay in the same locked repository commit.
+Names use lowercase letters, digits, dots, underscores, and hyphens, up to 80 characters. `claude` and `codex` are reserved. Local relative dependencies resolve beside the declaring package; Git relative dependencies stay in the same locked commit.
 
-Every package file is snapshotted except `.git`, `.woma`, and `.DS_Store`. Symlinks and special files are unsupported. Native configuration, credentials, sessions, caches, Memory, external tools/services, and model behavior are not package content or exportable environment state.
+Every file is snapshotted except `.git`, `.woma`, and `.DS_Store`. Symlinks and special files are rejected. Credentials, native settings, sessions, caches and Memory are never package content.
 
 ```bash
-woma create -n authoring codex@0.154.0
+woma create -n authoring claude codex
 woma install -n authoring ./my-package
 woma doctor -n authoring
-woma export -n authoring --explicit -f woma.lock
+woma export -n authoring -f environment.yaml
 ```
 
-For Claude native Plugins use a Claude environment with runtime >=2.1.269. New plugins install disabled and retain native enable/disable controls. Full upstream manifest and behavior are preserved within the verified native contract.
+Native plugins need Claude Code >=2.1.269 or Codex >=0.154.0. They are enabled on install; later native enable/disable choices are preserved.

@@ -1,65 +1,88 @@
-# Package Format
+# Environment and Package Files
 
-Woma recognizes the native package content first. It does not synthesize or rewrite an upstream capability manifest.
+## Environment file (`environment.yaml`)
 
-## Accepted layouts
+The environment file is the shareable, hand-editable description of a harness, like Conda's `environment.yml`. `woma export -f environment.yaml` writes it, and `woma create -n NAME -f environment.yaml` recreates the environment.
 
-```text
-review/SKILL.md                          # standalone Skill, with companions
-review/references/...
-
-toolkit/skills/review/SKILL.md            # direct Skill collection
-toolkit/skills/design/SKILL.md
-
-native/.codex-plugin/plugin.json         # Codex native Plugin
-native/.mcp.json
-native/hooks/hooks.json
-native/skills/review/SKILL.md
-
-native/.claude-plugin/plugin.json        # Claude native Plugin
-
-collection/woma.yaml                     # dependencies only
+```yaml
+agents: [claude, codex]     # at least one; Woma uses the installed agents and does not manage their versions
+packages:                   # direct packages; dependencies are resolved automatically
+  - pdf@anthropics/skills
+  - gh:anthropics/skills/skills/docx#main
+  - ./lab-skills            # relative to this file
+  - name: review            # the long form pins the expected package name
+    source: gh:me/review#v2.0.0
+mcp_servers:
+  github:
+    command: npx
+    args: [-y, "@modelcontextprotocol/server-github"]
+    env: { LOG_LEVEL: info }        # literal, non-secret values
+    env_vars: [GITHUB_TOKEN]        # passed from the user's shell; the value is never stored
+  docs:
+    url: https://mcp.example.com/mcp
+    bearer_token_env_var: DOCS_TOKEN
+    agents: [codex]                 # optional: only for these agents
 ```
 
-The initial adapter requires one explicit harness manifest. Dual manifests and universal root `plugin.json` layouts are rejected until their overlay/precedence rules have a verified adapter. Upstream native manifest fields, Hooks, MCP configuration, and file content are otherwise preserved. Plugins with native dependency declarations are rejected because Woma cannot prevent unlocked resolution through the native loader.
+`format: woma.environment/v3` and `name` are optional; exports include them. A server has either `command` (stdio) or `url` (streamable HTTP). Woma writes each server into the native configuration of each agent:
 
-Standalone and direct collection Skills require YAML frontmatter with a nonempty `name` and `description`. Skill names, package names, and environment names use lowercase letters, digits, dots, underscores, and hyphens, starting with a letter or digit, up to 80 characters. `codex` and `claude` are reserved runtime package names.
+| Field | Codex (`home/codex/config.toml`) | Claude Code (`home/claude/.claude.json`) |
+| --- | --- | --- |
+| `command`, `args`, `env` | `mcp_servers.NAME.{command,args,env}` | `mcpServers.NAME` with `type: stdio` |
+| `env_vars` | `mcp_servers.NAME.env_vars` | not needed, because stdio servers inherit Claude Code's environment |
+| `url` | `mcp_servers.NAME.url` | `mcpServers.NAME` with `type: http` |
+| `bearer_token_env_var` | `mcp_servers.NAME.bearer_token_env_var` | header `Authorization: Bearer ${NAME}` |
 
-Package trees are complete snapshots except `.git`, `.woma`, and `.DS_Store`. Symlinks and special files are rejected. Woma does not inspect native homes to discover packages: the source must be an explicitly supplied package directory. Export never reads this source again.
+An environment file records intent. Creating from it resolves floating refs (a branch, or no ref) at that moment, so two creations at different times can differ. For an exact copy, use the lock. Environment files written by Woma 0.7 (`harness:`/`runtime:`) are accepted; their agent version is ignored.
 
-## Optional woma.yaml
+## Lock (`woma.lock`)
+
+`woma export --explicit` writes JSON with `format: woma.lock/v3`, the environment file, and every package in the closure. For each package it records:
+
+- name, version and kind
+- source identity: a Git URL, commit and subdirectory, or a local path
+- SHA-256 snapshot integrity
+- dependency edges, agent constraints, and installation descriptors
+
+Creating from a lock verifies every digest and never upgrades anything. A missing Git snapshot is fetched at its locked commit. A missing local snapshot is an error; share local-only packages with a pack. Locks do not depend on the operating system, and they do not record agent versions: the agents are whatever is installed where the environment is created. Locks written by Woma 0.7 (`woma.lock/v2`) are accepted; their pinned agent release is ignored.
+
+## Pack (`.tgz`)
+
+`woma export --pack FILE` writes a gzip tar containing `woma-pack.json` (the exact lock) and `store/<sha256>/` (every package snapshot). `woma create -f FILE` imports and verifies the snapshots.
+
+## Packages
+
+Woma recognizes native layouts and never rewrites upstream content.
+
+```text
+review/SKILL.md                    # one Skill, with companion files
+toolkit/skills/*/SKILL.md          # a Skill collection
+folder/*/SKILL.md                  # a directory of Skill directories
+native/.claude-plugin/plugin.json  # a native Claude Code plugin
+native/.codex-plugin/plugin.json   # a native Codex plugin
+collection/woma.yaml               # dependencies only
+```
+
+Skills need YAML frontmatter with a `name` and a nonempty `description`. Skill, package and environment names use lowercase letters, digits, dots, underscores and hyphens, up to 80 characters. `claude` and `codex` are reserved.
+
+Skills are installed for every agent in the environment that the package supports. A native plugin is installed only for its own agent and requires that agent in the environment. A plugin needs exactly one explicit harness manifest. Universal root `plugin.json`, dual manifests, and native dependency declarations are rejected because the adapters cannot lock them.
+
+Package trees are complete snapshots except `.git`, `.woma` and `.DS_Store`. Symlinks and special files are rejected.
+
+### Optional `woma.yaml`
 
 ```yaml
 name: research
 version: 1.0.0
-harnesses:
-  codex: '>=0.154.0'
+harnesses:            # agents that may use this package; omit for both
+  claude: '*'
+  codex: '*'
 dependencies:
   - name: review
     version: ^1.0.0
     source: ../review
 ```
 
-These are the only supported fields. `dependencies` defaults to empty. `harnesses` maps supported harnesses to runtime semver constraints; omitted constraints allow both harnesses for Skills and only the native harness for a Plugin. Name/version default to native metadata or content-derived identity. A supplied name/version must agree with the native Plugin manifest.
+These are the only fields. When `harnesses` is present, the package goes only to the listed agents. Version ranges are accepted but not checked, because Woma does not manage agent versions. Dependencies declare `name`, `source` and an optional semver range. Local relative dependencies resolve beside the declaring package; relative dependencies of Git packages stay in the same locked commit.
 
-Each dependency declares `name`, `source`, and an optional semver `version` constraint (default `*`). Local relative paths resolve beside the declaring package. Repository-relative Git dependencies resolve inside the same exact commit; other Git dependencies may name their own source/ref. Absolute local dependencies from Git packages are rejected.
-
-Dependency cycles, source disagreements, name collisions, mismatched versions, duplicate Skills, conflicting installation paths, and incompatible harnesses fail before publication. Git submodules are rejected; supply complete local content or explicit package dependencies. Installing another package preserves existing resolutions. Explicit updates re-resolve only the selected package subtrees and check them against the whole closure.
-
-The previous `apiVersion/kind/metadata/spec` manifest is unsupported. Move native MCP and Hooks into a harness-native Plugin. Woma has no core MCP, Hook, entrypoint, or cross-harness translation language. Native Plugins may intentionally target one harness.
-
-## Recipe and lock
-
-```yaml
-format: woma.environment/v2
-name: research
-harness: codex
-runtime: latest
-packages:
-  - name: review
-    source: file:/absolute/path/to/review
-```
-
-A recipe captures direct intent and can resolve newer content when used to create an environment. A lock uses `format: woma.lock/v2`, contains that recipe, records the platform, and enumerates every package in the dependency closure. Each package records exact name/version/kind, source identity, SHA-256 snapshot integrity, dependency edges, harness constraints, and installation descriptors. Runtime sources additionally record the official provider, artifact names/versions/URLs/SHA-512 integrity, and executable path.
-
-Creating from a lock checks identities and content. It fetches only the locked Git commits or official runtime artifacts when needed. Missing local snapshots fail explicitly. It never substitutes current local content, upgrades a ref, or uses a system executable. A lock contains no native user configuration, plugin enable state, credentials, sessions, or Memory.
+Before anything is published, installation fails on any of these: dependency cycles, source disagreements, name collisions, version mismatches, duplicate Skills, conflicting installation paths, or no usable agent. Installing another package keeps existing resolutions. `woma update NAME` re-resolves only that package's subtree.

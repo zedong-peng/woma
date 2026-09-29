@@ -1,0 +1,15 @@
+# A research harness shared by Claude Code and Codex.
+#   woma create -n research -f environment.yaml
+agents: [claude, codex]     # uses the Claude Code and Codex you installed
+packages:
+  - pdf@anthropics/skills                   # a Skill by name from a GitHub repository (skills.sh)
+  - gh:anthropics/skills/skills/docx#main   # a directory in a repository, at a branch, tag or commit
+  - ../auto-research                        # a local package: paper-search, idea-gen, exp-design
+mcp_servers:
+  fetch:
+    command: uvx
+    args: [mcp-server-fetch]
+  github:
+    command: npx
+    args: [-y, "@modelcontextprotocol/server-github"]
+    env_vars: [GITHUB_TOKEN]                # read from your shell; the value is never written down

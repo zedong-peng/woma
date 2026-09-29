@@ -1,70 +1,102 @@
 # Woma Design
 
-## Product positioning
+## Positioning
 
-Woma is a Conda-like environment manager for AI agent harnesses.
+Woma is a Conda-like environment manager for AI coding agent harnesses.
 
-The product model is **AI agent = base model + harness**. The harness includes the CLI choice and version, Skills, MCP integrations, other native extensions, and the configuration that determines how those capabilities are used. Woma addresses the missing environment-management layer around this harness, giving a chosen setup an identity and a lifecycle for installation, switching, and reproduction.
+An AI agent is a base model plus a harness: the Skills, plugins, and MCP servers it can call. Woma gives a chosen harness an identity, isolates it from other harnesses, and gives it a lifecycle: create, install, switch, update, export and recreate.
 
-This positioning and the configuration scope below are the agreed design baseline. Configuration editing and capture, detailed design principles, and directory contracts remain under discussion. The v2 sections describe current implementation behavior.
+The 1.0 release is built around four user scenarios:
 
-## Agreed configuration scope
+1. **Share a harness.** Someone assembles Skills from GitHub, registries, plugin marketplaces and local folders, and others recreate exactly that setup from one file (`environment.yaml`, `woma.lock`, or a pack).
+2. **Isolate harnesses.** Separate work, such as paper writing and development, uses separate environments that evolve independently.
+3. **Share across agents.** Claude Code and Codex in the same environment use the same Skills and MCP servers.
+4. **Attribute results.** An experiment or evaluation can name the exact harness it ran with. Direct Harbor integration is planned.
 
-Environment export and restoration must include non-sensitive MCP connection configuration, launch arguments, and plugin enablement state alongside the CLI and installed packages. These values help define the selected harness setup; restoring the same packages alone does not restore that setup.
+## Scope
 
-This is a target requirement pending implementation. Current v2 exports preserve MCP definitions contained in package snapshots, but omit MCP settings in native user configuration and native plugin enablement state.
+An environment contains:
 
-Credential values are outside this portable configuration scope. How credentials are referenced and supplied locally, how portable fields are selected, and how native configuration edits are captured remain open design questions. Restoring connection configuration and command arguments does not itself reproduce an external service or provision an external executable.
+- one or more agents (Claude Code, Codex) to wire up. Woma uses the agents installed on the user's PATH and does not download, pin or update them
+- packages: Skills, native plugins, and dependency collections, each locked to a Git commit or a content snapshot
+- MCP servers, with secrets referenced by environment-variable name
 
-## Current v2 implementation
+Model, provider and permission settings, sign-in, sessions, caches, Memory, project configuration, external executables and remote services are outside the environment. The agent or the user owns them. Credential values never enter an environment file, lock or pack.
 
-Woma manages a harness installation environment: its fixed executable release, installed extensions, shell selection, and reproducible managed content. Its two user objects are Environment and Package.
+## Conda reference
 
-### Conda reference
+[Conda environments](https://docs.conda.io/projects/conda/en/latest/user-guide/concepts/environments.html) provide the user model: a directory holds an independently evolving installation set, a name locates it, and activation selects it for a shell. Woma follows the `create`, `install`, `update`, `remove`, `list`, `search`, `env list`, `activate`/`deactivate`, `run`, `export` and `-n`/`-p` conventions. `environment.yaml`, `export --explicit` and `export --pack` correspond to `environment.yml`, `conda list --explicit` and `conda-pack`. The shared content store corresponds to Conda's package cache.
 
-[Conda environments](https://docs.conda.io/projects/conda/en/latest/user-guide/concepts/environments.html) provide the primary user model: a directory contains an independently evolving installation set, a name locates that prefix, and activation selects it for a shell. Woma follows `create`, `install`, `update`, `remove`, `list`, `env list`, `activate/deactivate`, `run`, and `-n/-p` conventions.
+Package identity follows Conda's "package from a channel at a version" idea. A Skill is identified by its source (a repository and path, a name in a repository or marketplace, or a local directory) and a version (a ref locked to a commit), and it is verified by a content hash. Registries (skills.sh, Claude Code plugin marketplaces, the openai/skills catalog) only resolve names to repository locations. Locking, verification, export and recreation are Woma's responsibility. The [Conda reference study](conda-reference.md) records how Conda treats foreign and manually edited packages.
 
-The [Conda reference study](conda-reference.md) examines local installation, foreign package metadata, manual edits, and untracked files. It informs the pending Woma discovery and adoption decisions.
+Intentional differences from Conda:
 
-Intentional differences: one harness per environment; no implicit base or auto-activation; no dependency solver that silently changes existing resolutions; native configuration and runtime state remain opaque; exact locks guarantee managed content on one platform, not model behavior. This release supports Bash/Zsh on macOS/Linux with Node.js and Git, not a general operating-system package environment.
+- **No base environment.** There is no implicit base and no auto-activation.
+- **No silent re-solving.** No dependency solver silently changes existing resolutions.
+- **Opaque native state.** Native configuration and runtime state stay opaque, except for the specific keys Woma owns.
+- **Content, not behavior.** Exact locks guarantee managed content, not agent versions or model behavior.
+- **Agents are not packages.** Conda installs the interpreter; Woma leaves Claude Code and Codex to the user's own installer and only points them at an environment.
 
-### Storage and responsibilities
+## Storage
 
 ```text
 $WOMA_HOME/
-  store/v2/<sha256>/...          immutable package content
+  store/v2/<sha256>/...         immutable, read-only package content
   environments/<name>/...       named prefixes
   prefixes.json                 known explicit prefixes
   locks/...                     serialized Woma writers
 
 <prefix>/
-  bin/codex                     stable executable launcher (or claude)
-  home/                         real native home and writable state
+  home/claude/                  CLAUDE_CONFIG_DIR: real native home and writable state
+  home/codex/                   CODEX_HOME
   .woma/
-    state.json                  authoritative lock + owned path inventory
-    runtime/...                 fixed runtime files
-    marketplace/...             Codex-only managed local plugin sources
-    transactions/...            temporary publication backups/journal
+    state.json                  authoritative lock and owned-path inventory
+    marketplace/...             Codex-only local plugin marketplace
+    transactions/...            temporary publication backups and journal
 ```
 
-The implementation separates source resolution (`source.ts`), package records and dependency traversal (`package.ts`), official Runtime Providers (`runtime.ts`), native registration adapters (`native.ts`), and environment publication (`transaction.ts`, `environment.ts`). Content hashing/caching and filesystem locks are reused across package kinds.
+The modules are split by responsibility:
 
-Sources resolve to immutable content. Each environment receives its own installation copies; writable native state is never shared through the content store. Skills use `home/skills/`. Native plugin paths follow verified harness contracts. No mutable config file is a symlink or a generation-swapped projection.
+| Module | Responsibility |
+| --- | --- |
+| `source.ts` | Source syntax, Git fetch |
+| `registry.ts` | Named resolution through marketplaces and Skill names; skills.sh search |
+| `package.ts` | Package records, agent targeting, dependency closure, Git-origin detection |
+| `agents.ts` | Finding the installed agents and their versions |
+| `native.ts` | Agent layout and native configuration edits |
+| `transaction.ts` | Publication |
+| `portable.ts` | Portable export and packs |
+| `environment.ts` | Environment operations |
 
-### Modification protocol
+Every environment gets its own copies of Skills and plugins, because agents may write to them and edits must be detectable as drift. Writable native state is never shared through the store, and no mutable configuration file is a symlink.
 
-Environment writers acquire a lock keyed by canonical prefix. They validate existing content, resolve requested changes and dependency constraints, verify snapshots, stage managed files, and prepare narrow native configuration edits. Every write checks the expected previous content. The authoritative state file is published last.
+## Modification protocol
 
-On an ordinary failure, Woma restores only the paths it changed. If an external writer changes a path during rollback, Woma preserves that path and its backup and reports incomplete rollback. Interrupted transactions block later mutations and are diagnosed by `doctor`. This is not a crash-safe database, and Woma does not promise concurrency safety with external writers that ignore its lock. Avoid concurrent native installers/config writers during package changes. Start a new harness process afterward.
+Environment writers take a lock keyed by the canonical prefix. A change runs in this order:
 
-Woma does not adopt source changes during activation, automatically import native content, copy entire configurations, or merge runtime state. Explicit adoption snapshots and validates the native installation before recording ownership. A different unmanaged installation occupying the destination fails without overwriting it.
+1. Validate existing content.
+2. Resolve requested changes and dependency constraints.
+3. Verify snapshots.
+4. Stage managed files.
+5. Prepare narrow native configuration edits: plugin registration and owned MCP entries.
 
-### Reproduction boundary
+Every write checks the expected previous content, and the authoritative state file is published last.
 
-Recipe export is direct intent. Explicit lock export is the exact managed closure and runtime artifacts. Exports read metadata only and provide neither a native-home backup nor an offline bundle. Local snapshots must still be in the content store; Git and runtime sources must remain retrievable at their locked identities if uncached. All digests are verified.
+On an ordinary failure, Woma restores only the paths it changed. If an external writer changes a path during rollback, Woma keeps that path and its backup and reports an incomplete rollback. An interrupted transaction blocks later changes and is reported by `doctor`. This is not a crash-safe database.
 
-Credentials, sessions, caches, Memory, model/provider settings, native plugin enable state, external commands, remote services, projects, and model behavior are outside the guarantee. Environment removal deletes the entire prefix, including those local states, with an explicit confirmation.
+Woma does not adopt source changes during activation, import native content automatically, copy whole configurations, or merge runtime state. Explicit adoption snapshots and validates a native installation before recording ownership. An owned MCP entry that was edited natively is never overwritten; Woma reports it instead.
 
-### Compatibility
+## Reproduction boundary
 
-v2 is a new format. v1 environments are retained, listed as legacy, and refused by v2 operations. There is no automatic migration. The old multi-target neutral-capability model, shared writable Skill roots, automatic base bootstrap, capture, generic MCP/Hook declarations, and configuration projections are removed. Native packages no longer need to be Agent-neutral.
+- **Environment file.** Records direct intent: agents, package sources and MCP servers.
+- **Lock.** Records the exact package closure. It does not depend on the operating system.
+- **Pack.** Adds every package snapshot, so local-only packages travel too.
+
+Exports read Woma metadata, except in one case: turning a pushed local checkout into a portable Git source reads Git metadata from that checkout. All digests are verified on recreation, and Git sources must remain retrievable at their locked commits unless cached. Recreating an environment does not reproduce agent versions, credentials, sessions, caches, Memory, provider settings, plugin enable choices, external commands, remote services, projects or model behavior.
+
+## Compatibility
+
+Environment format v3 (Woma 1.0) supports multiple agents per environment and MCP servers.
+
+- **Woma 0.7 (v2).** v2 environments are listed and can be exported. Their locks and recipes can be used with `create -f`. To change one, recreate it: `woma export -p OLD --explicit -f old.lock`, then `woma create -n NEW -f old.lock`. Sign-in and sessions are not carried over.
+- **v1.** v1 environments are listed as legacy and never touched.

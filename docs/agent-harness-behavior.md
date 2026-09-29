@@ -1,23 +1,26 @@
-# Harness Ownership and Behavior
+# What Woma Owns
 
-Each v2 environment contains one harness and one stable, real native `home/`. Activation changes shell variables and prepends its stable `bin/`; it neither loads Packages nor copies native state. Two shells select environments independently. Switching restores the saved original variables before applying the new selection, so environments do not stack. Deactivation restores unset variables as unset and empty variables as empty.
+Each environment contains one or more agents. Each agent has a stable, real native home: `home/claude` or `home/codex`. Activation sets each agent's home variable (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`) so the user's installed agents use the environment; `PATH` is untouched. It does not load packages or copy native state. Two shells can select different environments independently. Switching restores the saved original variables before applying the new selection, so environments never stack. Deactivation restores unset variables as unset and empty variables as empty.
 
-| Surface | Owner | Package operations | Exported |
+| Surface | Owner | What Woma does | Exported |
 | --- | --- | --- | --- |
-| Runtime files and launcher | Woma | Explicitly install/update; reject standalone removal | Exact source and integrity |
-| Installed Package Skills/Plugins | Woma | Snapshot, validate, update/remove, detect drift | Exact source and integrity |
-| Necessary plugin registration keys | Woma with local native enable choice | Structural edits with change checks | Reconstructed, enable choice omitted |
-| Other model/provider/permission settings | User/harness | Preserve | No |
-| Native installations outside Woma ownership | User/harness | Preserve; explicit native path adoption only | No |
-| Credentials, sessions, caches, Memory | User/harness | Preserve | No |
-| Project configuration, keychains, external commands/services | External | No management | No |
+| Agent executables (`claude`, `codex`) and their versions | User | Not installed, pinned or updated; `list` and `doctor` report what is on PATH | Only which agents the environment uses |
+| Installed Skills and plugins | Woma | Snapshot, validate, update and remove; detect drift | Source, commit and integrity |
+| MCP servers declared in the environment | Woma | Write the owned entries; report and preserve native edits | Yes, with secrets referenced by variable name only |
+| Plugin and marketplace registration keys | Woma, with the local enable choice | Structural edits with change checks | Reconstructed; enable choice not exported |
+| Model, provider, permission and other settings | User or agent | Preserve | No |
+| Native installations outside Woma ownership | User or agent | Preserve; adopt only when that path is installed explicitly | No |
+| Sign-in, sessions, caches, Memory | User or agent | Preserve; `doctor` reports only whether a sign-in exists | No |
+| Project configuration, keychains, external commands and services | External | Not managed | No |
 
-Native tools may install new content under the selected home. Woma does not scan for it or automatically add it to the recipe. Explicit `woma install <path>` snapshots and validates that package first. If the source is exactly the native destination that Woma would own, the existing content can be adopted. A different source colliding with unmanaged installed content fails.
+**Native installations.** Native tools may install new content under an agent home. Woma does not scan for it or add it to the environment automatically. `woma install <path>` snapshots and validates a package first. If the source is exactly the native destination Woma would own, the existing content is adopted. A different source colliding with unmanaged content fails.
 
-Atomic replacement of `config.toml` or `settings.json` by an editor is supported. These are ordinary files, never required links. Woma preserves unrelated fields and comments while editing its registration keys. Changing plugin enable state is local configuration, not content drift. Changing managed package files is drift; `doctor` reports it and update/remove preserve the changed files and fail.
+**MCP servers.** Servers added with `woma mcp add` or listed in an environment file are written into each agent's native configuration. A server with the same name that you added natively is replaced when you add it through Woma. If you later edit a Woma-owned server natively, `doctor` reports it, Woma refuses to overwrite it, and removing it from the environment leaves your edited entry in place.
 
-Woma serializes its own mutations. External native/config writers are not part of its lock protocol; changes are checked immediately before publishing and rollback preserves unexpected writes with a diagnostic and retained backup. Do not run installers concurrently. An already-running harness may cache discovered capabilities; restart it after a package change.
+**Configuration files.** Replacing `config.toml`, `settings.json` or `.claude.json` atomically in an editor is supported. These are ordinary files, never links. Changing a plugin's enable state is local configuration, not drift. Changing managed package files is drift: `doctor` reports it, and update and remove refuse to touch the changed files.
 
-New environments are clean: no default packages, automatic login migration, copied provider config, native-home scan, implicit activation, or enabled plugins. User/project/system configuration and OS keychains may still influence native behavior; selecting an environment is not a sandbox or a promise of account isolation outside the selected home.
+**Concurrency.** Woma serializes its own changes. External writers are not part of its lock protocol. Changes are checked immediately before publishing, and rollback keeps unexpected writes, together with a diagnostic and a retained backup. Do not run native installers during a Woma change. A running agent may keep its startup configuration, so start a new session after a change.
 
-`env remove` removes the complete inactive prefix, including credentials, sessions, caches, Memory, configuration, unmanaged installations, and any other local files. Its prompt explicitly lists this loss. Woma's shared immutable content store remains, but neither recipe nor lock is a backup of native state.
+**Clean by default.** New environments have no default packages. Woma does not migrate sign-in, copy provider configuration, scan native homes, activate implicitly, or read credentials. User, project and system configuration and OS keychains may still influence native behavior. Selecting an environment is not a sandbox.
+
+**Removing things.** Removing an agent (`woma remove codex`) deletes its launcher, its release link and Woma's installations for it, but keeps `home/codex` with its sign-in and sessions. `env remove` deletes the whole environment directory, including sign-in, sessions, caches, Memory, configuration and unmanaged installations; its prompt lists that loss. The shared content store remains, but neither an environment file nor a lock is a backup of native state.

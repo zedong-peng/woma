@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Offline-friendly tour of the main workflow in a throwaway WOMA_HOME.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,10 +12,13 @@ trap cleanup EXIT
 export WOMA_HOME="$demo_root/state"
 cd "$repo_root"
 npm run build >/dev/null
-node dist/src/cli.js create -n performance codex@0.154.0
-node dist/src/cli.js install -n performance ./examples/performance-engineering
-node dist/src/cli.js list -n performance
-node dist/src/cli.js doctor -n performance
-node dist/src/cli.js export -n performance --explicit -f "$demo_root/woma.lock"
-node dist/src/cli.js create -n reproduced -f "$demo_root/woma.lock"
-node dist/src/cli.js run -n reproduced codex --version
+woma() { node "$repo_root/dist/src/cli.js" "$@"; }
+woma create -n research claude codex ./examples/auto-research
+woma mcp add -n research fetch -- uvx mcp-server-fetch
+woma list -n research
+woma doctor -n research
+woma export -n research -f "$demo_root/environment.yaml"
+woma export -n research --pack "$demo_root/research.tgz"
+woma create -n colleague -f "$demo_root/research.tgz"
+woma run -n colleague codex --version
+woma run -n colleague claude --version

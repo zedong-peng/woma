@@ -1,96 +1,151 @@
 # Woma
 
-Woma is a Conda-like environment manager for AI agent harnesses. It pins the CLI version, installs native extensions, switches environments, and recreates managed content.
+**Conda for AI coding agents.** Woma gives every agent setup a name, keeps setups isolated from each other, and lets anyone recreate one from a single file.
 
-For a concrete walkthrough of the current workflow and its limitations, see the [user journey (中文)](docs/user-journey.md).
+[中文说明](README.zh-CN.md)
 
-An **Environment** is a directory containing one harness, its installed **Packages**, and an independent native home. Environment names locate directories. Codex and Claude Code are supported; Node.js (20.19+, 22.13+, or 24+), Git, and Bash or Zsh are prerequisites. Runtime availability depends on the official release and platform (macOS/Linux, x64/arm64).
+An AI coding agent is a model plus a *harness*: the Skills it has, its plugins, and the MCP servers it can call. The harness decides what the agent can do, but today it lives in scattered folders like `~/.claude` and `~/.codex`. You can't give it a name, you can't keep two of them side by side, and you can't hand it to a colleague. Woma treats a harness the way Conda treats a Python environment.
 
-## Daily use
+Woma uses the Claude Code and Codex you already installed; it does not download or pin them.
 
 ```bash
 npm install -g @x19-507/woma
-woma init
-# Open a new shell after initialization.
-woma create -n research codex
+woma init                      # shell integration for activate/deactivate; open a new shell afterwards
+
+woma create -n research claude codex pdf@anthropics/skills
 woma activate research
-woma install ./review-skill ./native-plugin
-codex
-woma update codex
-woma export -f environment.yaml
-woma export --explicit -f woma.lock
-woma create -n reproduced -f woma.lock
-woma run -n reproduced codex
-woma deactivate
+claude                         # or codex: same Skills, same MCP servers
 ```
 
-Published to the npm registry as `@x19-507/woma`. Official releases also include a prebuilt npm package and SHA-256 checksum on [GitHub Releases](https://github.com/zedong-peng/woma/releases).
+## What you can do with it
 
-Use `claude` instead of `codex` for a Claude Code environment. `codex@0.154.0` or `claude@2.1.269` selects an exact runtime release. Omitting the version resolves the official latest release once, then locks it. Only an explicit install/update changes that choice. System harness installations are never used as fallback.
+### 1. Share the harness you assembled, like `requirements.txt`
 
-Use `-n/--name` or `-p/--prefix` on environment commands. Without a target, commands use `WOMA_PREFIX` from the active shell or fail. There is no implicit `base`. `init` installs shell integration only; shell startup does not select an environment.
+You collected Skills from GitHub, the [skills.sh](https://skills.sh) directory, plugin marketplaces and your own folders, and you want others to have exactly the same setup.
 
 ```bash
-woma create -p ./envs/review claude@2.1.269
-woma activate -p ./envs/review
-woma list
-woma doctor
-woma env list
-woma remove review-skill
-woma deactivate
-woma env remove -p ./envs/review
+woma export -n research -f environment.yaml        # readable, editable, commit it to your repo
 ```
 
-## Packages
+```yaml
+agents: [claude, codex]
+packages:
+  - pdf@anthropics/skills
+  - skill-creator@anthropics/claude-plugins-official
+  - gh:me/lab-skills/paper-search#v1.2
+mcp_servers:
+  github:
+    command: npx
+    args: [-y, "@modelcontextprotocol/server-github"]
+    env_vars: [GITHUB_TOKEN]       # only the variable name is recorded, never its value
+```
 
-- **Runtime:** official npm release artifacts, platform identity, upstream SHA-512 integrity, and a SHA-256 content snapshot. Woma extracts release files directly without npm install scripts or global installation changes.
-- **Skill:** a standalone `SKILL.md` directory (or its `SKILL.md` path), or a directory with direct `skills/*/SKILL.md` entries. References, scripts, and other companion files are preserved.
-- **Native Plugin:** `.codex-plugin/plugin.json` or `.claude-plugin/plugin.json`, with its original manifest, MCP definitions, Hooks, and other content. Woma does not translate these capabilities.
-- **Collection:** an optional `woma.yaml` declaring dependencies, with no capability language of its own.
+A colleague runs `woma create -n research -f environment.yaml`. For a byte-for-byte copy (exact Git commits and content hashes), export the lock with `woma export --explicit -f woma.lock`. If some Skills exist only on your disk, `woma export --pack research.tgz` bundles them into one file.
 
-Existing native packages do not need a Woma manifest. An optional `woma.yaml` can supply `name`, `version`, `dependencies`, and `harnesses`. Sources are local directories and Git:
+### 2. Keep separate harnesses for separate work
+
+Writing a paper and shipping code call for different Skills and tools. Each environment has its own Skills, plugins, MCP servers, sign-in and history.
 
 ```bash
-woma install ./review-skill
-woma install gh:owner/repository --subdir plugins/review --commit FULL_COMMIT_SHA
-woma install 'https://example.org/team/review.git#main'
+woma create -n paper claude pdf@anthropics/skills docx@anthropics/skills
+woma create -n dev   claude codex ./my-team-skills
+woma activate paper    # switch like conda activate
+woma run -n dev codex  # or run one command without switching
 ```
 
-Local sources become immutable snapshots. Git refs become exact commits; the original requested ref remains in the recipe for explicit updates. New installations preserve existing dependency resolutions. `woma update review` refreshes that package and its dependency subtree, checking the whole environment for conflicts.
+Changing one environment never touches another. Every environment runs the `claude` and `codex` on your PATH; upgrade them the way you installed them (for example `claude update` or `npm install -g @openai/codex`).
 
-## Native ownership
+### 3. Give Claude Code and Codex the same Skills
 
-Each environment has a real, stable `home/`. Model, provider, permissions, credentials, sessions, caches, and Memory belong to the harness or user. Woma installs no default capabilities and imports no login or other native state. Packages installed directly by native tools stay unmanaged until explicitly adopted with `woma install <native-path>`.
+One environment can hold both agents. Install a Skill or an MCP server once and both agents get it.
 
-Woma owns specific installation paths and necessary registration keys. It preserves unrelated settings and supports editors that atomically replace configuration files. New plugins are installed disabled; enable them in the native tool when ready. Enablement is local configuration and is preserved on update, not exported.
+```bash
+woma create -n research claude codex
+woma install -n research yeet@openai/skills ./skills-from-everywhere
+woma mcp add -n research fetch -- uvx mcp-server-fetch
+```
 
-The initial verified plugin adapters support Codex >=0.154.0 and Claude Code >=2.1.269. Older runtimes can host plain Skills when available, but cannot receive native Plugins through an unverified adapter. Native plugin dependencies that the adapter cannot lock without native resolution are rejected. See [native adapters](docs/agent-adapters.md).
+Native plugins stay with the agent they were built for: a Claude Code plugin goes only to Claude Code, a Codex plugin only to Codex.
 
-Package files are independent environment copies, backed by a shared immutable content store. Editing managed files produces drift diagnostics; updates and removals preserve the changed files and fail. Restart the harness after modifying an environment.
+### 4. Know exactly which harness produced a result
 
-## Reproduction
+When you compare agents or run experiments, the harness is part of the experimental setup. `woma.lock` records the commit and content hash of every Skill and plugin, and the MCP configuration, so a result can be tied to one exact harness and rerun later. `woma list` shows which Claude Code and Codex versions the environment is running with.
 
-`environment.yaml` records direct installation intent. `woma.lock` records exact runtime artifacts, platform, package contents, sources, and the complete dependency graph. Recreating a lock on the same platform verifies its digests and does not upgrade anything. Missing Git/runtime content can be fetched at the locked identity. A missing local snapshot is an error, even if the original source still exists.
+## Installing Skills: packages with versions
 
-Exports read Woma metadata only. They never scan or archive native homes. Credentials, configuration, sessions, external commands, remote services, project settings, and model behavior are outside the reproduction guarantee. This version provides no offline bundle.
+Woma handles Skills the way Conda handles packages. Each one has a source and a version, and it is locked to an exact commit and content hash.
 
-The [agreed design](docs/design.md#agreed-configuration-scope) extends export and restoration to non-sensitive MCP connection configuration, launch arguments, and plugin enablement state. This extension is pending implementation.
+| Conda | Woma |
+| --- | --- |
+| `conda install numpy` | `woma install pdf@anthropics/skills` (a Skill or plugin by name) |
+| `conda install numpy=1.26` | `woma install pdf@anthropics/skills#v1.0` (branch, tag or commit) |
+| a package from a channel | `woma install gh:owner/repo/path/to/skill#main` |
+| | `woma install https://github.com/owner/repo/tree/main/skills/x` (paste a browser URL) |
+| a local package | `woma install ./my-skill` or `./folder-of-skills` |
+| `conda search` | `woma search pdf` (searches [skills.sh](https://skills.sh)) |
+| `conda update numpy` | `woma update pdf` |
+| `conda list` | `woma list` |
+| `environment.yml` | `woma export -f environment.yaml` |
+| `conda list --explicit` | `woma export --explicit -f woma.lock` |
+| `conda-pack` | `woma export --pack env.tgz` |
 
-**Deleting an environment deletes all its local native state.** The deletion prompt names that state explicitly; a recipe or lock cannot restore it.
+`NAME@owner/repo` finds `NAME` in, in order: the repository's Claude Code plugin marketplace (`.claude-plugin/marketplace.json`, e.g. [anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official)), its Codex plugin marketplace (`.agents/plugins/marketplace.json`), then any `SKILL.md` whose name matches (e.g. [anthropics/skills](https://github.com/anthropics/skills), [openai/skills](https://github.com/openai/skills)).
 
-## Format change
+If you install a local folder that is a clean checkout of a commit you have already pushed, Woma notices. Exports then point to that GitHub commit instead of a path on your machine.
 
-v2 replaces the previous multi-target capability projection design. Existing v1 environments are left in place and reported as legacy. They are never imported, repaired, or migrated automatically. Create a new v2 environment and explicitly install the packages you need. Native packages no longer have to be Agent-neutral.
+## Sign-in and secrets
+
+Each environment keeps its own sign-in, and Woma never copies or links credential files. To sign in once and use it in every environment, export a token in your shell profile:
+
+- **Claude Code:** `ANTHROPIC_API_KEY`, or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`.
+- **Codex:** run `codex login` once per environment, or `printenv OPENAI_API_KEY | codex login --with-api-key`.
+
+`woma doctor` shows how each agent will authenticate. MCP secrets work the same way: `env_vars` and `bearer_token_env_var` name variables that are read from your shell when the server starts, and their values are never stored.
+
+## How it works
+
+```text
+~/.woma/
+  store/v2/<sha256>/          immutable, content-addressed Skills and plugins
+  environments/research/
+    home/claude/              CLAUDE_CONFIG_DIR: Skills, plugins, MCP, plus your own sign-in and sessions
+    home/codex/               CODEX_HOME
+    .woma/state.json          the lock and the list of files Woma owns
+```
+
+- **Your agents, your versions.** Woma uses the `claude` and `codex` on your PATH and never downloads, pins or wraps them. Activating an environment only sets `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, so the agents you already have read that environment's Skills, plugins, MCP servers and sign-in.
+- **Native formats.** Skills are copied into each agent's native `skills/` directory. Plugins and MCP servers are registered with small, targeted edits to `config.toml`, `settings.json` and `.claude.json`. Your comments and other settings are preserved.
+- **Safe changes.** Every change is staged, checked against concurrent edits, and rolled back if it fails. `woma doctor` reports edited managed files and MCP entries changed outside Woma.
+- **Nothing implicit.** No default environment, no auto-activation, no importing of your existing `~/.claude` or `~/.codex`.
+
+## Requirements
+
+- Claude Code and/or Codex, installed the usual way and on your PATH
+- Node.js 20.19+, 22.13+ or 24+
+- Git
+- Bash or Zsh on macOS or Linux
+
+Plugins need Claude Code 2.1.269+ or Codex 0.154.0+.
+
+## Roadmap
+
+- **Harbor evaluations.** Hand an environment to [Harbor](https://github.com/harbor-framework/harbor) so the same benchmark can be run against different harnesses.
+- More agents (OpenCode, Gemini CLI).
+- Automatic import of an existing `~/.claude` or `~/.codex` into a new environment.
+
+## Learn more
+
+[Commands](docs/commands.md) · [Environment and package files](docs/manifest.md) · [Design](docs/design.md) · [Native adapters](docs/agent-adapters.md) · [What Woma owns](docs/agent-harness-behavior.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ## Development
 
 ```bash
 npm ci
-npm run check
-npm test
-WOMA_LIVE_TESTS=1 npm run test:live
+npm test                         # unit tests, offline
+WOMA_LIVE_TESTS=1 npm run test:live   # downloads official Claude Code and Codex releases
+scripts/demo.sh                  # end-to-end tour in a temporary WOMA_HOME
 ```
 
-Unit tests cover runtime isolation, shell selection, native ownership, Git locking, conflicts, drift, and rollback. Live tests download official releases into temporary directories and exercise native plugin discovery without model calls or user credentials.
+## License
 
-See [commands](docs/commands.md), [package format](docs/manifest.md), [design](docs/design.md), [ownership](docs/agent-harness-behavior.md), and [security boundaries](SECURITY.md).
+[MIT](LICENSE)

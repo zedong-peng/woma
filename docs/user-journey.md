@@ -1,146 +1,115 @@
 # Woma 用户流程推演
 
-本文以一位已有 Codex 使用经验的研究者为例，推演当前 Woma 的使用流程、实际收益和体验断点，供产品设计和使用入门参考。
+本文以一位同时用 Claude Code 和 Codex 的研究者为例，推演 Woma 1.0 的使用流程、收益和仍然存在的限制，供产品设计和入门参考。
 
-推演基于 2026-09-14 的当前 v2 实现，并非真实用户访谈或完整端到端实测。当日类型检查通过，测试中 35 项通过、2 项官方运行时集成测试默认跳过；未实际完成登录和模型对话。后续能力变化应同步更新本文。
+推演基于 2026-09-29 的 1.0 实现。文中命令都在 Linux x64 上用官方 Claude Code 2.1.284 和 Codex 0.158.0 实际跑过，包括：
+- 从 skills.sh、`anthropics/skills`、`openai/skills`、`anthropics/claude-plugins-official` 按名字安装
+- 导出后重建
+- 确认两个 agent 都能看到同一套 skill 和 MCP
+
+未实际完成登录和模型对话。后续能力变化应同步更新本文。
 
 ## 用户与目标
 
-这位研究者想把“论文研究”和“日常写代码”分开，同时保留一套稳定的研究工具。他希望：
+这位研究者希望：
 
-- 用一个名字选中对应的 CLI、Skills、插件和工作配置。
-- 不让一次升级影响所有工作环境。
-- 保存已经调好的环境，之后恢复或分享给同事。
+- 把"写论文"和"写代码"两套配置分开。
+- 同一套研究 skill 在 Claude Code 和 Codex 里都能用。
+- 把调好的配置交给同事，对方拿到就能原样重建。
 
 ## 1. 安装，建立第一个环境
 
-使用前需要满足 [README](../README.md) 中的 Node.js、Git 和平台要求。以下示例使用 Zsh：
+先按常规方式装好 Claude Code 和 Codex（例如 `npm install -g @anthropic-ai/claude-code @openai/codex`）。Woma 直接用它们，不下载、也不管理它们的版本。
 
 ```bash
 npm install -g @x19-507/woma
-woma init zsh
+woma init            # 然后新开一个终端
+woma create -n research claude codex pdf@anthropics/skills
 ```
 
-重新打开终端：
+Woma 为两个 agent 各建一个独立的配置目录，再把 `pdf` skill 锁定到 `anthropics/skills` 当时的 commit。如果某个 agent 还没装，会提示安装命令。创建完成后会提示下一步，以及每个 agent 的登录状态：
+
+```text
+Created environment research at ~/.woma/environments/research
+  agents:   claude, codex
+  packages: pdf
+Sign-in:
+  claude   not signed in: run claude and use /login, or export CLAUDE_CODE_OAUTH_TOKEN ...
+  codex    not signed in: run codex login (once per environment) ...
+```
+
+## 2. 装 skill：像装包一样
 
 ```bash
-woma create -n research codex
-woma activate research
+woma search pdf                                        # 搜索 skills.sh
+woma install -n research yeet@openai/skills            # Codex 官方 skill，按名字装
+woma install -n research skill-creator@anthropics/claude-plugins-official   # Claude 插件市场
+woma install -n research https://github.com/anthropics/skills/tree/main/skills/docx   # 直接贴链接
+woma install -n research ./my-lab-skills               # 本地文件夹，可以是一整个 skill 目录
+woma mcp add -n research github --env-var GITHUB_TOKEN -- npx -y @modelcontextprotocol/server-github
+woma list -n research
 ```
 
-Woma 下载官方 Codex，固定这次解析到的版本，并创建独立的原生配置目录。后续只有显式安装或更新才会改变这个版本。
+`woma list` 会列出每个包的来源和 commit、它装给了哪个 agent，以及 MCP 配置。普通 skill 两个 agent 都能用；`skill-creator` 是 Claude 插件，只装给 Claude，并且装完就已启用。
 
-用户的理解会是：“以后激活 research，就进入我的研究配置。”不过，此时它还只是一个干净的起点。
+## 3. 登录
 
-## 2. 第一次启动：配置环境
+每个环境的登录状态是独立的，这是隔离的代价。想只登录一次，就在 shell 配置里设置 `ANTHROPIC_API_KEY`，或用 `claude setup-token` 生成的 `CLAUDE_CODE_OAUTH_TOKEN`，这样所有环境里的 Claude 都能直接用。Codex 目前不读取环境变量里的 key，每个环境需要执行一次 `codex login`，也可以用 `printenv OPENAI_API_KEY | codex login --with-api-key` 一行完成。
 
-```bash
-codex
-```
+MCP 的令牌同理：`--env-var GITHUB_TOKEN` 只记录变量名，server 启动时从 shell 读取值。
 
-用户可能预期已有的登录、模型配置和 Skills 都在。但新环境不会自动导入这些内容，他需要按 Codex 原生流程检查登录、配置模型和权限。是否需要重新登录取决于原生凭据机制。
-
-这是第一处体验成本：创建环境很简单，把环境配置到顺手还需要人工操作。独立原生目录也不代表安全沙箱；项目配置、环境变量和系统凭据机制仍可能影响原生工具的行为。
-
-## 3. 安装研究 Skills
-
-假设用户已经获取 Woma 仓库，并在仓库根目录运行：
-
-```bash
-woma install ./examples/auto-research
-woma list
-woma doctor
-```
-
-这个示例集合会安装 `paper-search`、`idea-gen`、`exp-design`。`list` 查看 Woma 管理的安装集，`doctor` 检查环境问题。
-
-安装后重新启动 Codex：
-
-```bash
-codex
-```
-
-用户开始提要求：
-
-> 帮我查这个研究方向的相关工作，找一个有证据支持的缺口，然后设计最小验证实验。
-
-实际执行任务的是 Codex，Skills 提供工作指导。安装 `paper-search` 并不会自动配齐论文数据库连接或外部工具；这些仍取决于原生工具和配置。如果安装的是原生 Plugin，还需要在原生工具中启用，新插件默认禁用。
-
-## 4. 日常使用：按工作选择环境
-
-第二天进入论文项目：
+## 4. 日常使用
 
 ```bash
 cd ~/projects/my-paper
 woma activate research
-codex
+claude          # 或 codex
 ```
 
-也可以不激活，直接在子进程中选择环境：
+写代码时换另一个环境，两个环境互不影响：
 
 ```bash
-woma run -n research codex
+woma create -n dev claude ./team-skills
+woma activate dev
 ```
 
-要做日常开发，再建立另一套环境：
+也可以不激活，直接跑一条命令：`woma run -n research codex`。
+
+## 5. 升级与回退
 
 ```bash
-woma create -n coding claude
-woma activate coding
-claude
+woma export -n research --explicit -f research.lock   # 先存一份精确记录
+woma update -n research                               # 升级所有包（agent 用你自己的方式升级）
 ```
 
-用户由此获得直接收益：用名字选择一套 CLI 版本、扩展和独立原生状态。一个环境只放一种 harness，项目目录可以另选。切换环境不会改变已经运行的 Agent 进程。
+如果升级后效果变差，用 `woma create -n research-old -f research.lock` 原样重建升级前的环境。重建恢复的是 skill、插件和 MCP 配置，不恢复 agent 版本、登录、会话，也不保证模型行为完全相同。
 
-结束后可以恢复终端原来的选择：
+## 6. 交给同事
 
 ```bash
-woma deactivate
+woma export -n research -f environment.yaml
 ```
 
-## 5. 升级前保存安装记录
+`environment.yaml` 里写的是可移植的来源：`pdf@anthropics/skills`、`gh:...#commit`，以及相对路径的本地包。同事执行 `woma create -n research -f environment.yaml` 即可。
 
-研究环境用顺手后，先选回它，再保存记录并升级：
+- **要逐字节一致**：发 `woma export --explicit` 导出的 lock。
+- **本地 skill**：如果它所在的 git 仓库已经 push，导出时会自动写成 GitHub 来源；只存在于本机的 skill，用 `woma export --pack research.tgz` 打成一个文件一起发。
 
-```bash
-woma activate research
-woma export -f environment.yaml
-woma export --explicit -f woma.lock
-woma update codex
-```
+## 仍然存在的限制
 
-| 文件 | 用途 |
-| --- | --- |
-| `environment.yaml` | 记录直接安装意图，方便重新搭建和调整 |
-| `woma.lock` | 记录精确运行时、包内容及完整依赖图，恢复固定安装集 |
+- 精确 lock 只能在相同平台（操作系统 + 架构）上重建。
+- 外部命令（如 MCP 用到的 `npx`、`uvx`）、远程服务和凭据需要对方自己准备。
+- 模型、权限等原生设置不在环境管理范围内。
+- 目前只支持 Claude Code 和 Codex。
+- 还不能一键导入现有的 `~/.claude` 或 `~/.codex`。
+- Harbor 评测对接在路线图中。
 
-如果升级后的效果不合适，可以另建一个使用旧安装集的环境：
+## 设计哲学
 
-```bash
-woma create -n research-old -f woma.lock
-woma run -n research-old codex
-```
+Woma 借鉴 conda：给 harness 一个名字，让它可以独立演进、显式更新、原样重建。
 
-恢复的是受管理的安装内容，不会恢复原来的登录、会话和完整配置，也不保证模型行为相同。因此，这一步是重建旧安装集，并不是完整工作状态回滚。
+- **能力由原生工具实现。** skill、插件、MCP 仍然由 agent 自己加载，Woma 只负责装到对的位置并锁定 skill 的版本；agent 本身用你自己装的。
+- **只在显式指令时变化。** 激活只选择环境，更新由用户显式触发。
+- **密钥不落盘。** 密钥永远只以变量名的形式出现。
 
-## 6. 发给同事：完整复现尚未闭环
-
-用户把 `woma.lock` 发给同事，说：“照这个创建，就和我一样。”当前还不能完全兑现这个期待：
-
-- 精确锁要求相同平台。
-- 上述示例采用本地来源。如果同事的内容缓存中没有对应快照，单发 lock 无法恢复；当前没有离线打包功能。分享时更适合采用对方可访问的 Git 来源。
-- 普通 recipe 也不会携带本地源文件，对方仍需准备可用的来源路径。
-- 包快照内的 MCP 定义可以保留，但原生用户配置里的 MCP 连接配置、启动参数和插件启用状态尚不能完整导出和恢复。
-- 外部命令、服务和凭据需要另外准备。
-
-目前能够共享的是同一套受管理的版本和包。完整工作配置的共享仍有缺口。
-
-## 当前适用性与设计哲学
-
-个人需要管理多套环境、固定版本并分别更新时，当前实现已经具备实用基础。如果用户只有一套配置，也不关心固定版本，额外设置的成本可能大于收益。对于“同事拿到就能完整复现”的目标，当前流程还不够顺。
-
-Woma 借鉴 Conda，给 Agent 的 harness 一套有名字、可独立演进、可明确更新的环境。CLI 和扩展由 Woma 管理，能力仍由原生工具实现；激活只选择环境，更新由用户显式触发。
-
-用户真正希望保存的通常是“我已经调好的一套工作环境”。因此，值得优先补齐的是这套配置的保存、交付和恢复。[设计文档](design.md#agreed-configuration-scope) 已将非敏感 MCP 连接配置、启动参数和插件启用状态纳入目标，但实现尚未完成。凭据值仍在可移植配置范围之外。
-
-具体命令和边界见 [命令参考](commands.md)、[原生状态归属](agent-harness-behavior.md) 和 [设计文档](design.md)。
+具体命令和边界见 [命令参考](commands.md)、[环境文件与包格式](manifest.md)、[Woma 管理哪些东西](agent-harness-behavior.md) 和 [设计文档](design.md)。
